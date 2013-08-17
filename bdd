@@ -1,0 +1,1586 @@
+#!/usr/bin/python
+#
+# bdd
+#
+
+"""Unix command line program to handle bit streams"""
+
+__version__ = "0.2 $Revision: 41 $"
+
+from sys import exit as sysexit
+from os import urandom
+from sys import stdin, stdout, stderr
+from re import findall
+from struct import pack, unpack
+from csv import reader as csv_reader
+from math import log
+
+
+#
+# Utility functions
+#
+
+def _reverse(val, bits):
+    """Reverse bits in val, assuming the size of bits.
+    
+    Copies topmost bits as is and reverses
+    as many lowest bits as asked by the bits argument.
+    
+    """
+    out = val >> bits
+    for i in range(bits):
+        out <<= 1
+        out += val & 1
+        val >>= 1
+    return out
+
+
+def _hex(i):
+    """return i as a hex string"""
+    h = hex(i)[2:]
+    if h[-1] == 'L':
+        return h[:-1]
+    else:
+        return h
+
+def _bin(i, unit_size):
+    """Return i as a string of 0 and 1"""
+    bitlist = []
+    while True:
+        bitlist.append(str(i & 1))
+        i >>= 1
+        if i <= 0:
+            break
+    while len(bitlist) < unit_size:
+            bitlist.append('0')
+    bitlist.reverse()
+    return("".join(bitlist))
+
+
+def _exponent_2(i):
+        """Return True if i is 2's exponent like 1,2,4,8,16..."""
+        return (log(i,2) - int(log(i,2))) < 0.00001
+
+
+#
+# Counter class to help with --count and --skip
+#
+
+class Counter:
+    """Counts units/tuples to be skipped
+
+    Initialized with skip and count, resets to unit/tuple 0.
+    count=None tells that we want all to end of stream.
+    next() advances to the next unit/tuple.
+    included() returns true if the current line is included.
+    (next() is called before included() to get the current line)
+    finished() returns true if all is done and the rest can be skipped.
+
+    """
+    def __init__(self, skip=0, count=None):
+        self.skip = skip
+        self.count = count
+        self.current = 0
+
+    def next(self):
+        self.current += 1
+
+    def included(self):
+        if self.current <= self.skip:
+            return False
+        elif not self.count:
+            return True
+        return self.current <= (self.skip + self.count)
+
+    def finished(self):
+        if self.count:
+            return self.current > self.skip + self.count
+        else:
+            return False
+
+
+#
+# Input bit stream handlers
+#
+
+class InputBitStream:
+    """Inputbitstream splits input to unit size bits units.
+
+    All inputbitstreams implement counter functionality: skip and count,
+    but because zero, one and random do not need to care of skip
+    (and zero not even unit size), they implement them internally.
+    Integers and file inputstreams require parameter of type Counter class.
+
+    InputBitStream is used like:
+      counter = Counter(skip, count)
+      ibs = InputBitStream(counter=counter)
+      ibs.set_unit_size(8)
+      ibs.do_skip()
+      for unit in ibs.units():
+          use(unit)
+
+    """
+    def __init__(self, counter=None, fd=None):
+        """By default, all input streams have counter and unit arguments"""
+        if counter:
+            assert isinstance(counter, Counter)
+        if fd:
+            assert isinstance(fd, file)
+        self.counter = counter
+        self.file = fd
+
+    def set_unit_size(self, bits):
+        assert bits > 0
+        """Unit size can be set after initialization using this method."""
+        self.unit_size = bits
+
+    def get_unit_size(self):
+        """Get unit size of the input stream."""
+        return self.unit_size
+
+    def do_skip(self):
+        """If subclass needs to do skip after the unit is set,
+        it redefines do_skip() method to do that.
+        """
+        pass
+
+    def units(self):
+        """Iterator that returns values in bit stream one unit at time:"""
+        assert False, "Abstract method"
+
+
+class ZeroStream(InputBitStream):
+    """Input stream that returns always unit full of zeros"""
+    def units(self):
+        for i in range(self.counter.count):
+            yield 0
+
+
+class OneStream(InputBitStream):
+    """Input stream that returns always unit full of ones."""
+    def units(self):
+        for i in range(self.counter.count):
+            yield (1 << self.unit_size) - 1
+
+
+class RandomStream(InputBitStream):
+    """Input stream that returns always unit full of random bits"""
+    def units(self):
+        # We waste ramdomness and read full random bytes
+        # for each unit.
+        self.bytes = self.unit_size / 8 + 1
+        unitmask = (1 << self.unit_size) - 1
+        for i in range(self.counter.count):
+            random = 0
+            for randombyte in range(self.bytes):
+                random *= 256
+                random += ord(urandom(1))
+            random &= unitmask
+            yield random
+
+
+class CounterStream(InputBitStream):
+    """Input stream that returns units that are always one bigger
+    than the previous unit."""
+    def units(self):
+        unitmask = (1 << self.unit_size) - 1
+        for i in range(self.counter.skip, self.counter.skip +
+                       self.counter.count):
+            yield i & unitmask
+
+
+class IntegerInputStream(InputBitStream):
+    """Input stream that returns units from integers read from input file."""
+    def units(self):
+        for line in self.file.readlines():
+            line = line.strip()
+            if line == '':
+                continue
+            self.counter.next()
+            if self.counter.finished():
+                break
+            if not self.counter.included():
+                continue
+            try:
+                i = int(line)
+            except ValueError:
+                stderr.write("Non-integer '" + line +
+                    "' interpreted as zero\n")
+                i = 0
+            if i < 0:
+                stderr.write("Negative integer '" + line +
+                "' interpreted as positive\n")
+                i = abs(i)
+            yield i
+
+
+class FileInputStream(InputBitStream):
+    """Reads units from a file."""
+    def __init__(self, fd, counter=None, skip_bits=0,
+                 skip_units=0, gap=0,
+                 assert_aligned=False, use_seek=False,
+                 reverse_bytes=False, reverse_unit=False):
+        assert skip_bits >= 0 and skip_units >= 0 and gap >= 0
+        InputBitStream.__init__(self, counter=counter, fd=fd)
+        self.skip_bits = skip_bits
+        self.skip_units = skip_units
+        self.gap = gap
+        self.assert_aligned = assert_aligned
+        self.use_seek = use_seek
+        self.reverse_bytes = reverse_bytes
+        self.reverse_unit = reverse_unit
+        self.eof = False
+
+    def _read(self):
+        """Read a byte as an integer from data.
+
+        Detects end of file and sets self.eof if found.
+        Reverses byte read if self.reverse_bytes.
+
+        Execution can not stop immediately to the eof,
+        because the last unit must be output filled with zeros.
+        Read is normally called only when there is need
+        for a unit. This means that if eof occurs,
+        there is no more than a unit to write. If _read
+        is called for look-ahead, look-ahead is exactly one
+        byte and it is read when buffer is empty. Then the
+        whole byte is either usable data or it is eof/zero.
+
+        """
+        c = self.file.read(1)
+        if c == '':
+            self.eof = True
+            return(0)
+        val = ord(c)
+        if self.reverse_bytes:
+            val = _reverse(val, 8)
+        return(val)
+
+    def do_skip(self):
+        """Do bit skip in input file.
+
+        Assumes that self.unit is set to input unit size.
+        Initializes buffer self.buffer with pointer
+        self.bits_in_buffer.
+
+        """
+        self.skip_bits += self.unit_size * self.skip_units
+        skip_bytes = self.skip_bits / 8
+        if skip_bytes > 0:
+            if self.use_seek == True:
+                try:
+                    self.file.seek(skip_bytes)
+                except IOError:
+                    stderr.write("seek failed\n")
+                    sysexit(1)
+            else:
+                # This does not complain if over eof
+                # but it will be noticed before reading
+                # the first unit.
+                self.file.read(skip_bytes)
+        # Buffer contains input and it is read one byte at time.
+        # Strategy is to zero used bits immediately.
+        if self.skip_bits % 8 != 0:
+            self.bits_in_buffer = 8 - self.skip_bits % 8
+            self.buffer = self._read()
+            self.buffer &= (1 << self.bits_in_buffer) - 1
+        else:
+            self.buffer = self._read()
+            self.bits_in_buffer = 8
+
+    def units(self):
+        """Iterator for units"""
+        if self.eof:  ## eof while skip_bits
+            return
+        while True:
+            # Exit if we got end of file in processing the previous unit
+            # (this means that we already have used some extra zeros).
+            if self.eof:
+                if self.assert_aligned:
+                    stderr.write("Non-aligned end of file\n")
+                    sysexit(1)
+                break
+
+            # Extract one unit from the buffer.
+            # If there is not enough data in buffer,
+            # read more data one byte at time.
+            while self.bits_in_buffer < self.unit_size:
+                self.buffer <<= 8
+                self.buffer += self._read()
+                self.bits_in_buffer += 8
+            right_edge = self.bits_in_buffer - self.unit_size
+            unit = self.buffer >> right_edge
+
+            # Yield unit if counter gives permission (skip & count).
+            self.counter.next()
+            if self.counter.included():
+                if self.reverse_unit:
+                    unit = _reverse(unit, self.unit_size)
+                yield unit
+            if self.counter.finished():
+                self.eof = True
+
+            # Remove the extracted unit from the buffer.
+            self.bits_in_buffer -= self.unit_size
+            self.buffer &= (1 << self.bits_in_buffer) - 1
+
+            # If buffer is empty, this is an allowed end of file point
+            # if --assert_aligend is requested.
+            # We have to look-ahead to check the eof.
+            if self.bits_in_buffer == 0:
+                self.buffer = self._read()
+                if self.eof:
+                    break
+                self.bits_in_buffer = 8
+
+            # Skip the gap.
+            while self.bits_in_buffer < self.gap:
+                # Overwrite, we won't need more than 8 bits.
+                self.buffer = self._read()
+                self.bits_in_buffer += 8
+            self.bits_in_buffer -= self.gap
+            assert self.bits_in_buffer <= 8
+            self.buffer &= (1 << self.bits_in_buffer) - 1
+
+            # Look-ahead to detect eof
+            if self.bits_in_buffer == 0:
+                self.buffer = self._read()
+                self.bits_in_buffer = 8
+
+class MergeInputStream(FileInputStream):
+    """Reads units from merge file.
+
+    Special type of FileInputStream for merge files.
+
+    """
+    def read_bits(self, bits):
+        """Read bits from merge file
+
+        Does not care of counter or gap.
+
+        """
+        while self.bits_in_buffer < bits:
+            self.buffer <<= 8
+            self.buffer += self._read()
+            self.bits_in_buffer += 8
+        right_edge = self.bits_in_buffer - bits
+        unit = self.buffer >> right_edge
+        if self.reverse_unit:
+            unit = _reverse(unit, self.unit_size)
+        self.bits_in_buffer -= bits
+        self.buffer &= (1 << self.bits_in_buffer) - 1   
+        return unit
+
+#
+# Output bit stream handlers
+#
+
+class OutputBitStream():
+    """Output bit streams are initialized with an output file descriptor,
+    second unit size is set with method set_unit_size() (mostly
+    to behave similarly as input bit streams). When writing is finished,
+    writer must call method flush() to output the last unit and possibly
+    fill it with zeros.
+
+    """
+    def __init__(self, file_descriptor):
+        self.f = file_descriptor
+
+    def set_unit_size(self, bits):
+        """Sets unit size of output bit stream."""
+        self.unit_size = bits
+
+    def get_unit_size(self):
+        """Gets unit size of output bit stream."""
+        return self.unit_size
+
+    def initialize(self):
+        """Initialize bit stream after unit has changed."""
+        pass
+
+    def write(self, unit):
+        """Write one unit with the current unit_size"""
+        self.write_bits(unit, self.unit_size)
+
+    def write_bits(self, unit, bits):
+        """Write one unit that is of defined size"""
+        assert False, "write_bits must be defined in a subclass"
+
+    def flush(self):
+        """flush what is left in output (e.g. by filling it with zeros)"""
+        pass
+
+
+class IntegerOutputStream(OutputBitStream):
+    """Writes units as integers, one integer per line."""
+    def write_bits(self, unit, bits):
+        unit &= (1 << bits) - 1
+        self.f.write(str(unit) + '\n')
+
+
+class HexOutputStream(OutputBitStream):
+    """Writes units as human-readable hex.
+
+    One hex is written with required amount of hex digits,
+    If unit has less bits, the leftmost bits are zero
+    (one bit 1 becomes hex 01).
+
+    The output is put into one line of max. 80 characters.
+    In practice it is done so, that the output is cut after
+    40 characters when next time we have printed 1,2,4,8,16
+    or 32 units.
+
+    """
+    def __init__(self, file_descriptor):
+        self.output_column = 0
+        self.output_units_in_line = 0
+        self.CUT_AFTER_COLUMN = 40
+        OutputBitStream.__init__(self, file_descriptor)
+
+    def write_bits(self, unit, bits):
+        assert unit >= 0 and bits >= 0
+        unit &= (1 << bits) - 1
+        hex_digits = ((bits - 1) / 4) + 1
+        h = _hex(unit)
+        filler = "0" * (hex_digits - len(h))
+        if self.output_column > self.CUT_AFTER_COLUMN and \
+                _exponent_2(self.output_units_in_line):
+            self.f.write("\n")
+            self.output_column = 0
+            self.output_units_in_line = 0
+        self.f.write(filler + h)
+        self.output_column += hex_digits
+        self.f.write(" ")
+        self.output_column += 1
+        self.output_units_in_line += 1
+
+    def flush(self):
+        self.f.write("\n")
+
+
+class BitOutputStream(OutputBitStream):
+    """Writes unit as human-readable binary.
+
+    Line split and filling is handled as in
+    HexOutputStream.
+
+    """
+    def __init__(self, file_descriptor):
+        self.output_column = 0
+        self.output_units_in_line = 0
+        self.CUT_AFTER_COLUMN = 40
+        OutputBitStream.__init__(self, file_descriptor)
+
+    def write_bits(self, unit, bits):
+        assert unit >= 0 and bits >= 0
+        unit &= (1 << bits) - 1
+        val = _bin(unit, bits)
+        if self.output_column > self.CUT_AFTER_COLUMN and \
+                _exponent_2(self.output_units_in_line):
+            self.f.write("\n")
+            self.output_column = 0
+            self.output_units_in_line = 0
+        self.f.write(val)
+        self.output_column += bits
+        self.f.write(" ")
+        self.output_column += 1
+        self.output_units_in_line += 1
+
+    def flush(self):
+        self.f.write("\n")
+
+
+#
+# Bit-packing units into output stream.
+# Packing includes merging merge file.
+#
+
+class FileOutputStream(OutputBitStream):
+
+    def __init__(self, f,
+            reverse_bytes=False,
+            reverse_unit=False):
+        self.f = f
+        self.reverse_bytes = reverse_bytes
+        self.reverse_unit = reverse_unit
+#        self.bits = None
+        self.buffer = 0
+        self.bits_in_buffer = 0
+
+    def write(self, unit):
+        self.write_bits(unit, self.unit_size)
+
+    def write_bits(self, unit, bits):
+        if self.reverse_unit:
+            unit = _reverse(unit, bits)
+        unit &= (1 << bits) - 1
+        self.buffer <<= bits
+        self.buffer += unit
+        self.bits_in_buffer += bits
+        while self.bits_in_buffer >= 8:
+            right_edge = self.bits_in_buffer - 8
+            val = self.buffer >> right_edge
+            if self.reverse_bytes:
+                val = _reverse(val, 8)
+            self.f.write(chr(val))
+            self.buffer &= (1 << right_edge) - 1
+            self.bits_in_buffer -= 8
+
+    def flush(self):
+        assert self.bits_in_buffer < 8
+        if self.bits_in_buffer == 0:
+            return
+        self.buffer <<= (8 - self.bits_in_buffer)
+        val = self.buffer
+        if self.reverse_bytes:
+            val = _reverse(val, 8)
+        self.f.write(chr(val))
+
+
+#
+# Tuple input streams
+# Including direct input and output alternatives
+#
+
+class TupleInputStream:
+    def tuples(self):
+        """Iterator that returns tuples in the stream."""
+        pass
+
+
+class TupleInputDummy(TupleInputStream):
+    """Tuple input stream that translates a unit as a tuple.
+    
+    This is needed for cases where there is no input pattern
+    but tuple is still used in tuple manipulators or in output
+    pattern.
+    
+    Unit is interpreted as a tuple with only one integer value
+    that is directly the unit value.
+    
+    """
+    def __init__(self, instream):
+        self.stream = instream
+
+    def tuples(self):
+        for u in self.stream.units():
+            yield [u]
+
+
+class TupleUnpacker(TupleInputStream):
+    """Convert unit to tuple using input pattern."""
+
+    def __init__(self, instream, pattern=None):
+        """extract tuples from stream (that has units iterator)
+        Note that the tuple is Python list, not Python tuple!"""
+        self.stream = instream
+        if pattern:
+            self.pattern = findall('[0-9]*[^0-9]', pattern)
+            if not self.pattern:
+                stderr.write("Missing input pattern\n")
+                sysexit(1)
+            for p in self.pattern:
+                bits = p[0:-1]
+                char = p[-1]
+                if char not in "xUuSsMmFfDdCc":
+                    stderr.write("Illegal character %s in input-pattern\n"
+                        % char)
+                    sysexit(1)
+                if bits == '' or int(bits) == 0:
+                    stderr.write("Character %s in input pattern "
+                        "requires number of bits\n" % char)
+                    sysexit(1)
+                bits = int(bits)
+                if char in "Ff" and bits != 32:
+                    stderr.write("Number of bits for input pattern "
+                        "%s must be %d\n" % (char, 32))
+                    sysexit(1)
+                if char in "Dd" and bits != 64:
+                    stderr.write("Number of bits for input pattern "
+                        "%s must be %d\n" % (char, 64))
+                    sysexit(1)
+                if char in "Cc":
+                    if bits % 8 != 0:
+                        stderr.write("Number of bits for input pattern "
+                            "%s should be n*8 bits\n" % char)
+            self.pattern.reverse()  # last processed first
+        else:
+            self.pattern = None
+
+    def total_bits(self):
+        """tells how many bits the pattern contains"""
+        if not self.pattern:
+            return 0
+        bits = 0
+        for p in self.pattern:
+            bits += int(p[0:-1])
+        return bits
+
+    def tuples(self):
+        assert self.pattern
+        for unit in self.stream.units():
+            tuple = []
+            for p in self.pattern:
+                bits = int(p[0:-1])
+                char = p[-1]
+                if char in 'usmfdc':
+                    unit = _reverse(unit, bits)
+                if char == 'x':
+                    unit >>= bits
+                elif char == 'U' or char == 'u':
+                    mask = (1 << bits) - 1
+                    value = unit & mask
+                    tuple.append(value)
+                    unit >>= bits
+                elif char == 'S' or char == 's':
+                    mask = (1 << bits) - 1
+                    value = unit & mask
+                    if (value >> (bits - 1)) == 1:
+                        # negate 2's complement
+                        value ^= mask
+                        value += 1
+                        value = -value
+                    tuple.append(value)
+                    unit >>= bits
+                elif char == 'M' or char == 'm':
+                    mask = (1 << bits) - 1
+                    value = unit & mask
+                    sign = value >> (bits - 1)
+                    if sign == 1:
+                        # negate 2's complement
+                        value ^= mask
+                        value += 1
+                    tuple.append(value)
+                    tuple.append(sign)
+                    unit >>= bits
+                elif char == 'F' or char == 'f':
+                    mask = (1 << 32) - 1
+                    value = unit & mask
+                    s = [0 for i in range(4)]
+                    s[3] = chr(value & 0xFF)
+                    value >>= 8
+                    s[2] = chr(value & 0xFF)
+                    value >>= 8
+                    s[1] = chr(value & 0xFF)
+                    value >>= 8
+                    s[0] = chr(value & 0xFF)
+                    fl = unpack("f", ''.join(s))[0]
+                    tuple.append(fl)
+                    unit >>= 32
+                elif char == 'D' or char == 'd':
+                    mask = (1 << 64) - 1
+                    value = unit & mask
+                    s = [0 for i in range(8)]
+                    s[7] = chr(value & 0xFF)
+                    value >>= 8
+                    s[6] = chr(value & 0xFF)
+                    value >>= 8
+                    s[5] = chr(value & 0xFF)
+                    value >>= 8
+                    s[4] = chr(value & 0xFF)
+                    value >>= 8
+                    s[3] = chr(value & 0xFF)
+                    value >>= 8
+                    s[2] = chr(value & 0xFF)
+                    value >>= 8
+                    s[1] = chr(value & 0xFF)
+                    value >>= 8
+                    s[0] = chr(value & 0xFF)
+                    fl = unpack("d", ''.join(s))[0]
+                    tuple.append(fl)
+                    unit >>= 64
+                elif char == 'C' or char == 'c':
+                    s = ''
+                    mask = 0xFF
+                    for i in range(bits / 8):
+                        s = chr(unit & mask) + s
+                        unit >>= 8
+                    tuple.append(s)
+                else:
+                    assert False,"Unknown pattern character in processing"
+            tuple.reverse()
+            yield tuple
+
+
+class TupleDirectInput(TupleInputStream):
+    """Tuple input stream that reads tuples directly from a file."""
+
+    def __init__(self, file, counter):
+        self.file = file
+        self.counter = counter
+
+    def _values(self, line):
+        """Iterator that returns values from line
+        understanding quotes. (Uses csv)"""
+        # TODO: Even a quoted number will be converted to a number.
+        for row in csv_reader([line]):
+            for f in row:
+                try:
+                    v = int(f)
+                except ValueError:
+                    try:
+                        v = float(f)
+                    except ValueError:
+                        v = f
+                yield v
+
+    def tuples(self):
+        tuple_no = 0
+        for line in self.file.readlines():
+            tuple = []
+            self.counter.next()
+            if self.counter.finished():
+                break
+            if self.counter.included():
+                for v in self._values(line):
+                    tuple.append(v)
+                yield tuple
+
+
+class TupleOutputStream():
+    """Tuple stream that is called to write a tuple."""
+    def __init__(self, outstream):
+        self.stream = outstream
+
+    def write(self, tuple):
+        """Write a tuple to the tuple output stream.""" 
+        pass
+
+
+class TupleOutputDummy(TupleOutputStream):
+    """Tuple output stream that translates a tuple to a unit.
+    
+    This is needed for cases where there is no output pattern
+    but tuple is still used in tuple manipulators or in input
+    pattern.
+    
+    Only the first field in the tuple is used to form the unit
+    and the value must be a positive integer.
+    
+    """
+    def write(self, tuple):
+        if len(tuple) == 0:
+            stderr.write("No fields to output, assumed 0\n")
+            self.stream.write(0)
+            return
+        try:
+            val = int(tuple[0])
+        except ValueError:
+            stderr.write("Non-integer field for unit output, ")
+            stderr.write("--output-pattern needed\n")
+            val = 0
+        if val < 0:
+            stderr.write("Negative integer first field, ")
+            stderr.write("--output-pattern needed\n")
+            val = 0
+        self.stream.write(val)
+
+
+class TuplePacker(TupleOutputStream):
+
+    def __init__(self, stream, pattern=None):
+        """Pack a tuple to a unit and write it to the stream
+        Stream has method writeunit.
+        If there is no pattern, we only pass the first field in the tuple
+        and it must be an postive integer"""
+        self.stream = stream
+        if pattern:
+            self.pattern = findall('[0-9]+[a-zA-Z]', pattern)
+            for p in self.pattern:
+                bits = p[0:-1]
+                char = p[-1]
+                if char not in "UuSsMmFfDdCczor":
+                    stderr.write("Illegal character %s in output-pattern\n"
+                        % char)
+                    sysexit(1)
+                if bits == '' or int(bits) == 0:
+                    stderr.write("Character %s in output pattern "
+                        "requires number of bits\n" % char)
+                    sysexit(1)
+                bits = int(bits)
+                if char in "Ff" and bits != 32:
+                    stderr.write("Number of bits for output pattern "
+                        "%s must be %d\n" % (char, 32))
+                    sysexit(1)
+                if char in "Dd" and bits != 64:
+                    stderr.write("Number of bits for output pattern "
+                        "%s must be %d\n" % (char, 64))
+                    sysexit(1)
+                if char in "Cc":
+                    if bits % 8 != 0:
+                        stderr.write("Number of bits for output pattern "
+                            "%s should be n*8 bits\n" % char)
+        else:
+            self.pattern = None
+
+    def total_bits(self):
+        """tells how many bits the pattern contains"""
+        if not self.pattern:
+            return 0
+        bits = 0
+        for p in self.pattern:
+            bits += int(p[0:-1])
+        return bits
+
+    def _pop(self, tuple):
+        """Read next value from tuple with error check"""
+        if tuple != []:
+            return tuple.pop(0)
+        else:
+            stderr.write("Input has less fields than in output pattern\n")
+            sysexit(1)
+
+    def write(self, tuple):
+        unit = 0
+        for p in self.pattern:
+            bits = int(p[0:-1])
+            char = p[-1]
+            if char == 'U' or char == 'u':
+                val = self._pop(tuple)
+                if isinstance(val, (int, long)) and val >= 0:
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                        "not defined\n" % (repr(val), char))
+                    val = 0
+            elif char == 'S' or char == 's':
+                # Note that if val > 2**bits,
+                # it is truncated first
+                val = self._pop(tuple)
+                if isinstance(val, (int, long)):
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                        "not defined\n" % (repr(val), char))
+                    val = 0
+                if val < 0:
+                    val = -val
+                    mask = (1 << bits) - 1
+                    val &= mask
+                    val ^= mask
+                    val += 1
+            elif char == 'M' or char == 'm':
+                sign = self._pop(tuple)
+                if isinstance(sign, (int, long)) and (sign == 0 or sign == 1):
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                       "not defined\n" % (repr(sign), char + " sign"))
+                    sign = 0
+                val = self._pop(tuple)
+                if isinstance(val, (int, long)) and (val >= 0):
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                       "not defined\n" % (repr(val), char + " magnitude"))
+                    val = 0
+                if sign == 1:
+                    mask = (1 << bits) - 1
+                    val &= mask
+                    val ^= mask
+                    val += 1
+            elif char == 'C' or char == 'c':
+                s = self._pop(tuple)
+                if isinstance(s, str):
+                    val = 0
+                    for c in s:
+                        val <<= 8
+                        val += ord(c)
+                elif isinstance(s, (int, long)):
+                    # TODO: Maybe implicit conversion int->c
+                    # should not be allowed?
+                    val = s
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                        "not defined\n" % (repr(s), char))
+                    val = 0
+            elif char == 'F' or char == 'f':
+                fl = self._pop(tuple)
+                if isinstance(fl, float):
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                        "not defined\n" % (repr(fl), char))
+                s = pack('f', fl)
+                val = 0
+                for c in s:
+                    val <<= 8
+                    val += ord(c)
+            elif char == 'D' or char == 'd':
+                fl = self._pop(tuple)
+                if isinstance(fl, float):
+                    pass
+                else:
+                    stderr.write("Conversion of data %s to %s "
+                        "not defined\n" % (repr(fl), char))
+                s = pack('d', fl)
+                val = 0
+                for c in s:
+                    val <<= 8
+                    val += ord(c)
+            elif char == 'z':
+                val = 0
+            elif char == 'o':
+                val = (1 << bits) - 1
+            elif char == 'r':
+                val = 0
+                for i in range(bits / 8 + 1):
+                    val <<= 8
+                    val += ord(urandom(1))
+            else:
+                assert False, "Unknown pattern character in processing"
+            if char in 'usmfdc':
+                val = _reverse(val, bits)
+            mask = (1 << bits) - 1
+            val &= mask
+            unit <<= bits
+            unit += val
+        self.stream.write(unit)
+
+
+class TupleDirectOutput(TupleOutputStream):
+    """Write tuples to a file instead of a output bit stream."""
+    def __init__(self, file):
+        self.file = file
+
+    def write(self, tuple):
+        strlist = []
+        for field in tuple:
+            strlist.append(str(field))
+        s = ",".join(strlist) + "\n"
+        self.file.write(s)
+
+
+#
+# Tuple manipulators
+#
+# Tuple manipulators have two kind of paramenter lists:
+#  FL: Fieldlist (superclass TupleManipulatorFL)
+#  FP: Field, Parameter (superclass TupleManipulatorFP)
+#
+
+class TupleManipulator():
+    """Superclass of all tuple manipulators.
+
+    Error messages get the option name from method self.option_name()
+    that should be overwritten in subclasses.
+
+    """
+    def __init__(self, argstring):
+        pass
+
+    def option_name(self):
+        assert False, "Method optionname called directly"
+
+    def manipulate(self, tuple):
+        pass
+
+
+class TupleManipulatorFP(TupleManipulator):
+    """Superclass of all tuple manipulators with parameters F,P.
+
+    These tuple manipulators get an argument string of type
+    FIELD,PARAMETER. Those are split to values self.field and
+    self.parameter.
+
+    manipulate() method goes through the fields and calls method map()
+    to do the manipulation for the right field.  All subclasses should
+    implement map method.
+
+    """
+    def __init__(self, argstring):
+        try:
+            (field, parameter) = argstring.split(",", 1)
+        except ValueError:
+            stderr.write("Argument for %s must be a list of two numbers\n" %
+                         self.option_name())
+            sysexit(1)
+        try:
+            self.field = int(field)
+        except ValueError:
+            stderr.write("Field in %s must be a number\n" %
+                         self.option_name())
+            sysexit(1)
+        try:
+            self.parameter = int(parameter)
+        except ValueError:
+            stderr.write("Parameter in %s must be a number\n" %
+                         self.option_name())
+            sysexit(1)
+
+    def map(self, val):
+        return val
+
+    def manipulate(self, tuple):
+        try:
+            tuple[self.field] = self.map(tuple[self.field])
+        except IndexError:
+            stderr.write("Field %s mentioned in %s missing\n" %
+                         (self.field, self.option_name))
+        return tuple
+
+
+class TupleManipulatorFL(TupleManipulator):
+    """Superclass of all tuple manipulators with filelist parameters.
+
+    These tuple manipulators get an argument string of type
+    FIELD,FIELD,... Those are split to integers in self.fieldlist.
+
+    manipulate() method is called for each tuple and it should be
+    implemented by all subclasses.
+
+    """
+    def __init__(self, argstring):
+        fl = argstring.split(",")
+        out = []
+        for f in fl:
+            try:
+                out.append(int(f))
+            except ValueError:
+                stderr.write("Fields in %s must be numbers\n" %
+                             self.option_name())
+                sysexit(1)
+        self.fieldlist = out
+
+    def manipulate(self, tuple):
+        return tuple
+
+
+class RearrangeManipulator(TupleManipulatorFL):
+    """Implement --rearrange=FIELDLIST.
+
+    Fieldlist is a comma-separated list of field numbers. Ouput of
+    manipulate funtion is input tuple rearranged as defined in the
+    fieldlist. Negative field numbers are counted from the end of the
+    tuple.
+
+    """
+    def option_name(self):
+        return "--rearrange"
+
+    def manipulate(self, tuple):
+        out = []
+        for f in self.fieldlist:
+            try:
+                out.append(tuple[f])
+            except IndexError:
+                stderr.write("Field %s mentioned in %s missing\n" %
+                             (f, self.option_name()))
+        return out
+
+
+class CutMaxintManipulator(TupleManipulatorFP):
+    """Implement --cut-maxint=FIELD,MAXINT"""
+    def option_name(self):
+        return "--cut-maxint"
+
+    def map(self, val):
+        maxint = self.parameter
+        if val < 0 and val < -maxint:
+            val = -maxint
+        elif val > maxint:
+            val = maxint
+        return val
+
+
+class RemoveRightManipulator(TupleManipulatorFP):
+    """Implement --cut-maxint=FIELD,MAXINT"""
+    def option_name(self):
+        return "--cut-maxint"
+
+    def map(self, val):
+        return val >> self.parameter
+
+
+class XorManipulator(TupleManipulatorFP):
+    """Implement --xor=FIELD,BITS"""
+    def option_name(self):
+        return "--xor"
+
+    def map(self, val):
+        mask = (1 << self.parameter) - 1
+        return val ^ mask
+
+
+class AbsManipulator(TupleManipulatorFP):
+    """Implement --abs=FIELD,0"""
+    def option_name(self):
+        return "--abs"
+
+    def map(self, val):
+        return abs(val)
+
+
+class SignManipulator(TupleManipulatorFP):
+    """Implement --sign=FIELD,0"""
+    def option_name(self):
+        return "--sign"
+
+    def map(self, val):
+        if val < 0:
+            return 1
+        else:
+            return 0
+
+
+#
+# Main program
+#
+# Evaluated only if called as a stand-alone program
+#
+
+if __name__ == "__main__":
+
+    from optparse import OptionParser, OptionGroup
+
+    parser = OptionParser(prog="bdd", version=__version__)
+    g = OptionGroup(parser, "File options", "Use files instead of pipes.")
+    g.add_option("--input-file", metavar="FILENAME")
+    g.add_option("--output-file", metavar="FILENAME")
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Input unit selection",
+                    "Select constant-bit units from input.")
+    g.add_option("--input-unit", type="int", metavar="BITS")
+    g.add_option("--input-skip-bits", type="int", metavar="BITS")
+    g.add_option("--input-skip-units", type="int", metavar="UNITS")
+    g.add_option("--input-gap", type="int", metavar="BITS")
+    g.add_option("--input-pregap", type="int", metavar="BITS")
+    g.add_option("--input-assert-aligned", action="store_true", default=False)
+    g.add_option("--input-use-seek", action="store_true", default=False)
+    g.add_option("--input-little-endian", action="store_true", default=False)
+    g.add_option("--input-reverse-bytes", action="store_true", default=False)
+    g.add_option("--input-reverse-unit", action="store_true", default=False)
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Special input bit streams")
+    g.add_option("--input-zeros", action="store_true", default=False)
+    g.add_option("--input-ones", action="store_true", default=False)
+    g.add_option("--input-random", action="store_true", default=False)
+    g.add_option("--input-counter", action="store_true", default=False)
+    g.add_option("--input-integers", action="store_true", default=False)
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Tuples",
+                    "Split input units to fields and make selections of them.")
+    g.add_option("--input-pattern", metavar="PATTERN")
+    g.add_option("--input-tuples", action="store_true", default=False)
+    g.add_option("--skip", dest="skip", type="int", metavar="UNITS")
+    g.add_option("--count", dest="count", type="int", metavar="UNITS")
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Manipulate tuples")
+    g.add_option("--rearrange", metavar="LIST")
+    g.add_option("--cut-maxint", metavar="FIELDNO")
+    g.add_option("--remove-right", metavar="FIELDNO,BITS")
+    g.add_option("--xor", metavar="FIELDNO,BITS")
+    g.add_option("--abs", metavar="FIELDNO,0")
+    g.add_option("--sign", metavar="FIELDNO,0")
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Pack tuples", "Or print them directly.")
+    g.add_option("--output-pattern", metavar="PATTERN")
+    g.add_option("--output-tuples", action="store_true", default=False)
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Output unit")
+    g.add_option("--output-unit", type="int", metavar="BITS")
+    g.add_option("--output-little-endian", action="store_true", default=False)
+    g.add_option("--output-reverse-bytes", action="store_true", default=False)
+    g.add_option("--output-reverse-unit", action="store_true", default=False)
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Special output for units")
+    g.add_option("--output-integers", action="store_true", default=False)
+    g.add_option("--output-hex", action="store_true", default=False)
+    g.add_option("--output-bits", action="store_true", default=False)
+    parser.add_option_group(g)
+    g = OptionGroup(parser, "Merge options")
+    g.add_option("--merge-file", metavar="FILENAME")
+    g.add_option("--merge-unit", type="int", metavar="BITS")
+    g.add_option("--merge-skip-bits", type="int", metavar="BITS")
+    g.add_option("--merge-skip-units", type="int", metavar="UNITS")
+    g.add_option("--merge-copy-first", type="int", metavar="BITS")
+    g.add_option("--merge-gap", type="int", metavar="BITS")
+    g.add_option("--merge-pregap", type="int", metavar="BITS")
+    g.add_option("--merge-assert-aligned", action="store_true", default=False)
+    g.add_option("--merge-use-seek", action="store_true", default=False)
+    g.add_option("--merge-little-endian", action="store_true", default=False)
+    g.add_option("--merge-reverse-bytes", action="store_true", default=False)
+    g.add_option("--merge-reverse-unit", action="store_true", default=False)
+    parser.add_option_group(g)
+
+    (options, args) = parser.parse_args()
+
+    if args:
+        parser.error("no arguments without -- are allowed")
+
+    # Open input file (inf).
+    stdin_already_used = False
+    if options.input_file and options.input_file != "-":
+        try:
+            inf = open(options.input_file, "rb")
+        except IOError:
+            stderr.write("Can not open input file %s\n" % options.input_file)
+            sysexit(1)
+    else:
+        if options.input_zeros or \
+                options.input_ones or \
+                options.input_random:
+            inf = None
+        else:
+            inf = stdin
+            stdin_used = True
+            if options.input_use_seek:
+                # TODO: stdin can be a file and the we can seek...
+                parser.error("Standard input does not allow seek."
+                             "--input-use-seek disabled")
+                options.input_use_seek = False
+
+    # Open merge file (mergef).
+    mergef = None
+    if options.merge_file:
+        if options.merge_file == "-":
+            if stdin_already_used:
+                parser.error("Standard input used both for merge and input")
+            mergef = stdin
+        else:
+            try:
+                mergef = open(options.merge_file, "rb")
+            except IOError:
+                stderr.write("Can not open merge file %s\n" %
+                             options.merge_file)
+                sysexit(1)
+
+    # Open output file (outf).
+    if options.output_file and options.output_file != "-":
+        try:
+            outf = open(options.output_file, "wb")
+        except IOError:
+            parser.error("Can not open output file")
+    else:
+        outf = stdout
+
+    #
+    # Check forbidden file option combinations.
+    #
+
+    def exclusive(message, *arguments):
+        """check that at most one of the options is selected
+        and gives message if not"""
+        count = 0
+        for arg in arguments:
+            if arg:
+                count += 1
+        if count > 1:
+            parser.error(message)
+
+    exclusive("Only one of the following is allowed: --input-zeros, "
+              "--input-ones, --input-random, --input-counter,"
+              "--input-integers, --input-tuples",
+              options.input_zeros,
+              options.input_ones,
+              options.input_random,
+              options.input_counter,
+              options.input_integers)
+
+    s = "--input-file can not be used with --input-zeros, " \
+        "--input-ones, --input-random or --input-counter"
+    exclusive(s, options.input_zeros, options.input_file)
+    exclusive(s, options.input_ones, options.input_file)
+    exclusive(s, options.input_random, options.input_file)
+    exclusive(s, options.input_counter, options.input_file)
+
+    if options.input_zeros or options.input_ones or \
+            options.input_random or options.input_counter:
+        if not options.count:
+            parser.error("--input-zeros, --input-ones, --input-random and "
+                         "--input-counter require --count")
+
+    exclusive("Only one of the following: --output-tuples, "
+              "--output-integers, "
+              "--output-hex, --output-bits",
+              options.output_tuples,
+              options.output_integers,
+              options.output_hex,
+              options.output_bits)
+
+    s = "--in/output-pattern overwrites --in/output-unit, use either one"
+    exclusive(s, options.input_pattern, options.input_unit)
+    exclusive(s, options.output_pattern, options.output_unit)
+
+    s = "Merge options can be used only if --merge-file option is set"
+    if options.merge_unit and not options.merge_file:
+        parser.error(s)
+    if options.merge_skip_bits and not options.merge_file:
+        parser.error(s)
+    if options.merge_skip_units and not options.merge_file:
+        parser.error(s)
+    if options.merge_copy_first and not options.merge_file:
+        parser.error(s)
+    if options.merge_gap and not options.merge_file:
+        parser.error(s)
+    if options.merge_pregap and not options.merge_file:
+        parser.error(s)
+    if options.merge_assert_aligned and not options.merge_file:
+        parser.error(s)
+    if options.merge_use_seek and not options.merge_file:
+        parser.error(s)
+    if options.merge_little_endian and not options.merge_file:
+        parser.error(s)
+    if options.merge_reverse_bytes and not options.merge_file:
+        parser.error(s)
+    if options.merge_reverse_unit and not options.merge_file:
+        parser.error(s)
+
+    #
+    # Check number options.
+    #
+    def check_number_argument(i, option_name, default="error"):
+        """Check that the argument a is positive integer.
+
+        If it is not, prints error message with option name and
+        assigns default value to the option. If there is no default,
+        program exits. Default can be "None" what is not the same
+        as no default.
+
+        """
+        if i == None:
+            return default
+        if isinstance(i, (int, long)) and i >= 0:
+            return i
+        stderr.write("%s value must be a positive integer\n" % option_name)
+        if default == "error":
+            sysexit(1)
+        stderr.write("Assumed %s=%s\n" % (option_name, repr(default)))
+        return default
+
+
+    # TODO:
+    # input and output unit can not be set to default here,
+    # because we have to know later if they existed or not!
+    # Currently they are not checked against negative values.
+#     options.input_unit = check_number_argument(
+#         options.input_unit, "--input-unit", None)
+    options.input_skip_bits = check_number_argument(
+        options.input_skip_bits, "--input-skip-bits", 0)
+    options.input_skip_units = check_number_argument(
+        options.input_skip_units, "--input-skip-units", 0)
+    options.input_gap = check_number_argument(
+        options.input_gap, "--input-gap", 0)
+    options.input_pregap = check_number_argument(
+        options.input_pregap, "--input-pregap", 0)
+    options.skip = check_number_argument(
+        options.skip, "--skip", 0)
+    options.count = check_number_argument(
+        options.count, "--count", None)
+#    options.output_unit = check_number_argument(
+#        options.output_unit, "--output-unit", None)
+    options.merge_unit = check_number_argument(
+        options.merge_unit, "--merge-unit", 0)
+    options.merge_skip_bits = check_number_argument(
+        options.merge_skip_bits, "--merge-skip-bits", 0)
+    options.merge_skip_units = check_number_argument(
+        options.merge_skip_units, "--merge-skip-units", 0)
+    options.merge_copy_first = check_number_argument(
+        options.merge_copy_first, "--merge-copy-first", 0)
+    options.merge_gap = check_number_argument(
+        options.merge_gap, "--merge-gap", 0)
+
+    #
+    # Handle little-endian as a shorthand for reverse bytes and unit.
+    #
+
+    if options.input_little_endian:
+        if options.input_reverse_bytes or options.input_reverse_unit:
+            stderr.write("--input-little-endian overwrites "
+                         "--input-reverse-bytes and "
+                         "--input-reverse-unit\n")
+        options.input_reverse_bytes = True
+        options.input_reverse_unit = True
+
+    if options.output_little_endian:
+        if options.output_reverse_bytes or options.output_reverse_unit:
+            stderr.write("--output-little-endian overwrites "
+                         "--output-reverse-bytes and "
+                         "--output-reverse-unit\n")
+        options.output_reverse_bytes = True
+        options.output_reverse_unit = True
+
+    if options.merge_little_endian:
+        if options.merge_reverse_bytes or options.merge_reverse_unit:
+            stderr.write("--merge-little-endian overwrites "
+                         "--merge-reverse-bytes and "
+                         "--merge-reverse-unit\n")
+        options.merge_reverse_bytes = True
+        options.merge_reverse_unit = True
+
+    #
+    # Handle pregap as shorthand to skip-bits + gap
+    #
+
+    if options.input_pregap:
+        options.input_skip_bits += options.input_pregap
+        options.input_gap += options.input_pregap
+    if options.merge_pregap:
+        options.merge_skip_bits += options.merge_pregap
+        options.merge_gap += options.merge_pregap
+
+    #
+    # Create in/output/merge bit streams
+    #
+
+    counter = Counter(skip=options.skip, count=options.count)
+    if options.input_tuples:
+        instream = None
+    elif options.input_zeros:
+        instream = ZeroStream(counter=counter)
+    elif options.input_ones:
+        instream = OneStream(counter=counter)
+    elif options.input_random:
+        instream = RandomStream(counter=counter)
+    elif options.input_counter:
+        instream = CounterStream(counter=counter)
+    elif options.input_integers:
+        instream = IntegerInputStream(fd=inf, counter=counter)
+    else:
+        instream = FileInputStream(
+            fd=inf,
+            skip_bits=options.input_skip_bits,
+            skip_units=options.input_skip_units,
+            gap=options.input_gap,
+            assert_aligned=options.input_assert_aligned,
+            use_seek=options.input_use_seek,
+            reverse_bytes=options.input_reverse_bytes,
+            reverse_unit=options.input_reverse_unit,
+            counter = counter)
+
+    if options.output_tuples:
+        outstream = None
+    elif options.output_integers:
+        outstream = IntegerOutputStream(outf)
+    elif options.output_hex:
+        outstream = HexOutputStream(outf)
+    elif options.output_bits:
+        outstream = BitOutputStream(outf)
+    else:
+        outstream = FileOutputStream(
+            outf,
+#            unit=options.output_unit,
+            reverse_bytes = options.output_reverse_bytes,
+            reverse_unit = options.output_reverse_unit)
+
+    if options.merge_file:
+        mergestream = MergeInputStream(
+            mergef,
+            skip_bits=options.merge_skip_bits,
+            skip_units=options.merge_skip_units,
+            gap=options.merge_gap,
+            assert_aligned=options.merge_assert_aligned,
+            reverse_bytes=options.merge_reverse_bytes,
+            reverse_unit=options.merge_reverse_unit,
+            counter = Counter(0,None))
+
+    #
+    # Open tuple streams, usually connected to bit streams
+    #
+
+    if options.input_tuples:
+        assert instream == None
+        counter = Counter(skip=options.skip, count=options.count)
+        tupleinstream = TupleDirectInput(inf, counter=counter)
+    elif options.input_pattern:
+        tupleinstream = TupleUnpacker(instream, options.input_pattern)
+    else:
+        tupleinstream = TupleInputDummy(instream)
+
+    if options.output_tuples:
+        assert outstream == None
+        tupleoutstream = TupleDirectOutput(outf)
+    elif options.output_pattern:
+        tupleoutstream = TuplePacker(outstream, options.output_pattern)
+    else:
+        tupleoutstream = TupleOutputDummy(outstream)
+
+    #
+    # Finalize bit streams
+    #
+
+    if instream:
+        if options.input_unit:
+            assert options.input_pattern == None
+            instream.set_unit_size(options.input_unit)
+        elif options.input_pattern:
+            instream.set_unit_size(tupleinstream.total_bits())
+        else:
+            instream.set_unit_size(8)
+        instream.do_skip()
+
+    if outstream:
+        if options.output_unit:
+            assert options.output_pattern == None
+            outstream.set_unit_size(options.output_unit)
+        elif options.output_pattern:
+            outstream.set_unit_size(tupleoutstream.total_bits())
+        else:
+            outstream.set_unit_size(8)
+        outstream.initialize()
+
+    if options.merge_file:
+        if options.merge_unit:
+            mergestream.set_unit_size(options.merge_unit)
+        else:
+            mergestream.set_unit_size(8)
+        mergestream.do_skip()
+
+    #
+    # Create classes for manipulators.
+    #
+    # TODO: it should be possible to define same manipulator
+    # multiple times but it is not straightforward with optionparse
+    # (maybe with callback?).
+    #
+
+    manipulators = []
+    if options.rearrange:
+        manipulators.append(RearrangeManipulator(options.rearrange))
+    if options.cut_maxint:
+        manipulators.append(CutMaxintManipulator(options.cut_maxint))
+    if options.remove_right:
+        manipulators.append(RemoveRightManipulator(options.remove_right))
+    if options.xor:
+        manipulators.append(XorManipulator(options.xor))
+    if options.abs:
+        manipulators.append(AbsManipulator(options.abs))
+    if options.sign:
+        manipulators.append(SignManipulator(options.sign))
+
+    #
+    # Main loop
+    #
+    # (Note that --skip and --count are processed in bitstream input to avoid
+    # parsing skipped tuples; they would be more natural here)
+    #
+
+    if options.merge_file:
+        merge_units = mergestream.units()
+        mergestream_unit_size = mergestream.get_unit_size()
+    if options.merge_copy_first:
+        outstream.write_bits(mergestream.read_bits(options.merge_copy_first), options.merge_copy_first)
+    for tuple in tupleinstream.tuples():
+        for m in manipulators:
+            tuple = m.manipulate(tuple)
+        tupleoutstream.write(tuple)
+        if options.merge_file:
+            try:
+                outstream.write_bits(merge_units.next(), mergestream_unit_size)
+            except StopIteration:
+                stderr.write("Premature end of merge file\n")
+                break
+
+    #
+    # Clean up
+    #
+
+    if outstream:
+        outstream.flush()
+    if inf:
+        inf.close()  # TODO: Win/Cygwin fails to close /dev/zero
+    if outf:
+        outf.close()
+    if mergef:
+        mergef.close()
+

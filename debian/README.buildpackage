@@ -1,0 +1,3 @@
+
+- run make in src directory while OpenOffice or LibreOffice is running
+  (script uses it to turn presentation to PDF)

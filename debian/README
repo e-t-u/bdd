@@ -1,0 +1,9 @@
+The Debian Package bdd
+----------------------------
+
+Command line utility to handle files whose data is not byte-aligned.
+
+Look for bdd --help and man page bdd(1) and /usr/share/doc/bdd/ for
+more instructions.
+
+ -- Esa Turtiainen <esa@turtiainen.eu>  Fri, 18 Feb 2011 22:36:21 +0200

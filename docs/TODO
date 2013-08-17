@@ -1,0 +1,59 @@
+TODO (bdd 0.1)
+
+Planned bug corrections:
+- in --input-tuples, numbers are interpreted as numbers, even if quoted
+- output-bits and output-hex print one extra space to the end of the every line
+
+Planned feature modifications:
+- output-unit will default to input-unit instead of 8
+- modify tuple options should be repeatable
+- remove need that --abs and --sign must have parameter 0 (=FIELD,0)
+- --output-integers, --output-hex and --output-bits will follow --output-reverse-bits and --output-reverse-bytes
+- using lower-case pattern characters are not allowed unless a special option is used (unexperienced user easily mixes them (I do))
+
+Planned performance improvement:
+- if no tuple options are used, the tuple handing will be bypassed
+
+Some minor changes that need some code review:
+- some error messages missing e.g. --input-random --skip combination
+  - the whole error message checking will be rearranged to correspond program structure
+- repeating warnings for every line of input will be removed
+
+Iterms for long-term consideration:
+- performance should be improved
+  - is it possible to code some routines in C and improve performance
+  - is there something to learn from numpy?
+  - we currently use read(1), is that a bottleneck?
+  - in some cases we could read file to memory first (StringIO is an easy solution)
+- the merge file should be actually implemented as:
+  - input file and merge file are the same thing and there may be many input files
+  - every input file is written to the output one unit at time, round-robin
+  - every input file has all the current options
+- maybe field numbering should start from 1 (currently 0)
+- maybe the more common case, big-endian, should be lowercase letter in pattern
+- --input-counter would not necessarily need --count if the default would be to count all values in the unit size once
+- maybe there should be a bit pattern of type "void" that can be only input and output as-is in cases where U does not feel right.
+- number in pattern could be optional. Defaults could be:
+    x -> 1
+    U -> 1
+    M -> ? byte?
+    S -> ? byte?
+    F -> 32
+    D -> 64
+    C -> 8
+    z -> 1
+    o -> 1
+    r -> 1
+  this would break the current principle that unit size is easy to calculate from sum of bit sizes in the pattern.
+- there should be a pattern character in output-pattern to skip one field in the tuple. x?
+- there could be counter input/output pattern (similarly as --input-counter)
+- if the gap is large and --input-use-seek is defined, could seek to the next unit
+- If the input file was already filled with zeros, the current logic of adding zeros after EOF adds one byte to every file.
+  There should be an option not to print the last unit if it uses extra zeros. The problem is that if unit is e.g. 2 bits,
+  there may be several filler units in the last byte and we may not know it. It is much better to use --count to tell
+  how many units there should be in the file.
+- UTF-8 strings (e.g. in --input-tuples) should be clarified
+- little-endianness should be still be evaluated
+  - do we need bytewise little-endian pattern characters?
+  - do we need "host order" option
+

@@ -1,0 +1,13 @@
+Document: bdd-presentation
+Title: bdd slide set
+Author: Esa Turtiainen
+Abstract: This slide set describes the basic
+ consepts of bdd bit stream manipulation command
+ line utility.
+Section: Text
+
+Format: PDF
+Files: /usr/share/doc/bdd/Presentation.pdf.gz
+
+Format: ODP
+Files: /usr/share/doc/bdd/Presentation.odp.gz

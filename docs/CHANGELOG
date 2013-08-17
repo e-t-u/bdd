@@ -1,0 +1,24 @@
+From version 0.1 to 0.2:
+
+Features:
+- merge file is implemented
+- --merge-copy-first as non-planned option
+- output-hex and output-bits print nice lines
+- --input-pregap (and --merge-pregap) to make unit within unit cases easier
+
+Bug corrections:
+- sometimes added extra 0x00 byte to the end of output file, corrected
+- lowercase input pattern type characters cleared neighbouring bits, corrected
+- some asserts were wrong
+- help text of --input-unit suggested size of UNITS, now BITS
+- does not use any more features that do not exist in Windows (Windows not tested fully)
+
+Distribution:
+- delivers .tar.bz2 and .zip
+- man page delivered alse in html and pdf
+- slide set is in pdf (odp in src/)
+- Makefile to make distribution automatically
+
+Documentation:
+- fully updated man page
+- fully updated slide set

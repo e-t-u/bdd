@@ -1,0 +1,26 @@
+Source: bdd
+Section: utils
+Priority: extra
+Maintainer: Esa Turtiainen <esa@turtiainen.eu>
+Build-Depends: debhelper (>= 7.0.50~), python-support, unoconv
+Standards-Version: 3.8.4
+Homepage: https://sourceforge.net/projects/bdd
+#Vcs-Git: git://git.debian.org/collab-maint/bdd.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/bdd.git;a=summary
+
+Package: bdd
+Architecture: all
+Depends: ${misc:Depends}, python (>=2.5), python (<=2.7)
+Description: binary copy for non-byte-aligend streams
+ bdd can extract bit-units from a stream of any byte size.
+ Additionally it can skip arbitrary bit amounts and give
+ bit fields meaningful interpreations using templates
+ including solving big/little endian problems.
+ .
+ bdd also allows to create arbitrary bit-streams from human
+ readable CSV input.
+ .
+ bdd can also merge two bit streams to one using bit skips.
+ .
+ bdd is planned to be extremely flexible but it is not very 
+ efficient. It is implemented using Python.

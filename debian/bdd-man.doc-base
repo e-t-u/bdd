@@ -1,0 +1,15 @@
+Document: bdd-man
+Title: bdd man page
+Author: Esa Turtiainen
+Abstract: bdd man page in several more readable formats
+Section: Text
+
+Format: HTML
+Index: /usr/share/doc/bdd/bdd.1.html
+Files: /usr/share/doc/bdd/bdd.1.html
+
+Format: PS
+Files: /usr/share/doc/bdd/bdd.1.ps.gz
+
+Format: PDF
+Files: /usr/share/doc/bdd/bdd.1.pdf.gz
