@@ -1,5 +1,6 @@
 # test script for bdd
-# you should use this like: bash test.sh 2>&1 | more
+# you should use this like: bash test/test.sh 2>&1 | more
+# bdd must be ./bdd and it must be executable (chmod +x bdd)
 # (some other shells will destroy quotation (e.g. dash))
 # bdd must be excutable and located in ./bdd
 
