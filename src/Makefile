@@ -6,7 +6,7 @@ DOCS=../docs
 MAIN=..
 SRC=.
 TMPDIR=/tmp/bdd-dist
-DIR=bdd-0,2
+DIR=bdd-0.2
 TMP=$(TMPDIR)/$(DIR)
 
 all:	dist
@@ -17,19 +17,15 @@ all:	dist
 
 docs:	$(DOCS)/bdd.1.pdf $(DOCS)/bdd.1.html $(DOCS)/Presentation.pdf $(SRC)/bdd.html
 
-$(DOCS)/bdd.1.pdf:	$(DOCS)/bdd.1.ps /usr/bin/ps2pdf
-	ps2pdf $< $@
+$(DOCS)/bdd.1.pdf:	$(DOCS)/bdd.1.ps /usr/bin/groff /usr/bin/gropdf
+	/usr/bin/groff -man -T pdf -P -l $< $@
 
-$(DOCS)/bdd.1.ps:	$(MAIN)/bdd.1
-	groff -man $< > $@
-
-$(DOCS)/bdd.1.html:	$(MAIN)/bdd.1
-	groff -man -T html -P -l $< > $@
+$(DOCS)/bdd.1.html:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/post-grohtml
+	/usr/bin/groff -man -T html -P -l $< > $@
 
 # openoffice must be running to get following to work!
-$(DOCS)/Presentation.pdf:	$(SRC)/Presentation.odp /usr/bin/unoconv
-	echo "Openoffice/Libreoffice must be running!"
-	unoconv --stdout $< > $@
+$(DOCS)/Presentation.pdf:	$(SRC)/Presentation.odp /usr/bin/libreoffice
+	/usr/bin/libreoffice --headless --convert-to pdf $<
 
 $(SRC)/bdd.html:	$(MAIN)/bdd /usr/bin/pydoc
 	cd $(SRC); pydoc -w $<
@@ -53,13 +49,13 @@ dist:	/tmp/bdd.tar.bz2 /tmp/bdd.zip
 distfiles:  $(MAIN)/bdd $(MAIN)/bdd.1 docs $(SRC)/Makefile $(SRC)/Presentation.odp $(MAIN)/test/test.sh
 
 $(TMP):	distfiles
-    # main
+	# main
 	install -D $(MAIN)/bdd $@/bdd
 	install -D $(MAIN)/bdd.1 $@/bdd.1
 	# docs
 	install -D $(DOCS)/Presentation.pdf $@/docs/Presentation.pdf
 	install -D $(DOCS)/bdd.1.html $@/docs/bdd.1.html
-		install -D $(DOCS)/bdd.1.pdf $@/docs/bdd.1.pdf
+	install -D $(DOCS)/bdd.1.pdf $@/docs/bdd.1.pdf
 	install -D $(DOCS)/TODO $@/docs/TODO
 	# src
 	install -D $(SRC)/Makefile $@/src/Makefile
@@ -72,7 +68,15 @@ $(TMP):	distfiles
 # Warnings if conversion tools are missing
 #
 
-/usr/bin/ps2pdf:
+/usr/bin/groff:
+	echo $@ missing
+	exit
+
+/usr/bin/gropdf:
+	echo $@ missing
+	exit
+
+/usr/bin/post-grohtml:
 	echo $@ missing
 	exit
 
@@ -84,7 +88,7 @@ $(TMP):	distfiles
 	echo $@ missing
 	exit
 
-/usr/bin/unoconv:
+/usr/bin/libreoffice:
 	echo $@ missing
 	exit
 
