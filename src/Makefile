@@ -17,8 +17,8 @@ all:	dist
 
 docs:	$(DOCS)/bdd.1.pdf $(DOCS)/bdd.1.html $(DOCS)/Presentation.pdf $(SRC)/bdd.html
 
-$(DOCS)/bdd.1.pdf:	$(DOCS)/bdd.1.ps /usr/bin/groff /usr/bin/gropdf
-	/usr/bin/groff -man -T pdf -P -l $< $@
+$(DOCS)/bdd.1.pdf:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/gropdf
+	/usr/bin/groff -man -T pdf -P -l $< > $@
 
 $(DOCS)/bdd.1.html:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/post-grohtml
 	/usr/bin/groff -man -T html -P -l $< > $@
@@ -26,6 +26,7 @@ $(DOCS)/bdd.1.html:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/post-grohtml
 # openoffice must be running to get following to work!
 $(DOCS)/Presentation.pdf:	$(SRC)/Presentation.odp /usr/bin/libreoffice
 	/usr/bin/libreoffice --headless --convert-to pdf $<
+	mv Presentation.pdf $(DOCS)/
 
 $(SRC)/bdd.html:	$(MAIN)/bdd /usr/bin/pydoc
 	cd $(SRC); pydoc -w $<
@@ -93,7 +94,7 @@ $(TMP):	distfiles
 	exit
 
 clean:
-	cd $(MAIN); rm -f *~
+	cd $(MAIN); rm -f *~ bddc
 	cd $(SRC); rm -f *~ bdd.html
 	cd $(DOCS); rm -f *~ bdd.1.* Presentation.pdf
 	cd $(MAIN)/test; rm -f *~
