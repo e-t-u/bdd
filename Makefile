@@ -9,10 +9,13 @@ docs_and_dists:
 # creates Debian package and source packages (to ..)
 deb:
 	dpkg-buildpackage
-	
+
 clean:
 	cd src; make clean
 	rm -f bddc # byte compiled bdd
 	rm -f debian/bdd.debhelper.log
+	rm -f debian/bdd.substvars
+	rm -rf debian/bdd/
+	rm -r debian/files
 	rm -f debian/*~
 	rm -f debian/*#
