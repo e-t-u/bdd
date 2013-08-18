@@ -8,7 +8,7 @@ docs_and_dists:
 
 # creates Debian package and source packages (to ..)
 deb:
-	dpkg-buildpackage
+	dpkg-buildpackage -us -uc
 
 clean:
 	cd src; make clean
@@ -16,6 +16,6 @@ clean:
 	rm -f debian/bdd.debhelper.log
 	rm -f debian/bdd.substvars
 	rm -rf debian/bdd/
-	rm -r debian/files
+	rm -f debian/files
 	rm -f debian/*~
 	rm -f debian/*#

@@ -1,3 +1,10 @@
+bdd (0.2-2) unstable; urgency=low
+
+  * Essentially 0.2 but now hosted in GitHub and made all the modifications
+    so that it works with current Ubuntu 13.10 alpha.
+
+ -- Esa Turtiainen <esa@turtiainen.eu>  Sun, 18 Aug 2013 00:04:26 +0200
+
 bdd (0.2) unstable; urgency=low
 
   * Initial Release.
