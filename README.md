@@ -9,7 +9,7 @@ The program is one Python script, ./bdd.
 Read bdd.1 and src/Presentation.odp to get more information how to use
 the command.
 
-![Diagram of available functionality](idiagram.png)
+![Diagram of available functionality](diagram.png)
 
 More readable documentation is generated with Makefile in src
 directory. It generates:
