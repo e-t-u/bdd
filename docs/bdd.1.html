@@ -1,0 +1,758 @@
+<!-- Creator     : groff version 1.22.3 -->
+<!-- CreationDate: Thu Jan 23 19:00:40 2020 -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<meta name="generator" content="groff -Thtml, see www.gnu.org">
+<meta http-equiv="Content-Type" content="text/html; charset=US-ASCII">
+<meta name="Content-Style" content="text/css">
+<style type="text/css">
+       p       { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       pre     { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       table   { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       h1      { text-align: center }
+</style>
+<title>bdd</title>
+
+</head>
+<body>
+
+<h1 align="center">bdd</h1>
+
+<hr>
+
+
+<h2>NAME
+<a name="NAME"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">bdd &minus; Bit
+stream copy and modify</p>
+
+<h2>SYNOPSIS
+<a name="SYNOPSIS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">bdd
+[OPTIONS]</p>
+
+<h2>DESCRIPTION
+<a name="DESCRIPTION"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">bdd modifies
+information in bit streams (non byte-aligned).</p>
+
+<p style="margin-left:11%; margin-top: 1em">By default, bdd
+reads bytes from standard input and writes them to standard
+output. With options, the behaviour can be widely modified
+to handle inputs and outputs with accuracy of one bit.</p>
+
+<p style="margin-left:11%; margin-top: 1em">bdd considers
+input and output as streams of bit units. A bit unit is a
+repeatable units of constant amount of bits. Those units can
+be in the middle of the stream and the input stream can be
+infinite (like /dev/zero).</p>
+
+<p style="margin-left:11%; margin-top: 1em">Every unit is
+divided to bit-defined fields and fields are interpreted
+into a tuple (analogy of relational database). Tuples may
+have integers, floats and strings.</p>
+
+<p style="margin-left:11%; margin-top: 1em">Tuple can be
+modified and packed again bit by bit into a unit. Units are
+written into the output bit stream.</p>
+
+<p style="margin-left:11%; margin-top: 1em">There can be
+anothern input stream, merge stream. Units in the merge
+stream are output after every main input stream unit. Merge
+stream does not support division into fields.</p>
+
+<p style="margin-left:11%; margin-top: 1em">The name bdd
+comes from binary-dd because it is able to do much of the
+operations anyone would need in dd to handle bit
+streams.</p>
+
+<h2>OPTIONS
+<a name="OPTIONS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>Input and
+output file selection:</b> <br>
+The default is to use standard input and standard output.
+<br>
+--input-file=FILENAME</p>
+
+<p style="margin-left:22%;">Selects input file to used as
+input instead pipe input. Can not be used with --input-zeros
+--input-ones, --input-random or --input-counter.
+--input-integers and --input-tuples take their input from
+input file. Filename can also be &quot;-&quot; to describe
+pipe input (default).</p>
+
+<p style="margin-left:11%;">--output-file=FILENAME</p>
+
+<p style="margin-left:22%;">Selects output file to used as
+output instead pipe output. Filename can also be
+&quot;-&quot; to describe pipe output (default). Outuput
+file must not exist, bdd does not overwrite an existing
+file.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Input unit
+selection</b> <br>
+A unit is a constant bit amount that repeats in the input:
+<br>
+--input-unit=BITS</p>
+
+<p style="margin-left:22%;">Breaks input to units of BITS.
+If input is less than even amount of units, the most
+significant bits of the last unit are taken from the input
+file and the least significant bits are filled with zeroes.
+Input unit defaults to 8. If --input-pattern is defined, the
+combined bit size of the --input-pattern defines the input
+unit. You must not define both --input-unit and
+--input-pattern.</p>
+
+<p style="margin-left:11%;">--input-skip-bits=BITS</p>
+
+<p style="margin-left:22%;">Skip BITS bits from the
+beginning of the input.</p>
+
+<p style="margin-left:11%;">--input-skip-units=UNITS</p>
+
+<p style="margin-left:22%;">Skip UNITS units from the
+beginning of the input. If both skip-bits and skip-units are
+defined, they are done both. --skip has the same effect but
+sometimes it is more natural to use --input-skip-units to
+find units and use --skip for units. --input-skip-units is
+potentially more efficient because it is able to use seek to
+find the right place in the input file (look
+--input-use-seek).</p>
+
+<p style="margin-left:11%;">--input-gap=BITS</p>
+
+<p style="margin-left:22%;">After reading a unit, skip BITS
+bits.</p>
+
+<p style="margin-left:11%;">--input-pregap=BITS</p>
+
+<p style="margin-left:22%;">Before reading a unit, skip
+BITS bits. Can always be implemented by adding BITS to both
+--input-skip-bits and --input-gap, but using pregap is much
+clearer in some cases.</p>
+
+<p style="margin-left:11%;">--input-assert-aligned</p>
+
+<p style="margin-left:22%;">Gives error message if the
+input is not full units. Note that with --count you can
+cleanly stop reading non-aligned input.</p>
+
+<p style="margin-left:11%;">--input-use-seek</p>
+
+<p style="margin-left:22%;">Use seek in input to do
+--input-skip-bits, --input-skip-units and first
+--input-pregap. Default is to read them and discard the
+result. Does not work if input is a pipe.</p>
+
+<p style="margin-left:11%;">--input-reverse-bytes</p>
+
+<p style="margin-left:22%;">Every time when a byte is read
+from input, bits are reversed. 0x01 becomes 0x80. Look
+--input-little-endian for more information.</p>
+
+<p style="margin-left:11%;">--input-reverse-unit</p>
+
+<p style="margin-left:22%;">Every time when a unit is read,
+bits are reversed. Look --input-little-endian for more
+information.</p>
+
+<p style="margin-left:11%;">--input-little-endian</p>
+
+<p style="margin-left:22%;">By default, the input is
+assumed to be in network byte order or in big-endian byte
+order. However, the natural byte order for most processors
+is little-endian byte order. 16-bit big-endian integer 1 in
+byte stream is 0x00 0x01 and low-endian 0x01 0x00. In some
+systems, even if integers are low-endian, floating point
+numbers and strings are in big-endian order.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Unit is
+translated as an integer assuming that the least significant
+bit is the first one. To implement this as generic as
+possible, this is actually a synonym for combination
+--input-reverse-bytes and --input-reverse-unit. If we read
+16-bit integer 1, in low-endian input stream it is 0x01
+0x00. With --input-reverse-bytes it turns to 0x80 0x00 and
+with --input-reverse-unit it turns to 0x00 0x01. By these
+two steps, the operation has a meaningful interpretation
+even in non-byte-aligned cases.</p>
+
+<p style="margin-left:22%; margin-top: 1em">After
+--input-little-endian, the content is usually read as a
+big-endian number in --input-pattern!</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Bypass bit
+stream input (fake inputs)</b> <br>
+Instead of the file input, the input can be one of these
+fake inputs. You can use either file input or one of these
+fake inputs. You must use --count to tell how many units the
+fake input has (except for --input-integers).</p>
+
+<p style="margin-left:11%; margin-top: 1em">Values of fake
+inputs are truncated to the input unit size. For example, if
+you use --input-counter with input unit size 8 and output
+unit size 9, the topmost bit of the output is always
+zero.</p>
+
+<p style="margin-left:11%; margin-top: 1em">If a fake input
+is used, the standard input is not opened at all for input,
+and standard input can be used with --merge-file.</p>
+
+<p style="margin-left:11%; margin-top: 1em">None of the
+fake inputs does support reversing bits, initial skips or
+gap operations. --input-random, --input-counter and
+--input-integers support --skip (also others allow it, but
+it does nothing as it would not affect the output). <br>
+--input-zeros</p>
+
+<p style="margin-left:22%;">All the input units are
+zeros.</p>
+
+<p style="margin-left:11%;">--input-ones</p>
+
+<p style="margin-left:22%;">Like --input-zeros but all the
+bits of the input unit are ones.</p>
+
+<p style="margin-left:11%;">--input-random</p>
+
+<p style="margin-left:22%;">Like --input-zeros but all the
+input bits are random (from /dev/urandom).</p>
+
+<p style="margin-left:11%;">--input-counter</p>
+
+<p style="margin-left:22%;">Like --input-zeros, but input
+is units, every one with one bigger value than the previous.
+Counter value is cut to input unit size. Can not be reversed
+but --skip can be used to start from a specific number. If
+--skip=N, the first counter value will be N.</p>
+
+<p style="margin-left:11%;">--input-integers</p>
+
+<p style="margin-left:22%;">Instead of a bit stream, input
+is text, 10-base unsigned integers that are separated with
+newline characters. Whitespace around number is allowed and
+empty lines are skipped. Can not be used with any other unit
+selection argument but can be used with --skip and --count
+to read only a part of the file.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Unpack a
+unit to a tuple</b> <br>
+The input unit is split into fields according the
+--input-pattern. Fields are possibly interpreted as typed
+values (signed integers, floats or strings).</p>
+
+<p style="margin-left:11%; margin-top: 1em">If there is no
+--output-pattern, the first field of the tuple is output as
+the sole unit. It must be a positive integer to be
+interpreted as a unit. If there is no --input-pattern,
+--output-pattern can still be used but there is only one
+field available and it is the input unit as whole. <br>
+--input-pattern=PAT</p>
+
+<p style="margin-left:22%;">Interpret every unit as fields
+as described in the PAT. PAT consists of patterns that match
+some bits in the input unit. A pattern has first the number
+of the bits matched and then a character that gives those
+bits the interpretation. For example,</p>
+
+
+<p style="margin-left:22%; margin-top: 1em">--input-pattern=1U7U</p>
+
+<p style="margin-left:22%; margin-top: 1em">divides a 8-bit
+unit into two integers, the first bit forms one field and
+seven next bits form another field. U means that the fields
+are interpreted as unsigned integers.</p>
+
+<p style="margin-left:22%; margin-top: 1em">x - - - skip
+these bits without output <br>
+U - i - field is unsigned integer (msb first) <br>
+u - i - field is unsigned integer (lsb first) <br>
+M - ii - reads bits as 2&rsquo;s complement signed integer,
+<br>
+but stores sign and magnitude separately as <br>
+two positive integer fields <br>
+m - ii - same as M, lsb first</p>
+
+<p style="margin-left:22%; margin-top: 1em">M and m
+generate two fields from one number. The sign is output
+first as one integer and the magnitude second as another
+integer. The sign is zero for positive numbers and one for
+negative numbers. Note that magnitude alone needs as many
+bits as the original number (look --cut-maxint).</p>
+
+<p style="margin-left:22%; margin-top: 1em">The following
+type characters are only for rare, advanced use. The main
+use is that they can give a human interpretation of the
+input stream using --output-tuples.</p>
+
+<p style="margin-left:22%; margin-top: 1em">If the need is
+only rearrange bits, you should use only U pattern. The
+following type characters give some functionality that is
+sometimes necessary and it makes sense to output them to the
+bit stream:</p>
+
+<p style="margin-left:22%; margin-top: 1em">S - i - field
+is 2&rsquo;s complement signed integer (msb) <br>
+s - i - field is 2&rsquo;s complement signed integer (lsb)
+<br>
+F - d - IEEE-754 32-bit floating point number <br>
+f - d - same, lsb first <br>
+D - d - IEEE-754 64-bit floating point number <br>
+d - d - same, lsb first <br>
+c - s - field is unicode UTF-8 character string <br>
+C - s - same, lsb first</p>
+
+<p style="margin-left:22%; margin-top: 1em">S and s should
+be used with caution. If negative value is used in making a
+unit, it will cause an error. The only way to use negative
+values correctly is --output-pattern=nS, --abs or
+--output-tuples.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Float can be
+written to output using output-patterns F, f, D and d which
+means that it can be used to make conversion from 32-bit
+float to 64-bit float and vice versa. Other uses of floats
+in the output stream is not possible. If the idea is only to
+re-arrange bits, you can use type character U more
+effciently to handle the unit as whole without internal
+interpretation for the field.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Most likely,
+you want to use upper case variants of the patterns (bitwise
+big-endian representation). If you want to interpret
+bytewise low-endian numbers, you likely want to use
+--input-low-endian and still use uppercase patterns.
+Lowercase patterns are for the (rare) case that the value in
+bit stream is exactly in the bitwise (not bytewise) opposite
+order, least significant bit first.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Rule to
+remember: uppercase letters are big-endian, lowercase
+letters are low-endian.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Floating point
+number length must match the bit length. D must be always
+written as pattern 64D.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Also, the
+string must be right amount of bytes. Some byte strings can
+not be output as a valid UTF-8 string.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Bypass unit
+and field selection</b> <br>
+--input-tuples</p>
+
+<p style="margin-left:22%;">Instead of a bit stream, input
+is a text file containing tuples. Tuple is a line of
+comma-separated values like:</p>
+
+<p style="margin-left:22%; margin-top: 1em">123, -55,
+678.5, &quot;abba&quot;</p>
+
+<p style="margin-left:22%; margin-top: 1em">Tuples are
+separated with newline. Whitespace around the comma is
+allowed. If --input-tuples is used, unit or field selection
+arguments have no effect but --count, --skip and tuple
+manipulation options can be used.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Allowed types
+and their internal representations are:</p>
+
+<p style="margin-left:22%; margin-top: 1em">Integers
+(signed bignums) <br>
+Floats (translated as IEEE 754 64-bit floating point
+numbers) <br>
+Strings (UTF-8)</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Manipulate
+tuple</b> <br>
+Fields are represented with field numbers (starting from 0).
+Currently, the same option can not be used several times.
+<br>
+--rearrange=FIELDLIST</p>
+
+<p style="margin-left:22%;">Selects fields from input tuple
+for output tuple. Comma-separated list of field numbers
+starting from 0 (field 0 is the first field in the tuple).
+Negative field number refers to the field counting from the
+end of the tuple (-1 is the last field). The same field
+number can exist several times duplicating the input field.
+Not all input fields need to be in the output tuple.</p>
+
+<p style="margin-left:11%;">--cut-maxint=FIELD,MAXINT</p>
+
+<p style="margin-left:22%;">Cuts the maximum positive or
+negative integer value in the field to maxint. The values
+bigger than maxint get the value maxint and values smaller
+than -maxint get the value -maxint. Field number can be
+negative when the position is counted from the end of the
+tuple.</p>
+
+<p style="margin-left:22%; margin-top: 1em">One of the
+reasons to use this command is that the maximum negative
+number of 8-bit 2&rsquo;s complement number is -128. If we
+cut the magnitude of the number with pattern type
+&rsquo;m&rsquo;, we have to have 8 bits to represent
+magnitude in the output bit stream. If we want to output the
+result back to a 8-bit stream with separate sign and
+magnitude, we have to strip values -128 to -127 using
+--cut-maxint=1,127.</p>
+
+<p style="margin-left:11%;">--remove-right=FIELD,BITS</p>
+
+<p style="margin-left:22%;">If we want to output other bits
+from the field than the rightmost ones, we can remove BITS
+rightmost bits from the field.</p>
+
+<p style="margin-left:11%;">--xor=FIELD,BITS</p>
+
+<p style="margin-left:22%;">Turns the righmost n BITS from
+0 to 1 and vice versa. For example, sign of a number read
+using pattern &quot;M&quot; can be changed using
+--xor=0,1.</p>
+
+<p style="margin-left:11%;">--abs=FIELD,0</p>
+
+<p style="margin-left:22%;">Removes sign from the value of
+the field. Typically used with field that is read using
+pattern S and the result can be output to pattern U.</p>
+
+<p style="margin-left:11%;">--sign=FIELD,0</p>
+
+<p style="margin-left:22%;">Removes magnitude of the field.
+The result is 1 if the value was negative and 0 if the value
+was positive.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Skip a part
+of tuples</b> <br>
+--skip=N</p>
+
+<p style="margin-left:22%;">N first units are skipped.</p>
+
+<p style="margin-left:11%;">--count=N</p>
+
+<p style="margin-left:22%;">Only N units are processed. For
+example, if --skip=1 and --count=1, only the second unit is
+processed.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Pack a tuple
+to a unit</b> <br>
+--output-pattern=&rsquo;PAT&rsquo;</p>
+
+<p style="margin-left:22%;">Packs output tuple to output
+bit unit. Fields must be in order, use --rearrange to
+arrange fields to the order of output pattern. Types are the
+same as the ones with the input pattern with the following
+exceptions:</p>
+
+<p style="margin-left:22%; margin-top: 1em">z - fill with
+zero <br>
+o - fill with one <br>
+r - fill with random (from /dev/urandom) <br>
+x - can not be used in the output pattern</p>
+
+<p style="margin-left:22%; margin-top: 1em">Also in the
+output-pattern, lowercase letters turn the bit order
+reversed. Look --input-pattern for more information.</p>
+
+<p style="margin-left:22%; margin-top: 1em">z, o and r do
+not consume fields from the tuple. m and M consume two
+fields from the tuple and convert them to one 2&rsquo;s
+complement bit unit.</p>
+
+<p style="margin-left:22%; margin-top: 1em">If signed value
+is too big to a signed field, the magnitude is first
+truncated to the right size. 4-bit signed output of -17 is
+&rsquo;1111&rsquo;, because 17 is first truncated to 4 bits
+giving &rsquo;0001&rsquo; or 1 and the bit representation of
+-1 is &rsquo;1111&rsquo;.</p>
+
+<p style="margin-left:22%; margin-top: 1em">If tuples are
+used (--input-pattern or --input-tuples), but there is is no
+--output-pattern option, the first field in the tuple is
+used directly as the output unit. The first field of the
+tuple must be unsigned integer if it is used as an output
+unit.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Collect
+output data stream</b> <br>
+--output-unit=BITS</p>
+
+<p style="margin-left:22%;">Packs the output unit to BITS
+bits. If --output-pattern is defined, output unit size comes
+from the total size of the output pattern and --output-unit
+must not be defined. If there is neither --output-unit nor
+--output-pattern, the default output unit size is 8
+bits.</p>
+
+<p style="margin-left:22%; margin-top: 1em">The last output
+byte is filled with zeros, if needed.</p>
+
+<p style="margin-left:11%;">--output-little-endian</p>
+
+<p style="margin-left:22%;">Unit is written to the output
+stream least significant byte first. The default is the
+network byte order or big-endian byte order where the most
+significant byte is written first. Actually
+--output-little-endian is a combination of
+--output-reverse-unit and --output-reverse-bytes and as
+such, those options can not be used with
+--output-little-endian. Look --input-little-endian for more
+discussion.</p>
+
+<p style="margin-left:11%;">--output-reverse-unit</p>
+
+<p style="margin-left:22%;">Reverses bits in the output
+unit. Look --output-little-endian for more information.</p>
+
+<p style="margin-left:11%;">--output-reverse-bytes</p>
+
+<p style="margin-left:22%;">Reverses bits of every written
+byte. Look --output-little-endian for more information.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Merge output
+with another data stream:</b> <br>
+Units of the merge file are written to the output after
+every normal output unit. Output is finished when the normal
+output is finished. Last merge unit is written after the
+last output unit so that as many merge units as normal units
+are written. It is an error if the merge file does not have
+enough units but it can contain more units than the normal
+input file and the extra units are ignored.</p>
+
+<p style="margin-left:11%; margin-top: 1em">Merge unit is
+defined like the normal input unit. Merge unit is written to
+the output with the same unit size as it has in input. Merge
+unit size can be different than the normal output unit.
+Output of the merge unit is done with the same
+--reverse-bytes and --reverse-unit options as the normal
+output. <br>
+--merge-file=FILENAME</p>
+
+<p style="margin-left:22%;">Opens the merge file. If
+FILENAME is &quot;-&quot;, mergefile is standard input. If
+mergefile is standard input, input file must not be the
+same.</p>
+
+<p style="margin-left:11%;">--merge-unit=BITS</p>
+
+<p style="margin-left:22%;">Breaks merge input to units of
+BITS.</p>
+
+<p style="margin-left:11%;">--merge-skip-bits=BITS</p>
+
+<p style="margin-left:22%;">Skip BITS bits from the
+beginning of the merge input</p>
+
+<p style="margin-left:11%;">--merge-skip-units=UNITS</p>
+
+<p style="margin-left:22%;">Skip UNITS units from the
+beginning of the merge input.</p>
+
+<p style="margin-left:11%;">--merge-copy-first=BITS</p>
+
+<p style="margin-left:22%;">Copy BITS bits as-is from the
+beginning of the merge file before writing the first unit.
+If both skip (bits and/or units) and --merge-copy-first are
+defined, skip is done first.</p>
+
+<p style="margin-left:11%;">--merge-gap=BITS</p>
+
+<p style="margin-left:22%;">After writing a unit, BITS bits
+are skipped from the merge file.</p>
+
+<p style="margin-left:11%;">--merge-pregap=BITS</p>
+
+<p style="margin-left:22%;">Before reading a unit, skip
+BITS bits. Can always be implemented by adding BITS to
+--merge-skip-bits and --merge-gap, but using pregap is much
+clearer in some cases.</p>
+
+<p style="margin-left:11%;">--merge-assert-aligned</p>
+
+<p style="margin-left:22%;">Warn if the whole merge input
+was not used or the merge input did not end to the byte
+border.</p>
+
+<p style="margin-left:11%;">--merge-use-seek</p>
+
+<p style="margin-left:22%;">Seek is used in skipping in
+merge input instead of reading skipped bytes.</p>
+
+<p style="margin-left:11%;">--merge-little-endian</p>
+
+<p style="margin-left:22%;">Merge file is read with both
+--merge-reverse-bytes and --merge-reverse-unit on.</p>
+
+<p style="margin-left:11%;">--merge-reverse-bytes</p>
+
+<p style="margin-left:22%;">Every byte read from merge file
+is reversed.</p>
+
+<p style="margin-left:11%;">--merge-reverse-unit</p>
+
+<p style="margin-left:22%;">Every unit read from merge file
+is reversed.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>Show output
+as human readable</b> <br>
+--output-tuples</p>
+
+<p style="margin-left:22%;">Replace bit output with
+human-readable output of tuples. This output is readable
+with --input-tuples</p>
+
+<p style="margin-left:11%;">--output-integers</p>
+
+<p style="margin-left:22%;">Replace bit output with
+human-readable output of units as integers This output is
+readable with --input-integers</p>
+
+<p style="margin-left:22%; margin-top: 1em">If merge file
+is used, the main unit and the merge unit is printed
+separately as two integers (possibly with different unit
+size).</p>
+
+<p style="margin-left:22%; margin-top: 1em">The integer is
+truncated to the unit size but reversing bits does not
+affect to the integer output.</p>
+
+<p style="margin-left:11%;">--output-hex</p>
+
+<p style="margin-left:22%;">Replace bit output with
+human-readable output of units as hex numbers.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Units are
+written as they would be written to the bit stream except
+that --output-little-endian, --output-reverse-bytes and
+--output-reverse-unit do not have effect to the hex
+output.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Output unit
+size affects the number as it affects in the bit output. If
+output unit size is 3 bits, the number 8 is printed as hex
+0. The hex number has as many digits as needed to represent
+the full unit but topmost zero bits are not necessarily a
+part of the output unit. Units from the merge file are
+written with their own output unit so that they may have
+different amount of digits.</p>
+
+<p style="margin-left:22%; margin-top: 1em">Output is
+divided to lines so that in one line there is 1, 2, 4, 8, 16
+or 32 units separated with spaces. The line length is always
+between 40 and 80 characters.</p>
+
+<p style="margin-left:11%;">--output-bits</p>
+
+<p style="margin-left:22%;">Replace bit output with
+human-readable output of units as bits. Look --output-hex
+for more information.</p>
+
+<h2>EXAMPLES
+<a name="EXAMPLES"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd &lt; foo
+&gt; bar</b> <br>
+Just copies file foo to bar, one byte at time.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd
+--input-unit=3</b> <br>
+Extracts 3-bit stream values from standard input and expands
+values <br>
+to bytes in standard output. If the file is not aligned to 3
+bits, <br>
+the missing least significant bits for the last unit are
+zeros.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd
+--input-unit=1 --output-pattern=1U1z</b> <br>
+Output stream is input stream with zero added after every
+bit. <br>
+Four two-bit units are packed to one byte.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd
+--input-pattern=8U8U --rearrange=1,0
+--output-pattern=8U8U</b> <br>
+Swap two consecutive bytes.</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>echo -en
+&rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples
+--output-pattern=&rsquo;2U3U3U&rsquo; | od -t o1</b> <br>
+Build octal numbers from fields (prints 123 377)</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd
+--input-counter --count=16 --output-hex</b> <br>
+Prints:</p>
+
+<p style="margin-left:11%; margin-top: 1em">00 01 02 03 04
+05 06 07 08 09 0a 0b 0c 0d 0e 0f</p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>bdd
+--input-counter --count=16 --input-unit=12 --output-unit=12
+--merge-file=/etc/passwd --output-hex</b> <br>
+Prints first 16 bytes of /etc/passwd file as hex preceeded
+by a three-digit hex address of the byte:</p>
+
+<p style="margin-left:11%; margin-top: 1em">000 72 001 6f
+002 6f 003 74 004 3a 005 78 006 3a 007 30 <br>
+008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a</p>
+
+<h2>SEE ALSO
+<a name="SEE ALSO"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">dd(1)</p>
+
+<h2>BUGS
+<a name="BUGS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">bdd is pretty
+slow.</p>
+
+<p style="margin-left:11%; margin-top: 1em">Implementation
+does not allow duplicate manipulation options (--xor
+etc.).</p>
+
+<p style="margin-left:11%; margin-top: 1em">Syntax for
+--abs and --sign is painful.</p>
+
+<p style="margin-left:11%; margin-top: 1em">--input-tuples
+translates even quoted numbers to numbers, not strings.</p>
+
+<p style="margin-left:11%; margin-top: 1em">In many cases,
+warning of bad input repeats for each unit.</p>
+
+<p style="margin-left:11%; margin-top: 1em">In the next
+version, it is very likely that --output-unit will default
+to --input-unit, not to 8 bits.</p>
+
+<h2>AUTHOR
+<a name="AUTHOR"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">Esa Turtiainen
+(esa&lt;at&gt;turtiainen&lt;dot&gt;eu)</p>
+<hr>
+</body>
+</html>

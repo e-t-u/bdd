@@ -18,7 +18,8 @@ all:	dist
 docs:	$(DOCS)/bdd.1.pdf $(DOCS)/bdd.1.html $(DOCS)/Presentation.pdf $(SRC)/bdd.html
 
 $(DOCS)/bdd.1.pdf:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/gropdf
-	/usr/bin/groff -man -T pdf -P -l $< > $@
+#	/usr/bin/groff -man -T pdf -P -l $< > $@
+	pdfroff -man $< > $@
 
 $(DOCS)/bdd.1.html:	$(MAIN)/bdd.1 /usr/bin/groff /usr/bin/post-grohtml
 	/usr/bin/groff -man -T html -P -l $< > $@
