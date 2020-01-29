@@ -229,7 +229,6 @@ class IntegerReaderTest(unittest.TestCase):
         )
 
     def test_integer_reader_counter(self):
-        print(list(itertools.islice(Counter(skip=1, step=1, units=3),10)))
         reader = IntegerInputStream(Counter(skip=1, step=1, units=3), fd=io.StringIO("""
             1
             2
@@ -242,6 +241,18 @@ class IntegerReaderTest(unittest.TestCase):
         """))
         self.assertEqual(
             [2, 4, 6],
+            [unit for unit in reader.units()]
+        )
+
+
+class FileReaderTest(unittest.TestCase):
+
+    def test_file_reader(self):
+        reader = FileInputStream(
+            fd=io.BytesIO(b"\x02\x03\x04"),
+        )
+        self.assertEqual(
+            [2, 3, 4],
             [unit for unit in reader.units()]
         )
 

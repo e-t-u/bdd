@@ -1,6 +1,99 @@
 #
 # Input bit stream handlers
 #
+# All the input stream handlers return a unit generator that can be used as>
+#   reader = InputBitStream()
+#   for unit in reader.units():
+#       ...
+# or
+#    unit = next(reader)
+# or
+#    [unit for unit in itertools.isplit(reader.units(), 100]
+#
+# The unit is simply Python unlimited integer. That is not very efficient but it
+# allows us to handle literally any bitstream unit.
+#
+# The main reader splits a file to units bit by bit. But let's have a view to simpler
+# unit readers first to understand unit level processing.
+#
+# ZeroStream()
+# is a reader that returns only units containing a zero.
+#
+# OneStream()
+# is a reader returns bits one the full unit size.
+# if unit size is 8 bits, generator returns numbers 255
+# (0xFF) as the unit. If unit is 2, it returns numbers 3.
+# Default unit size is always 8 bits (byte).
+#
+# RandomStream()
+# is a reader that returns random numbers as units. Units are
+# of the size of the unit given to the reader. Random numbers
+# are based on Linux urandom() that gives safe random numbers,
+# not pseudorandom numbers.
+#
+# CounterStream()
+# is a reader that returns increasing numbers. Units are
+# numbered starting from zero and the number is returned as the
+# unit. Number is truncated to the unit size, if unit size is
+# 8 bits, after unit 255 comes unit 0 again.
+#
+# Counter stream is controlled by generic unit counter/stepper
+# parameters. They are available in all the unit readers but
+# they do not do much for zeros, ones or random streams. Only
+# units parameter affects amount of units generated.
+#
+# With CounterStream certain numbers are skipped based on
+# counter/stepper parameters:
+# - skip - how many units are skipped in the beginning (default 0)
+# - step - when we emit one unit, this many succeeding units
+#          are ignored before the next (default 0)
+# - units - how many units we return (default unlimited,
+#          until end of input stream of when receiver stops receiving
+#
+# The main use of these parameters are extracting data from
+# certain slot of the input and/or every n:th unit. With units
+# parameter we also make generator limited and return only some units
+#
+# Counter/stepper parameters are given by using a Counter object.
+#
+# For example with CounterStream(Counter(skip=1, step=1, units=2))
+# returns units 1 and 3, unit 0 is skipped and unit 2 stepped.
+#
+# IntegerInputStream()
+# Integer input stream is an easy way to use only the output
+# part of the bit handling. It allows input file that contains
+# units as normal text integers.
+#
+# Input file is gives as a file descriptor. Therefore, also
+# a string can be used as an input using io.StringIO strings.
+# For example:
+#     reader = IntegerInputStream(fd=io.StringIO("12\n34\n56"))
+#
+# Empty lines and comment lines starting with "#" are skipped.
+#
+# Normal fitting to unit size and counter/stepper applies to integer stream.
+# If unit is:
+# - non number - warning to stderr and unit is zero
+# - negative integer - warning to stderr and changed to positive
+# - too big to the unit - warning to stderr and MSB cut off
+#
+# Finally the real thing:
+# FileInputStream()
+#
+# Reads a file extracting bit level units and similar unit-level
+# handling for the units as simpler readers. It also contains
+# several ways to handle endianness of the bit unit.
+#
+# Also file input stream allows using strings as files.
+# Instead of StringIO, ByteIO is used. For example:
+#     reader = FileInputStream(fd=io.BytesIO(b"\x01\02\03"))
+#     [unit for unit in reader.units()] -> [1, 2, 3]
+#
+# Bit stream has a bit-level skipper-stepper that is quite
+# similar as the unit level counter-stepper.
+#
+
+
 
 from os import urandom
 from sys import stderr
@@ -35,7 +128,7 @@ class InputBitStream:
             self.counter = Counter()    # default is continuous infinite bit stream
         else:
             self.counter = counter
-        self.file = fd
+        self.fd = fd
         self.unit_size = unit_size
 
     def set_unit_size(self, bits):
@@ -154,13 +247,12 @@ class IntegerInputStream(InputBitStream):
 
     def units(self):
         unit_mask = (1 << self.unit_size) - 1
-        file = self.file
+        file = self.fd
         for action in self.counter:
             line = next(file)
             while line.strip().startswith('#') or line == '\n':
                 line = next(file)    # must not ask for a new action
             line = line.strip()
-            print(action, line)
             if action == "skip":
                 continue
             elif action == "use":
@@ -202,7 +294,30 @@ class FileInputStream(InputBitStream):
         self.reverse_unit = reverse_unit
         self.eof = False
 
-    def _read(self):
+    def units(self):
+        for action in self.counter:
+            unit = self._read_unit()
+            if unit is "" or self.eof:
+                return
+            if action == "skip":
+                continue
+            elif action == "use":
+                yield unit
+            elif action == "step":
+                continue
+            elif action == "finished":
+                return
+            else:
+                assert False, "Unknown answer from counter"
+
+    def _read_unit(self):
+        byte = self._read_byte()
+        if byte is None:
+            return None
+        else:
+            return ord(byte)
+
+    def _read_byte(self):
         """Read a byte as an integer from data.
 
         Detects end of file and sets self.eof if found.
@@ -218,14 +333,13 @@ class FileInputStream(InputBitStream):
         whole byte is either usable data or it is eof/zero.
 
         """
-        c = self.file.read(1)
-        if c == '':
+        c = self.fd.read(1)
+        if c is b"":
             self.eof = True
-            return (0)
-        val = ord(c)
-        if self.reverse_bytes:
-            val = _reverse(val, 8)
-        return (val)
+            return None
+        # if self.reverse_bytes:
+        #     val = _reverse(val, 8)
+        return c
 
     def do_skip(self):
         """Do bit skip in input file.
@@ -259,64 +373,64 @@ class FileInputStream(InputBitStream):
             self.buffer = self._read()
             self.bits_in_buffer = 8
 
-    def units(self):
-        """Iterator for units"""
-        if self.eof:  ## eof while skip_bits
-            return
-        while True:
-            # Exit if we got end of file in processing the previous unit
-            # (this means that we already have used some extra zeros).
-            if self.eof:
-                if self.assert_aligned:
-                    stderr.write("Non-aligned end of file\n")
-                    sysexit(1)
-                break
-
-            # Extract one unit from the buffer.
-            # If there is not enough data in buffer,
-            # read more data one byte at time.
-            while self.bits_in_buffer < self.unit_size:
-                self.buffer <<= 8
-                self.buffer += self._read()
-                self.bits_in_buffer += 8
-            right_edge = self.bits_in_buffer - self.unit_size
-            unit = self.buffer >> right_edge
-
-            # Yield unit if counter gives permission (skip & count).
-            self.counter.next()
-            if self.counter.included():
-                if self.reverse_unit:
-                    unit = _reverse(unit, self.unit_size)
-                yield unit
-            if self.counter.finished():
-                self.eof = True
-
-            # Remove the extracted unit from the buffer.
-            self.bits_in_buffer -= self.unit_size
-            self.buffer &= (1 << self.bits_in_buffer) - 1
-
-            # If buffer is empty, this is an allowed end of file point
-            # if --assert_aligend is requested.
-            # We have to look-ahead to check the eof.
-            if self.bits_in_buffer == 0:
-                self.buffer = self._read()
-                if self.eof:
-                    break
-                self.bits_in_buffer = 8
-
-            # Skip the gap.
-            while self.bits_in_buffer < self.gap:
-                # Overwrite, we won't need more than 8 bits.
-                self.buffer = self._read()
-                self.bits_in_buffer += 8
-            self.bits_in_buffer -= self.gap
-            assert self.bits_in_buffer <= 8
-            self.buffer &= (1 << self.bits_in_buffer) - 1
-
-            # Look-ahead to detect eof
-            if self.bits_in_buffer == 0:
-                self.buffer = self._read()
-                self.bits_in_buffer = 8
+    # def units(self):
+    #     """Iterator for units"""
+    #     if self.eof:  ## eof while skip_bits
+    #         return
+    #     while True:
+    #         # Exit if we got end of file in processing the previous unit
+    #         # (this means that we already have used some extra zeros).
+    #         if self.eof:
+    #             if self.assert_aligned:
+    #                 stderr.write("Non-aligned end of file\n")
+    #                 sysexit(1)
+    #             break
+    #
+    #         # Extract one unit from the buffer.
+    #         # If there is not enough data in buffer,
+    #         # read more data one byte at time.
+    #         while self.bits_in_buffer < self.unit_size:
+    #             self.buffer <<= 8
+    #             self.buffer += self._read()
+    #             self.bits_in_buffer += 8
+    #         right_edge = self.bits_in_buffer - self.unit_size
+    #         unit = self.buffer >> right_edge
+    #
+    #         # Yield unit if counter gives permission (skip & count).
+    #         self.counter.next()
+    #         if self.counter.included():
+    #             if self.reverse_unit:
+    #                 unit = _reverse(unit, self.unit_size)
+    #             yield unit
+    #         if self.counter.finished():
+    #             self.eof = True
+    #
+    #         # Remove the extracted unit from the buffer.
+    #         self.bits_in_buffer -= self.unit_size
+    #         self.buffer &= (1 << self.bits_in_buffer) - 1
+    #
+    #         # If buffer is empty, this is an allowed end of file point
+    #         # if --assert_aligend is requested.
+    #         # We have to look-ahead to check the eof.
+    #         if self.bits_in_buffer == 0:
+    #             self.buffer = self._read()
+    #             if self.eof:
+    #                 break
+    #             self.bits_in_buffer = 8
+    #
+    #         # Skip the gap.
+    #         while self.bits_in_buffer < self.gap:
+    #             # Overwrite, we won't need more than 8 bits.
+    #             self.buffer = self._read()
+    #             self.bits_in_buffer += 8
+    #         self.bits_in_buffer -= self.gap
+    #         assert self.bits_in_buffer <= 8
+    #         self.buffer &= (1 << self.bits_in_buffer) - 1
+    #
+    #         # Look-ahead to detect eof
+    #         if self.bits_in_buffer == 0:
+    #             self.buffer = self._read()
+    #             self.bits_in_buffer = 8
 
 
 class MergeInputStream(FileInputStream):
