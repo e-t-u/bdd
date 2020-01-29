@@ -3,6 +3,8 @@
 #
 
 from os import urandom
+from sys import stderr
+
 
 class InputBitStream:
     """Inputbitstream splits input to unit size bits units.
@@ -145,29 +147,41 @@ class CounterStream(InputBitStream):
 
 
 class IntegerInputStream(InputBitStream):
-    """Input stream that returns units from integers read from input file."""
+    """Input stream that returns units from integers read from input file.
+    Argument fd must be an open file descriptor OR it can be a StringIO object
+    that is read instead of the open file. Empty lines and lines starting
+    with "#" are ignored. As usual, Counter can be used to take a sample of input."""
 
     def units(self):
-        for line in self.file.readlines():
+        unit_mask = (1 << self.unit_size) - 1
+        file = self.file
+        for action in self.counter:
+            line = next(file)
+            while line.strip().startswith('#') or line == '\n':
+                line = next(file)    # must not ask for a new action
             line = line.strip()
-            if line == '':
+            print(action, line)
+            if action == "skip":
                 continue
-            self.counter.next()
-            if self.counter.finished():
-                break
-            if not self.counter.included():
+            elif action == "use":
+                try:
+                    i = int(line)
+                except ValueError:
+                    stderr.write(f"Non-integer {line} interpreted as zero\n")
+                    i = 0
+                if i < 0:
+                    stderr.write(f"Negative integer {line} interpreted as positive\n")
+                    i = abs(i)
+                if i != (i & unit_mask):
+                    stderr.write(f"Integer {line} larger than unit size, MSB truncated\n")
+                    i &= unit_mask
+                yield i
+            elif action == "step":
                 continue
-            try:
-                i = int(line)
-            except ValueError:
-                stderr.write("Non-integer '" + line +
-                             "' interpreted as zero\n")
-                i = 0
-            if i < 0:
-                stderr.write("Negative integer '" + line +
-                             "' interpreted as positive\n")
-                i = abs(i)
-            yield i
+            elif action == "finished":
+                return
+            else:
+                assert False, "Unknown answer from counter"
 
 
 class FileInputStream(InputBitStream):

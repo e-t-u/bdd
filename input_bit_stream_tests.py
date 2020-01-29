@@ -1,3 +1,4 @@
+import io
 import itertools
 import unittest
 
@@ -168,6 +169,80 @@ class CounterReaderTest(unittest.TestCase):
         self.assertEqual(
             [1, 4, 7],
             [unit for unit in reader.units()],
+        )
+
+
+class IntegerReaderTest(unittest.TestCase):
+
+    def test_integer_reader(self):
+        reader = IntegerInputStream(fd=io.StringIO("12\n34\n56"))
+        self.assertEqual(
+            [12, 34, 56],
+            [unit for unit in itertools.islice(reader.units(), 3)]
+        )
+
+    def test_integer_reader_whitespace(self):
+        reader = IntegerInputStream(fd=io.StringIO("""
+# Comments and empty lines allowed
+211
+
+34
+42
+"""))
+        self.assertEqual(
+            [211, 34, 42],
+            [unit for unit in itertools.islice(reader.units(), 3)]
+        )
+
+    def test_integer_reader_unit_size_over_byte(self):
+        reader = IntegerInputStream(unit_size=9, fd=io.StringIO("""
+            456
+            511
+            512
+            1024
+        """))
+        self.assertEqual(
+            [456, 511, 0, 0],
+            [unit for unit in itertools.islice(reader.units(), 4)]
+        )
+
+    def test_integer_reader_unit_size_under_byte(self):
+        reader = IntegerInputStream(unit_size=7, fd=io.StringIO("""
+            23
+            127
+            129
+        """))
+        self.assertEqual(
+            [23, 127, 1],
+            [unit for unit in itertools.islice(reader.units(), 3)]
+        )
+
+    def test_integer_reader_errors(self):
+        reader = IntegerInputStream(fd=io.StringIO("""
+             xx
+             -5
+             257
+         """))
+        self.assertEqual(
+            [0, 5, 1],
+            [unit for unit in itertools.islice(reader.units(), 3)]
+        )
+
+    def test_integer_reader_counter(self):
+        print(list(itertools.islice(Counter(skip=1, step=1, units=3),10)))
+        reader = IntegerInputStream(Counter(skip=1, step=1, units=3), fd=io.StringIO("""
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+        """))
+        self.assertEqual(
+            [2, 4, 6],
+            [unit for unit in reader.units()]
         )
 
 
