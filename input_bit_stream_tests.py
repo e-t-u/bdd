@@ -256,6 +256,27 @@ class FileReaderTest(unittest.TestCase):
             [unit for unit in reader.units()]
         )
 
+    def test_file_reader_bits(self):
+        reader = FileInputStream(
+            unit_size=1,
+            fd=io.BytesIO(b"\x5A"),
+        )
+        self.assertEqual(
+            [0, 1, 0, 1, 1, 0, 1, 0],
+            [unit for unit in reader.units()]
+        )
+
+    def test_file_reader_bit_boundaries(self):
+        reader = FileInputStream(
+            skip_bits=1,
+            fd=io.BytesIO(b"\x55\x55\x55"),
+        )
+        self.assertEqual(
+            [0xAA, 0xAA],    # last is incomplete and ignored by default
+            [unit for unit in reader.units()]
+        )
+
+
 
 if __name__ == '__main__':
     unittest.main()

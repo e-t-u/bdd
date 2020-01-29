@@ -92,7 +92,23 @@
 # Bit stream has a bit-level skipper-stepper that is quite
 # similar as the unit level counter-stepper.
 #
-
+# The terminology in bit level to find units is:
+# - skip_bits tells how many bits we skip in the beginning
+#   to find the repeating units
+# - after skip we find a "raw unit" where the desired data may
+#   be in the middle. The size of interesting bits is unit_size
+#   but in the beginning of this unit we skip pregap bits and
+#   in the end we ignore postgap bits. Use of those is naturally
+#   fully optional
+# - Then we jump after the whole raw unit "gap" bits to the next
+#   unit
+#
+# If we continue to the end of the file without limits,
+# we end at the middle of a unit. We have some options:
+# - stop so that the unfinished unit is ignored
+# - fill unfinished unit with zeros
+# - give a warning or be silent
+#
 
 
 from os import urandom
@@ -125,7 +141,7 @@ class InputBitStream:
         # if fd:
         #    assert isinstance(fd, file)
         if counter is None:
-            self.counter = Counter()    # default is continuous infinite bit stream
+            self.counter = Counter()  # default is continuous infinite bit stream
         else:
             self.counter = counter
         self.fd = fd
@@ -251,7 +267,7 @@ class IntegerInputStream(InputBitStream):
         for action in self.counter:
             line = next(file)
             while line.strip().startswith('#') or line == '\n':
-                line = next(file)    # must not ask for a new action
+                line = next(file)  # must not ask for a new action
             line = line.strip()
             if action == "skip":
                 continue
@@ -276,28 +292,126 @@ class IntegerInputStream(InputBitStream):
                 assert False, "Unknown answer from counter"
 
 
-class FileInputStream(InputBitStream):
-    """Reads units from a file."""
+#
+# BitStreamReader is an internal helper for unit level reader FileInputStream()
+#
+class _BitStreamReader():
+    """Reads bit-aligned units from bitstream"""
 
-    def __init__(self, fd, counter=None, skip_bits=0,
-                 skip_units=0, gap=0,
-                 assert_aligned=False, use_seek=False,
-                 reverse_bytes=False, reverse_unit=False):
-        assert skip_bits >= 0 and skip_units >= 0 and gap >= 0
-        InputBitStream.__init__(self, counter=counter, fd=fd)
+    def __init__(self,
+                 fd,
+                 skip_bits=0,
+                 unit_size=8,
+                 pregap=0,
+                 postgap=0,
+                 gap=0,
+                 ):
+        self.fd = fd
         self.skip_bits = skip_bits
-        self.skip_units = skip_units
+        self.unit_size = unit_size
+        self.pregap = pregap
+        self.postgap = postgap
         self.gap = gap
-        self.assert_aligned = assert_aligned
-        self.use_seek = use_seek
-        self.reverse_bytes = reverse_bytes
-        self.reverse_unit = reverse_unit
         self.eof = False
 
     def units(self):
+        start_of_next_unit = self.skip_bits + self.pregap
+        lookahead = []
+        end_of_lookahead = -1  # bits
+
+        while True:
+            # last refers to really last index, not the unit after that (e.g. 0 and 7 for a byte)
+            last_bit_of_unit = start_of_next_unit + self.unit_size - 1
+            byte_of_the_first_bit = start_of_next_unit // 8
+            bit_of_the_first_bit = start_of_next_unit % 8
+            byte_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) // 8
+            bit_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) % 8
+
+            while end_of_lookahead < last_bit_of_unit:
+                lookahead.append(self.read_byte())
+                end_of_lookahead += 8
+
+            # Unit is now in lookahead. First bits of the unit are in lookahead[0]
+            unit = 0
+            unit_mask = (1 << self.unit_size) - 1
+            for current_byte in range(byte_of_the_first_bit, byte_of_the_last_bit + 1):
+                if current_byte == byte_of_the_first_bit and current_byte == byte_of_the_last_bit:
+                    unit = (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
+                    unit &= unit_mask
+                    if bit_of_the_last_bit == 7:
+                        lookahead.pop()
+                    break
+                elif current_byte == byte_of_the_first_bit:
+                    unit &= unit_mask
+                    lookahead.pop()
+                elif current_byte == byte_of_the_last_bit:
+                    unit <<= (8 - bit_of_the_last_bit - 1)
+                    if bit_of_the_last_bit == 7:
+                        lookahead.pop()
+                else:
+                    unit <<= 8
+                    unit += lookahead[0]
+                    lookahead.pop()
+
+            yield unit, self.eof
+            start_of_next_unit += self.unit_size + self.postgap + self.gap
+
+            # Caller should handle eof so that it does not return here, but if this happens, we quit
+            # Note: we assume that lookahead is not filled too early because then we know that
+            # if there is EOF, zeroes were really used in the last computed unit
+            if self.eof:
+                return
+
+    # Reads a byte and translates it to int
+    # In case of end of file, returns 0's but messages with self.eof that
+    # zeros were used to fill the data. It is up to consumer if they want
+    # to use or discard the last unit
+    def read_byte(self):
+        c = self.fd.read(1)
+        if c is b"":
+            self.eof = True
+            return 0
+        # if self.reverse_bytes:
+        #     val = _reverse(val, 8)
+        return ord(c)  # int, not byte
+
+
+class FileInputStream(InputBitStream):
+    """Reads units from a file."""
+
+    def __init__(self,
+                 fd,
+                 counter=None,
+                 unit_size=8,
+                 skip_units=0,
+                 skip_bits=0,
+                 gap=0,
+                 assert_aligned=False,
+                 use_seek=False,
+                 reverse_bytes=False,
+                 reverse_unit=False,
+                 ):
+        assert skip_bits >= 0 and skip_units >= 0 and gap >= 0
+        InputBitStream.__init__(self, counter=counter, fd=fd, unit_size=unit_size)
+        self.bitstream_reader = _BitStreamReader(
+            fd,
+            skip_bits=skip_bits,
+            unit_size=unit_size,
+            pregap=0,
+            postgap=0,
+            gap=gap
+            ,
+        ).units()
+        self.skip_units = skip_units
+        self.reverse_unit = reverse_unit
+        self.eof = False  # TODO: likely not used in this class
+
+    def units(self):
         for action in self.counter:
-            unit = self._read_unit()
-            if unit is "" or self.eof:
+            unit, eof = next(self.bitstream_reader)
+            if eof:
+                # we know that extra zeroes were used to produce the last unit
+                # yield unit if self.i_want_filled_value_at_end
                 return
             if action == "skip":
                 continue
@@ -309,13 +423,6 @@ class FileInputStream(InputBitStream):
                 return
             else:
                 assert False, "Unknown answer from counter"
-
-    def _read_unit(self):
-        byte = self._read_byte()
-        if byte is None:
-            return None
-        else:
-            return ord(byte)
 
     def _read_byte(self):
         """Read a byte as an integer from data.
