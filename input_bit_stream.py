@@ -120,17 +120,28 @@ class RandomStream(InputBitStream):
 
 
 class CounterStream(InputBitStream):
-    """Input stream that returns units that are always one bigger
-    than the previous unit. If Counter is given, the numbering
+    """Input stream that returns units that are increasing.
+    If Counter is given, the numbering
     comes as if in the input stream there were units counting
-    starting from 1 and skip and step jumps over these numbers.
+    starting from 0 and skip and step jumps over these numbers.
     The counter wraps around according the unit size."""
 
     def units(self):
-        unitmask = (1 << self.unit_size) - 1
-        for i in range(self.counter.skip, self.counter.skip +
-                                          self.counter.count):
-            yield i & unitmask
+        unit_number = -1
+        unit_mask = (1 << self.unit_size) - 1
+        for action in self.counter:
+            unit_number += 1
+            unit_number &= unit_mask
+            if action == "skip":
+                continue
+            elif action == "use":
+                yield unit_number
+            elif action == "step":
+                continue
+            elif action == "finished":
+                return
+            else:
+                assert False, "Unknown answer from counter"
 
 
 class IntegerInputStream(InputBitStream):

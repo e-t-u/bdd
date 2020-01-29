@@ -87,21 +87,24 @@ class OneReaderTest(unittest.TestCase):
             list(reader.units())
         )
 
+
 class RandomReaderTest(unittest.TestCase):
 
+    @unittest.skip("slow, undeterministic but important")
     def test_random_reader_bits(self):
         NUM = 10000
         reader = RandomStream(Counter(units=NUM), unit_size=1)
         count = {0: 0, 1: 0}
         for unit in reader.units():
             count[unit] += 1
-        max_proportion = (max(count.values()) / NUM) / (1/2)
+        max_proportion = (max(count.values()) / NUM) / (1 / 2)
         # print(f"Binary units, {count} one digit max {max_proportion} more common than the other")
         self.assertGreater(
-            1.02,    # Allow one binary digit to be 2% more common than the other
+            1.02,  # Allow one binary digit to be 2% more common than the other
             max_proportion,
         )
 
+    @unittest.skip("slow, undeterministic but important")
     def test_random_reader_bytes(self):
         NUM = 100000
         reader = RandomStream(Counter(units=NUM), unit_size=8)
@@ -114,10 +117,11 @@ class RandomReaderTest(unittest.TestCase):
         max_proportion = (max(count.values()) / NUM) / (1 / 256)
         # print(f"Byte units, {count}\none digit max {max_proportion} more common than the other")
         self.assertGreater(
-            1.20,    # allow one digit that is 20% more common than others
+            1.20,  # allow one digit that is 20% more common than others
             max_proportion,
         )
 
+    @unittest.skip("slow, undeterministic but important")
     def test_random_reader_large(self):
         NUM = 10000
         reader = RandomStream(Counter(units=NUM), unit_size=234)
@@ -135,13 +139,35 @@ class RandomReaderTest(unittest.TestCase):
             difference
         )
 
+
 class CounterReaderTest(unittest.TestCase):
 
     def test_counter_reader(self):
         reader = CounterStream()
         self.assertEqual(
-            list(itertools.count(1, 1000)),
-            [unit for unit in reader.units()]
+            list(itertools.islice(itertools.count(0), 100)),
+            [unit for unit in itertools.islice(reader.units(), 100)]
+        )
+
+    def test_counter_reader_under_byte_wrapping(self):
+        reader = CounterStream(unit_size=2)
+        self.assertEqual(
+            [0, 1, 2, 3, 0, 1, 2, 3],
+            [unit for unit in itertools.islice(reader.units(), 8)],
+        )
+
+    def test_counter_reader_over_byte_wrapping(self):
+        reader = CounterStream(Counter(skip=1022), unit_size=10)
+        self.assertEqual(
+            [1022, 1023, 0, 1],
+            [unit for unit in itertools.islice(reader.units(), 4)],
+        )
+
+    def test_counter_reader_skips(self):
+        reader = CounterStream(Counter(skip=1, units=3, step=2))
+        self.assertEqual(
+            [1, 4, 7],
+            [unit for unit in reader.units()],
         )
 
 
