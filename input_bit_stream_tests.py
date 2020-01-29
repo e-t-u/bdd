@@ -272,10 +272,9 @@ class FileReaderTest(unittest.TestCase):
             fd=io.BytesIO(b"\x55\x55\x55"),
         )
         self.assertEqual(
-            [0xAA, 0xAA],    # last is incomplete and ignored by default
+            [0xAA, 0xAA],  # last is incomplete and ignored by default
             [unit for unit in reader.units()]
         )
-
 
 
 if __name__ == '__main__':

@@ -333,22 +333,24 @@ class _BitStreamReader():
 
             # Unit is now in lookahead. First bits of the unit are in lookahead[0]
             unit = 0
-            unit_mask = (1 << self.unit_size) - 1
             for current_byte in range(byte_of_the_first_bit, byte_of_the_last_bit + 1):
                 if current_byte == byte_of_the_first_bit and current_byte == byte_of_the_last_bit:
                     unit = (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
+                    unit_mask = (1 << self.unit_size) - 1
                     unit &= unit_mask
                     if bit_of_the_last_bit == 7:
                         lookahead.pop()
                     break
                 elif current_byte == byte_of_the_first_bit:
-                    unit &= unit_mask
+                    unit_mask = (1 << (8 - bit_of_the_first_bit)) - 1
+                    unit = lookahead[0] & unit_mask
                     lookahead.pop()
                 elif current_byte == byte_of_the_last_bit:
-                    unit <<= (8 - bit_of_the_last_bit - 1)
+                    unit <<= bit_of_the_last_bit + 1
+                    unit += (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
                     if bit_of_the_last_bit == 7:
                         lookahead.pop()
-                else:
+                else:    # full byte is part of the unit
                     unit <<= 8
                     unit += lookahead[0]
                     lookahead.pop()
