@@ -327,33 +327,43 @@ class _BitStreamReader():
             byte_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) // 8
             bit_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) % 8
 
+            # Fill lookahead so that the last byte of unit is in in the end of the lookahead
             while end_of_lookahead < last_bit_of_unit:
                 lookahead.append(self.read_byte())
                 end_of_lookahead += 8
 
+            # Empty lookahead so that the first byte of unit is in lookahead[0]
+            # (usually it is adjusted but skipping a gap may cause unused bytes)
+            while len(lookahead) > byte_of_the_last_bit - byte_of_the_first_bit + 1:
+                lookahead.pop(0)
+
             # Unit is now in lookahead. First bits of the unit are in lookahead[0]
             unit = 0
             for current_byte in range(byte_of_the_first_bit, byte_of_the_last_bit + 1):
+                # unit is within one byte, easiest to handle at one go
                 if current_byte == byte_of_the_first_bit and current_byte == byte_of_the_last_bit:
                     unit = (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
                     unit_mask = (1 << self.unit_size) - 1
                     unit &= unit_mask
                     if bit_of_the_last_bit == 7:
-                        lookahead.pop()
+                        lookahead.pop(0)
                     break
+                # First byte of a multi-byte unit
                 elif current_byte == byte_of_the_first_bit:
                     unit_mask = (1 << (8 - bit_of_the_first_bit)) - 1
-                    unit = lookahead[0] & unit_mask
-                    lookahead.pop()
+                    unit += lookahead[0] & unit_mask
+                    lookahead.pop(0)
+                # Last byte of a multi-byte unit
                 elif current_byte == byte_of_the_last_bit:
                     unit <<= bit_of_the_last_bit + 1
                     unit += (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
                     if bit_of_the_last_bit == 7:
-                        lookahead.pop()
-                else:    # full byte is part of the unit
+                        lookahead.pop(0)
+                # Full middle byte of a multi-byte unit
+                else:  # full byte is part of the unit
                     unit <<= 8
                     unit += lookahead[0]
-                    lookahead.pop()
+                    lookahead.pop(0)
 
             yield unit, self.eof
             start_of_next_unit += self.unit_size + self.postgap + self.gap

@@ -276,6 +276,50 @@ class FileReaderTest(unittest.TestCase):
             [unit for unit in reader.units()]
         )
 
+    def test_file_reader_big_units_with_gap(self):
+        reader = FileInputStream(
+            skip_bits=4,
+            unit_size=24,
+            counter=Counter(units=2),
+            gap=8,
+            fd=io.BytesIO(b"\x12\x34\x56\x78\x9A\xBC\xDE\xF0"),
+        )
+        self.assertEqual(
+            [0x23 * 256 * 256 + 0x45 * 256 + 0x67,
+             0xAB * 256 * 256 + 0xCD * 256 + 0xEF],
+            [unit for unit in reader.units()],
+        )
+
+    def test_file_reader_huge_unit(self):
+        reader = FileInputStream(
+            skip_bits=1,
+            unit_size=10*8,
+            counter=Counter(units=2),
+            gap=8,
+            fd=io.BytesIO(b"This is a very long example text"),
+        )
+        def byte_array_as_int(bytes):
+            num = 0
+            for byte in bytes:
+                num <<= 8
+                num += byte
+            return num
+        self.assertEqual(
+            [byte_array_as_int(b"This is a ") << 1,
+             byte_array_as_int(b"ery long e") << 1],
+            [unit for unit in reader.units()],
+    )
+
+    def test_file_reader_plenty_of_units(self):
+        NUM = 10000    # Test with bigger, 10000000 takes about one minute
+        reader = FileInputStream(
+            fd=io.BytesIO(bytearray((i % 256 for i in range(NUM)))),
+        )
+        self.assertEqual(
+            [i % 256 for i in range(NUM)],
+            [unit for unit in reader.units()],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
