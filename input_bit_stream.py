@@ -402,6 +402,7 @@ class FileInputStream(InputBitStream):
                  use_seek=False,
                  reverse_bytes=False,
                  reverse_unit=False,
+                 eof_handling="exception"
                  ):
         assert skip_bits >= 0 and skip_units >= 0 and gap >= 0
         InputBitStream.__init__(self, counter=counter, fd=fd, unit_size=unit_size)
@@ -416,7 +417,7 @@ class FileInputStream(InputBitStream):
         ).units()
         self.skip_units = skip_units
         self.reverse_unit = reverse_unit
-        self.eof = False  # TODO: likely not used in this class
+        self.eof_handling = eof_handling
 
     def units(self):
         for action in self.counter:
@@ -424,7 +425,14 @@ class FileInputStream(InputBitStream):
             if eof:
                 # we know that extra zeroes were used to produce the last unit
                 # yield unit if self.i_want_filled_value_at_end
-                return
+                if self.eof_handling == "exception":
+                    return    # this causes StopIteration exception
+                elif self.eof_handling == "zeros":
+                    yield unit
+                    return   # TODO: should flag that this is last
+                elif self.eof_handling == "None":
+                    yield None
+                    return
             if action == "skip":
                 continue
             elif action == "use":

@@ -320,6 +320,30 @@ class FileReaderTest(unittest.TestCase):
             [unit for unit in reader.units()],
         )
 
+    def test_file_reader_one_bit_overflow_exception(self):
+        reader = FileInputStream(
+            eof_handling="exception",
+            unit_size=9,
+            fd=io.BytesIO(b"a"),
+        )
+        try:
+            next(reader.units())
+        except StopIteration:
+            assert True
+        else:
+            assert False
+
+    def test_file_reader_one_bit_overflow_none(self):
+        reader = FileInputStream(
+            eof_handling="None",
+            unit_size=9,
+            fd=io.BytesIO(b"a"),
+        )
+        if next(reader.units()) is None:
+            assert True
+        else:
+            assert False
+
 
 if __name__ == '__main__':
     unittest.main()
