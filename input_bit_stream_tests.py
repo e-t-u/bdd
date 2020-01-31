@@ -249,6 +249,7 @@ class FileReaderTest(unittest.TestCase):
 
     def test_file_reader(self):
         reader = FileInputStream(
+            # eof_handling=None,
             fd=io.BytesIO(b"\x02\x03\x04"),
         )
         self.assertEqual(
@@ -256,9 +257,10 @@ class FileReaderTest(unittest.TestCase):
             [unit for unit in reader.units()]
         )
 
-    def test_file_reader_bits(self):
+    def test_file_reader_bits_aligned(self):
         reader = FileInputStream(
             unit_size=1,
+            eof_handling="None",
             fd=io.BytesIO(b"\x5A"),
         )
         self.assertEqual(
@@ -266,13 +268,26 @@ class FileReaderTest(unittest.TestCase):
             [unit for unit in reader.units()]
         )
 
+    def test_file_reader_bits_nonaligned(self):
+        reader = FileInputStream(
+            skip_bits=1,
+            unit_size=1,
+            eof_handling="zeros",
+            fd=io.BytesIO(b"\x5A"),
+        )
+        self.assertEqual(
+            [1, 0, 1, 1, 0, 1, 0],
+            [unit for unit in reader.units()]
+        )
+
     def test_file_reader_bit_boundaries(self):
         reader = FileInputStream(
             skip_bits=1,
+            eof_handling="None",
             fd=io.BytesIO(b"\x55\x55\x55"),
         )
         self.assertEqual(
-            [0xAA, 0xAA],  # last is incomplete and ignored by default
+            [0xAA, 0xAA, None],  # last is incomplete
             [unit for unit in reader.units()]
         )
 
@@ -328,8 +343,12 @@ class FileReaderTest(unittest.TestCase):
         )
         try:
             next(reader.units())
-        except StopIteration:
-            assert True
+        except PrematureEOF as err:
+            (unit,) = err.args
+            self.assertEqual(
+                0x61 << 1,
+                unit,
+            )
         else:
             assert False
 
@@ -343,6 +362,18 @@ class FileReaderTest(unittest.TestCase):
             assert True
         else:
             assert False
+
+    def test_file_reader_gap(self):
+        reader = FileInputStream(
+            unit_size=1,
+            gap=1,
+            eof_handling="Zero",  # None works, zero does not
+            fd=io.BytesIO(b"\x5A"),
+        )
+        self.assertEqual(
+            [0, 0, 1, 1],
+            [unit for unit in reader.units()],
+        )
 
 
 if __name__ == '__main__':

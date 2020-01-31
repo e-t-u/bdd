@@ -295,7 +295,15 @@ class IntegerInputStream(InputBitStream):
 #
 # BitStreamReader is an internal helper for unit level reader FileInputStream()
 #
-class _BitStreamReader():
+# It returns a generator that yields pairs: (unit, eof).
+# Unit is the next unit with the parameters given to the generator.
+# If eof is True, the file has ended while reading the last unit and
+# missing bits were replaced by zeros. It is up to caller what to do in this
+# situation. Generator should not be called any more when it has returned
+# eof.
+#
+
+class _BitStreamReader:
     """Reads bit-aligned units from bitstream"""
 
     def __init__(self,
@@ -305,6 +313,7 @@ class _BitStreamReader():
                  pregap=0,
                  postgap=0,
                  gap=0,
+                 reverse_bytes=False,
                  ):
         self.fd = fd
         self.skip_bits = skip_bits
@@ -312,12 +321,15 @@ class _BitStreamReader():
         self.pregap = pregap
         self.postgap = postgap
         self.gap = gap
-        self.eof = False
+        self.reverse_bytes = reverse_bytes
+        self.eof = False  # we have read after end of file
+        self.finalized_before_eof = False  # remembers that previous unit ended up to exact byte edge
 
     def units(self):
         start_of_next_unit = self.skip_bits + self.pregap
-        lookahead = []
-        end_of_lookahead = -1  # bits
+        unit_buffer = []
+        last_bit_in_unit_buffer = -1  # bits
+        this_unit_aligned = False  # used to keep next value of self.aligned when self.aligned still needed
 
         while True:
             # last refers to really last index, not the unit after that (e.g. 0 and 7 for a byte)
@@ -327,49 +339,57 @@ class _BitStreamReader():
             byte_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) // 8
             bit_of_the_last_bit = (start_of_next_unit + self.unit_size - 1) % 8
 
-            # Fill lookahead so that the last byte of unit is in in the end of the lookahead
-            while end_of_lookahead < last_bit_of_unit:
-                lookahead.append(self.read_byte())
-                end_of_lookahead += 8
+            # Fill unit_buffer so that the last byte of unit is in in the end of the unit_buffer
+            while last_bit_in_unit_buffer < last_bit_of_unit:
+                unit_buffer.append(self.read_byte())
+                last_bit_in_unit_buffer += 8
 
-            # Empty lookahead so that the first byte of unit is in lookahead[0]
+            # Empty unit_buffer so that the first byte of unit is in unit_buffer[0]
             # (usually it is adjusted but skipping a gap may cause unused bytes)
-            while len(lookahead) > byte_of_the_last_bit - byte_of_the_first_bit + 1:
-                lookahead.pop(0)
+            while len(unit_buffer) > byte_of_the_last_bit - byte_of_the_first_bit + 1:
+                unit_buffer.pop(0)
 
-            # Unit is now in lookahead. First bits of the unit are in lookahead[0]
+            # Unit is now in unit_buffer. First bits of the unit are in unit_buffer[0]
             unit = 0
             for current_byte in range(byte_of_the_first_bit, byte_of_the_last_bit + 1):
-                # unit is within one byte, easiest to handle at one go
+                # unit is within one byte, easiest to handle separately
                 if current_byte == byte_of_the_first_bit and current_byte == byte_of_the_last_bit:
-                    unit = (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
+                    unit = (unit_buffer[0] >> (8 - bit_of_the_last_bit - 1))
                     unit_mask = (1 << self.unit_size) - 1
                     unit &= unit_mask
                     if bit_of_the_last_bit == 7:
-                        lookahead.pop(0)
+                        this_unit_aligned = True
+                        unit_buffer.pop(0)
+                    else:
+                        this_unit_aligned = False
                     break
                 # First byte of a multi-byte unit
                 elif current_byte == byte_of_the_first_bit:
                     unit_mask = (1 << (8 - bit_of_the_first_bit)) - 1
-                    unit += lookahead[0] & unit_mask
-                    lookahead.pop(0)
+                    unit += unit_buffer[0] & unit_mask
+                    unit_buffer.pop(0)
                 # Last byte of a multi-byte unit
                 elif current_byte == byte_of_the_last_bit:
                     unit <<= bit_of_the_last_bit + 1
-                    unit += (lookahead[0] >> (8 - bit_of_the_last_bit - 1))
+                    unit += (unit_buffer[0] >> (8 - bit_of_the_last_bit - 1))
                     if bit_of_the_last_bit == 7:
-                        lookahead.pop(0)
+                        this_unit_aligned = True
+                        unit_buffer.pop(0)
+                    else:
+                        this_unit_aligned = False
                 # Full middle byte of a multi-byte unit
                 else:  # full byte is part of the unit
                     unit <<= 8
-                    unit += lookahead[0]
-                    lookahead.pop(0)
+                    unit += unit_buffer[0]
+                    unit_buffer.pop(0)
 
-            yield unit, self.eof
+            yield unit, self.eof, self.finalized_before_eof
+            # TODO: if rest of the last byte is gap, the byte is still aligned
             start_of_next_unit += self.unit_size + self.postgap + self.gap
+            self.finalized_before_eof = this_unit_aligned
 
             # Caller should handle eof so that it does not return here, but if this happens, we quit
-            # Note: we assume that lookahead is not filled too early because then we know that
+            # Note: we assume that unit_buffer is filled exactly when needed because then we know that
             # if there is EOF, zeroes were really used in the last computed unit
             if self.eof:
                 return
@@ -388,6 +408,17 @@ class _BitStreamReader():
         return ord(c)  # int, not byte
 
 
+#
+# In case of EOF in middle of reading an unit, FileInputStream may raise
+# exception PrematureEOF with argument that contains the unit as
+# the stream would have continued as an infinite stream of zeroes.
+# This behaviour can be changed with argument eof_handling.
+#
+class PrematureEOF(Exception):
+    def __init__(self, incomplete_unit):
+        self.incomplete_unit = incomplete_unit
+
+
 class FileInputStream(InputBitStream):
     """Reads units from a file."""
 
@@ -402,7 +433,7 @@ class FileInputStream(InputBitStream):
                  use_seek=False,
                  reverse_bytes=False,
                  reverse_unit=False,
-                 eof_handling="exception"
+                 eof_handling="zero"
                  ):
         assert skip_bits >= 0 and skip_units >= 0 and gap >= 0
         InputBitStream.__init__(self, counter=counter, fd=fd, unit_size=unit_size)
@@ -412,8 +443,7 @@ class FileInputStream(InputBitStream):
             unit_size=unit_size,
             pregap=0,
             postgap=0,
-            gap=gap
-            ,
+            gap=gap,
         ).units()
         self.skip_units = skip_units
         self.reverse_unit = reverse_unit
@@ -421,23 +451,42 @@ class FileInputStream(InputBitStream):
 
     def units(self):
         for action in self.counter:
-            unit, eof = next(self.bitstream_reader)
-            if eof:
-                # we know that extra zeroes were used to produce the last unit
-                # yield unit if self.i_want_filled_value_at_end
-                if self.eof_handling == "exception":
-                    return    # this causes StopIteration exception
-                elif self.eof_handling == "zeros":
-                    yield unit
-                    return   # TODO: should flag that this is last
-                elif self.eof_handling == "None":
-                    yield None
-                    return
+            try:
+                (unit, eof, finalized_before_eof) = next(self.bitstream_reader)
+            except StopIteration:
+                assert False, "Internal error: bit generator stopped early, " \
+                              "did you call unit after eof?"
+            if eof and finalized_before_eof:
+                # we know that the previous unit was the last and
+                # the file ended just aligned at the end of the unit.
+                # we make a clean exit without emitting the last unit
+                # that is zero
+                return
             if action == "skip":
+                if eof:
+                    return
                 continue
             elif action == "use":
-                yield unit
+                if not eof:
+                    yield unit
+                else:
+                    # we have an unclean last unit filled with zeroes
+                    # and we have to figure out what to do with it
+                    # (eof and not aligned)
+                    # "exception" -> raise exception with last premature unit
+                    if self.eof_handling == "exception":
+                        raise PrematureEOF(unit)
+                    # "zeros" -> send filled unit as a normal last unit
+                    elif self.eof_handling == "zeros":
+                        yield unit
+                        return
+                    # "None" -> replace the last unit with None
+                    elif self.eof_handling == "None":
+                        yield None
+                        return
             elif action == "step":
+                if eof:
+                    return
                 continue
             elif action == "finished":
                 return
