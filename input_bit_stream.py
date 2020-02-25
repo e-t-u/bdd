@@ -215,12 +215,12 @@ class RandomStream(InputBitStream):
                 continue
             elif action == "use":
                 needed_bytes = self.unit_size // 8 + 1
-                unitmask = (1 << self.unit_size) - 1
+                unit_mask = (1 << self.unit_size) - 1
                 random = 0
                 for randombyte in range(needed_bytes):
                     random *= 256
                     random += ord(urandom(1))
-                random &= unitmask
+                random &= unit_mask
                 yield random
             elif action == "step":
                 continue
