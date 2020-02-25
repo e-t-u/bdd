@@ -1,0 +1,2 @@
+# verify that github classifies bdd as Python
+bdd linguist-language=Python
