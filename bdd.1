@@ -78,9 +78,8 @@ Skip UNITS units from the beginning of the input.
 If both skip-bits and skip-units are defined, they are done both.
 --skip has the same effect but sometimes it is more natural
 to use --input-skip-units to find units and use --skip for units.
---input-skip-units is potentially more efficient because it is 
-able to use seek to find the right place in the input file
-(look --input-use-seek).
+--input-skip-units is more efficient on regular files than repeated gaps because bdd automatically seeks directly over skipped bytes in O(1) time rather than reading and discarding data from disk (see --no-seek).
+(look --no-seek).
 
 .TP
 --input-gap=BITS
@@ -98,10 +97,16 @@ Gives error message if the input is not full units.
 Note that with --count you can cleanly stop reading non-aligned input.
 
 .TP
---input-use-seek
-Use seek in input to do --input-skip-bits, --input-skip-units and
-first --input-pregap. Default is to read them and discard the result.
-Does not work if input is a pipe.
+--no-seek, --do-not-seek
+Globally disable seeking on all inputs (both primary and merge streams), forcing streaming sequential reads. By default, \fBbdd\fR automatically attempts O(1) filesystem seek whenever the input stream is a seekable regular file or file descriptor, seamlessly falling back to sequential stream reads if the input is a pipe, socket, or FIFO.
+
+.TP
+--input-no-seek, --no-input-seek
+Disable seeking specifically on the primary input stream, forcing sequential streaming reads.
+
+.TP
+--input-use-seek, --input-seek
+Explicitly enable seeking on primary input (this is already the default whenever seeking is possible). Maintained for backwards compatibility.
 
 .TP
 --input-reverse-bytes
@@ -560,8 +565,12 @@ Warn if the whole merge input was not used or the merge input did not
 end to the byte border.
 
 .TP
---merge-use-seek
-Seek is used in skipping in merge input instead of reading skipped bytes.
+--merge-no-seek, --no-merge-seek
+Disable seeking specifically on the merge input stream, forcing sequential streaming reads. By default, seeking is automatically attempted whenever the merge source is a seekable regular file.
+
+.TP
+--merge-use-seek, --merge-seek
+Explicitly enable seeking on merge input (this is already the default whenever seeking is possible). Maintained for backwards compatibility.
 
 .TP
 --merge-little-endian

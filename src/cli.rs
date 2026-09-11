@@ -35,7 +35,16 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub input_assert_aligned: bool,
 
-    #[arg(long, default_value_t = false)]
+    /// Disable seeking on all inputs (force streaming sequential read)
+    #[arg(long, default_value_t = false, visible_alias = "do-not-seek")]
+    pub no_seek: bool,
+
+    /// Disable seeking on primary input (force streaming sequential read)
+    #[arg(long, default_value_t = false, visible_alias = "no-input-seek")]
+    pub input_no_seek: bool,
+
+    /// Enable seeking on primary input (default: true if seekable)
+    #[arg(long, default_value_t = false, visible_alias = "input-seek")]
     pub input_use_seek: bool,
 
     #[arg(long, default_value_t = false)]
@@ -205,7 +214,12 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub merge_assert_aligned: bool,
 
-    #[arg(long, default_value_t = false)]
+    /// Disable seeking on merge input (force streaming sequential read)
+    #[arg(long, default_value_t = false, visible_alias = "no-merge-seek")]
+    pub merge_no_seek: bool,
+
+    /// Enable seeking on merge input (default: true if seekable)
+    #[arg(long, default_value_t = false, visible_alias = "merge-seek")]
     pub merge_use_seek: bool,
 
     #[arg(long, default_value_t = false)]
@@ -387,6 +401,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             || cli.merge_pregap.is_some()
             || cli.merge_assert_aligned
             || cli.merge_use_seek
+            || cli.merge_no_seek
             || cli.merge_little_endian
             || cli.merge_reverse_bytes
             || cli.merge_reverse_unit;
@@ -454,6 +469,10 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         cli.input_use_seek = false;
     }
 
+    // Auto-seek by default on regular files / seekable descriptors, unless explicitly disabled
+    let input_use_seek = !cli.input_no_seek && !cli.no_seek;
+    let merge_use_seek = !cli.merge_no_seek && !cli.no_seek;
+
     Ok(ValidatedConfig {
         input_file: cli.input_file,
         output_file: cli.output_file,
@@ -462,7 +481,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         input_skip_units,
         input_gap,
         input_assert_aligned: cli.input_assert_aligned,
-        input_use_seek: cli.input_use_seek,
+        input_use_seek,
         input_reverse_bytes: cli.input_reverse_bytes,
         input_reverse_unit: cli.input_reverse_unit,
         input_zeros: cli.input_zeros,
@@ -513,7 +532,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         merge_copy_first,
         merge_gap,
         merge_assert_aligned: cli.merge_assert_aligned,
-        merge_use_seek: cli.merge_use_seek,
+        merge_use_seek,
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,
         raw_args: Vec::new(),
@@ -536,5 +555,51 @@ mod tests {
     fn test_exclusive_validation() {
         let cli = Cli::parse_from(["bdd", "--input-zeros", "--input-ones"]);
         assert!(validate_and_process(cli).is_err());
+    }
+
+    #[test]
+    fn test_seek_defaults_and_options() {
+        // Default: seeking is enabled for both input and merge
+        let cli_default = Cli::parse_from(["bdd", "--input-zeros", "--count=1"]);
+        let conf_default = validate_and_process(cli_default).unwrap();
+        assert!(conf_default.input_use_seek);
+        assert!(conf_default.merge_use_seek);
+
+        // Global --no-seek disables both
+        let cli_no_seek = Cli::parse_from(["bdd", "--no-seek", "--input-zeros", "--count=1"]);
+        let conf_no_seek = validate_and_process(cli_no_seek).unwrap();
+        assert!(!conf_no_seek.input_use_seek);
+        assert!(!conf_no_seek.merge_use_seek);
+
+        // Alias --do-not-seek
+        let cli_do_not_seek =
+            Cli::parse_from(["bdd", "--do-not-seek", "--input-zeros", "--count=1"]);
+        let conf_do_not_seek = validate_and_process(cli_do_not_seek).unwrap();
+        assert!(!conf_do_not_seek.input_use_seek);
+
+        // --input-no-seek disables only input
+        let cli_input_no_seek =
+            Cli::parse_from(["bdd", "--input-no-seek", "--input-zeros", "--count=1"]);
+        let conf_input_no_seek = validate_and_process(cli_input_no_seek).unwrap();
+        assert!(!conf_input_no_seek.input_use_seek);
+        assert!(conf_input_no_seek.merge_use_seek);
+
+        // --merge-no-seek with merge file
+        let cli_merge_no_seek = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--merge-file",
+            "/dev/null",
+            "--merge-no-seek",
+        ]);
+        let conf_merge_no_seek = validate_and_process(cli_merge_no_seek).unwrap();
+        assert!(conf_merge_no_seek.input_use_seek);
+        assert!(!conf_merge_no_seek.merge_use_seek);
+
+        // --merge-no-seek without merge-file fails validation
+        let cli_merge_err =
+            Cli::parse_from(["bdd", "--input-zeros", "--count=1", "--merge-no-seek"]);
+        assert!(validate_and_process(cli_merge_err).is_err());
     }
 }

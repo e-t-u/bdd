@@ -9,13 +9,13 @@ use crate::sink::{
     JsonOutputStream, TupleDirectOutput, TupleSink, UnitSink, VisualOutputStream,
 };
 use crate::stream::{
-    CounterStream, FileInputStream, IntegerInputStream, OneStream, RandomStream, StreamConfig,
-    TupleDirectInput, UnitStream, ZeroStream,
+    BddReader, CounterStream, FileInputStream, IntegerInputStream, OneStream, RandomStream,
+    StreamConfig, TupleDirectInput, UnitStream, ZeroStream,
 };
 use num_bigint::BigUint;
 use num_traits::Zero;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 /// Runs the complete bdd pipeline based on validated configuration.
 pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
@@ -47,13 +47,13 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         8
     };
 
-    let mut merge_stream: Option<FileInputStream<Box<dyn Read>>> =
+    let mut merge_stream: Option<FileInputStream<BddReader>> =
         if let Some(ref mfile) = config.merge_file {
-            let reader: Box<dyn Read> = if mfile == "-" {
-                Box::new(io::stdin())
+            let reader = if mfile == "-" {
+                BddReader::from_stdin(config.merge_use_seek)
             } else {
                 match File::open(mfile) {
-                    Ok(f) => Box::new(BufReader::new(f)),
+                    Ok(f) => BddReader::from_file(f, config.merge_use_seek),
                     Err(_) => {
                         return Err(BddError::CannotOpenMergeFile(mfile.clone()));
                     }
@@ -68,6 +68,7 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
                 reverse_bytes: config.merge_reverse_bytes,
                 reverse_unit: config.merge_reverse_unit,
                 unit_size: m_unit,
+                seek_allowed: config.merge_use_seek,
             };
             let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
             ms.do_skip();
@@ -309,11 +310,11 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
             };
             Box::new(IntegerInputStream::new(in_reader, counter))
         } else {
-            let in_reader: Box<dyn Read> = if config.input_file == "-" {
-                Box::new(io::stdin())
+            let in_reader = if config.input_file == "-" {
+                BddReader::from_stdin(config.input_use_seek)
             } else {
                 match File::open(&config.input_file) {
-                    Ok(f) => Box::new(BufReader::new(f)),
+                    Ok(f) => BddReader::from_file(f, config.input_use_seek),
                     Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
                 }
             };
@@ -325,6 +326,7 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
                 reverse_bytes: config.input_reverse_bytes,
                 reverse_unit: config.input_reverse_unit,
                 unit_size: in_unit_size,
+                seek_allowed: config.input_use_seek,
             };
             let mut fs = FileInputStream::new(in_reader, stream_conf, counter);
             fs.do_skip();

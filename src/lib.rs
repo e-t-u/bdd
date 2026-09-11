@@ -18,3 +18,4 @@ pub mod stream;
 pub use engine::run_pipeline;
 pub use error::BddError;
 pub use field::Field;
+pub use stream::{BddReader, ReadSeek, StreamSeek};

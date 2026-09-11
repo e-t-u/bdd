@@ -97,9 +97,18 @@ In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A 
 
 - **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit (default: `8`).
 - **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit (default: `0`).
+- **`--input-skip-units=UNITS`**: Skip initial units from stream start.
 - **`--input-gap=BITS`**: Number of bits skipped *between* successive units (default: `0`).
 - **`--input-pregap=BITS`**: Initial gap before the first unit. A convenient shorthand identical to setting `--input-skip-bits` and `--input-gap` together.
 - **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
+
+#### Automatic Fast Seeking vs. Streaming Fallback
+
+When extracting fields with `--input-skip-bits` or `--input-skip-units`, `bdd` automatically uses **$O(1)$ filesystem seeking** by default whenever the input source is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of transferring gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps straight to the initial offset instantly.
+
+If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or socket), `bdd` seamlessly falls back to streaming sequential reads, discarding skipped bytes without failing or requiring separate flags.
+
+To explicitly disable seeking and force sequential stream consumption across all inputs, pass **`--no-seek`** (or `--do-not-seek`, `--input-no-seek`, `--merge-no-seek`).
 
 ### Slicing Bits from Byte Streams
 
@@ -369,9 +378,13 @@ Input Unit & Pattern Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
   -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
       --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
+      --input-skip-units <UNITS>   Skip initial N units from input stream [default: 0]
       --input-gap <BITS>           Bit gap skipped between units [default: 0]
       --input-pregap <BITS>        Shorthand for initial skip & gap [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
+      --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
+      --input-no-seek              Disable seeking specifically on primary input
+      --input-use-seek             Explicitly enable seeking on input (default: true)
 
 Synthetic Stream Sources:
   -c, --input-counter              Generate sequential counter numbers (0, 1, 2...)
@@ -430,6 +443,8 @@ Merge Options:
       --merge-file <PATH>          Interleave stream from secondary file
       --merge-unit <BITS>          Bit width of each merge unit [default: 8]
       --merge-copy-first <BITS>    Copy initial header bits from merge file first
+      --merge-no-seek              Disable seeking specifically on merge file
+      --merge-use-seek             Explicitly enable seeking on merge file (default: true)
 
 General:
   -h, --help                       Print help

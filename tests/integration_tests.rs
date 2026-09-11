@@ -116,3 +116,78 @@ fn test_cli_large_tuple_rearrange() {
     // 4U ones = 15 (0xF)
     assert_eq!(stdout.trim(), "15,15");
 }
+
+#[test]
+fn test_cli_auto_seek_and_no_seek() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let test_path = "/tmp/bdd_seek_test.bin";
+    {
+        let mut f = File::create(test_path).expect("failed to create test file");
+        // Write 100,000 bytes with pattern
+        let mut data = vec![0xAAu8; 99990];
+        data.extend_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9A]);
+        data.resize(100_000, 0x00);
+        f.write_all(&data).expect("failed to write data");
+    }
+
+    // 1. Regular file with default auto-seeking
+    let out_auto = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-units=99990",
+            "--count=5",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd auto seek");
+    assert!(out_auto.status.success());
+    let hex_auto = String::from_utf8(out_auto.stdout).unwrap();
+    assert_eq!(hex_auto.trim(), "12 34 56 78 9a");
+
+    // 2. Regular file with explicit --no-seek (streaming read fallback)
+    let out_no_seek = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-units=99990",
+            "--count=5",
+            "--no-seek",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd --no-seek");
+    assert!(out_no_seek.status.success());
+    let hex_no_seek = String::from_utf8(out_no_seek.stdout).unwrap();
+    assert_eq!(hex_no_seek.trim(), "12 34 56 78 9a");
+
+    // 3. Regular file with --do-not-seek alias
+    let out_do_not_seek = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-units=99990",
+            "--count=5",
+            "--do-not-seek",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd --do-not-seek");
+    assert!(out_do_not_seek.status.success());
+    let hex_do_not_seek = String::from_utf8(out_do_not_seek.stdout).unwrap();
+    assert_eq!(hex_do_not_seek.trim(), "12 34 56 78 9a");
+
+    // 4. Pipe via stdin (non-seekable stream fallback)
+    let pipe_cmd = format!(
+        "cat {} | ./bdd --input-skip-units=99990 --count=5 --output-hex",
+        test_path
+    );
+    let out_pipe = Command::new("bash")
+        .args(["-c", &pipe_cmd])
+        .output()
+        .expect("failed to run piped bdd");
+    assert!(out_pipe.status.success());
+    let hex_pipe = String::from_utf8(out_pipe.stdout).unwrap();
+    assert_eq!(hex_pipe.trim(), "12 34 56 78 9a");
+
+    let _ = std::fs::remove_file(test_path);
+}

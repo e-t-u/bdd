@@ -4,7 +4,7 @@ use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, Zero};
 use rand::RngCore;
-use std::io::{BufRead, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
 /// Stream configuration parameters for bit extraction.
 #[derive(Debug, Clone)]
@@ -16,6 +16,7 @@ pub struct StreamConfig {
     pub reverse_bytes: bool,
     pub reverse_unit: bool,
     pub unit_size: usize,
+    pub seek_allowed: bool,
 }
 
 impl Default for StreamConfig {
@@ -28,6 +29,155 @@ impl Default for StreamConfig {
             reverse_bytes: false,
             reverse_unit: false,
             unit_size: 8,
+            seek_allowed: true,
+        }
+    }
+}
+
+/// Helper trait combining Read and Seek.
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+/// Trait for streams that may attempt seeking forward before falling back to reading.
+pub trait StreamSeek {
+    /// Attempts to seek forward by `bytes` relative to current position.
+    /// Returns Ok(true) if seek succeeded.
+    /// Returns Ok(false) if seeking is unsupported, failed with ESPIPE, or disabled.
+    /// Returns Err(e) on fatal I/O error.
+    fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Internal source enum for BddReader.
+pub enum ReaderSource {
+    Seekable(Box<dyn ReadSeek>),
+    Streaming(Box<dyn Read>),
+}
+
+/// Unified reader for bdd that automatically seeks when backed by a seekable file/descriptor,
+/// with graceful fallback to streaming sequential reads for pipes/fifos.
+pub struct BddReader {
+    source: ReaderSource,
+    seek_allowed: bool,
+}
+
+impl BddReader {
+    pub fn new_seekable<R: ReadSeek + 'static>(reader: R, seek_allowed: bool) -> Self {
+        Self {
+            source: ReaderSource::Seekable(Box::new(reader)),
+            seek_allowed,
+        }
+    }
+
+    pub fn new_streaming<R: Read + 'static>(reader: R) -> Self {
+        Self {
+            source: ReaderSource::Streaming(Box::new(reader)),
+            seek_allowed: false,
+        }
+    }
+
+    pub fn from_file(file: std::fs::File, seek_allowed: bool) -> Self {
+        Self::new_seekable(BufReader::new(file), seek_allowed)
+    }
+
+    pub fn from_stdin(seek_allowed: bool) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            if let Ok(owned) = std::io::stdin().as_fd().try_clone_to_owned() {
+                let mut f = std::fs::File::from(owned);
+                if f.stream_position().is_ok() {
+                    return Self::new_seekable(BufReader::new(f), seek_allowed);
+                }
+            }
+        }
+        Self::new_streaming(std::io::stdin())
+    }
+
+    pub fn is_seekable(&self) -> bool {
+        matches!(self.source, ReaderSource::Seekable(_))
+    }
+}
+
+impl Read for BddReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.source {
+            ReaderSource::Seekable(s) => s.read(buf),
+            ReaderSource::Streaming(s) => s.read(buf),
+        }
+    }
+}
+
+impl StreamSeek for BddReader {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        if !self.seek_allowed || bytes == 0 {
+            return Ok(false);
+        }
+        match &mut self.source {
+            ReaderSource::Seekable(s) => match s.seek(SeekFrom::Current(bytes as i64)) {
+                Ok(_) => Ok(true),
+                Err(e) if e.raw_os_error() == Some(29) => Ok(false),
+                Err(_) => Ok(false),
+            },
+            ReaderSource::Streaming(_) => Ok(false),
+        }
+    }
+}
+
+impl<T: AsRef<[u8]>> StreamSeek for std::io::Cursor<T> {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Current(bytes as i64)) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+impl StreamSeek for std::fs::File {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Current(bytes as i64)) {
+            Ok(_) => Ok(true),
+            Err(e) if e.raw_os_error() == Some(29) => Ok(false),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+impl<T: Read + Seek> StreamSeek for BufReader<T> {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Current(bytes as i64)) {
+            Ok(_) => Ok(true),
+            Err(e) if e.raw_os_error() == Some(29) => Ok(false),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+impl StreamSeek for &[u8] {
+    fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+}
+
+impl StreamSeek for std::io::Stdin {
+    fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+}
+
+impl StreamSeek for Box<dyn Read> {
+    fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+}
+
+impl StreamSeek for Box<dyn ReadSeek> {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Current(bytes as i64)) {
+            Ok(_) => Ok(true),
+            Err(e) if e.raw_os_error() == Some(29) => Ok(false),
+            Err(_) => Ok(false),
         }
     }
 }
@@ -47,7 +197,7 @@ pub struct FileInputStream<R> {
     pub counter: Counter,
 }
 
-impl<R: Read> FileInputStream<R> {
+impl<R: Read + StreamSeek> FileInputStream<R> {
     pub fn new(reader: R, config: StreamConfig, counter: Counter) -> Self {
         Self {
             reader,
@@ -82,16 +232,23 @@ impl<R: Read> FileInputStream<R> {
         let skip_bytes = total_skip_bits / 8;
         if skip_bytes > 0 {
             let mut remaining = skip_bytes;
-            let mut discard = [0u8; 4096];
-            while remaining > 0 {
-                let to_read = remaining.min(discard.len());
-                match self.reader.read(&mut discard[..to_read]) {
-                    Ok(0) | Err(_) => {
-                        self.eof = true;
-                        break;
-                    }
-                    Ok(n) => {
-                        remaining -= n;
+            if self.config.seek_allowed {
+                if let Ok(true) = self.reader.try_seek(skip_bytes as u64) {
+                    remaining = 0;
+                }
+            }
+            if remaining > 0 {
+                let mut discard = [0u8; 4096];
+                while remaining > 0 {
+                    let to_read = remaining.min(discard.len());
+                    match self.reader.read(&mut discard[..to_read]) {
+                        Ok(0) | Err(_) => {
+                            self.eof = true;
+                            break;
+                        }
+                        Ok(n) => {
+                            remaining -= n;
+                        }
                     }
                 }
             }
@@ -131,7 +288,7 @@ impl<R: Read> FileInputStream<R> {
     }
 }
 
-impl<R: Read> UnitStream for FileInputStream<R> {
+impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.eof {
             return Ok(None);
@@ -466,5 +623,77 @@ mod tests {
         assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x12u32)));
         assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x34u32)));
         assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_file_stream_seek_auto() {
+        let data = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
+        let cursor = std::io::Cursor::new(data);
+        let config = StreamConfig {
+            skip_bits: 0,
+            skip_units: 3, // skip 3 units of 8 bits = 24 bits = 3 bytes
+            unit_size: 8,
+            seek_allowed: true,
+            ..Default::default()
+        };
+        let mut stream = FileInputStream::new(cursor, config, Counter::new(0, None));
+        stream.do_skip();
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x40u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x50u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x60u32)));
+        assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_file_stream_no_seek_fallback() {
+        let data = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
+        let cursor = std::io::Cursor::new(data);
+        let config = StreamConfig {
+            skip_bits: 0,
+            skip_units: 3,
+            unit_size: 8,
+            seek_allowed: false, // seeking explicitly disabled
+            ..Default::default()
+        };
+        let mut stream = FileInputStream::new(cursor, config, Counter::new(0, None));
+        stream.do_skip();
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x40u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x50u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x60u32)));
+        assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_stream_sub_byte_skip_with_seek() {
+        // Data: 0xFF, 0x80 (11111111 10000000)
+        // Skip 10 bits = 1 byte (8 bits) + 2 bits
+        // Remaining in second byte: 6 bits (000000)
+        let data = vec![0xFF, 0x80];
+        let cursor = std::io::Cursor::new(data);
+        let config = StreamConfig {
+            skip_bits: 10,
+            skip_units: 0,
+            unit_size: 6,
+            seek_allowed: true,
+            ..Default::default()
+        };
+        let mut stream = FileInputStream::new(cursor, config, Counter::new(0, None));
+        stream.do_skip();
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0u32)));
+    }
+
+    #[test]
+    fn test_bdd_reader_seeking_and_streaming() {
+        let data = vec![1, 2, 3, 4, 5];
+        let mut seekable = BddReader::new_seekable(std::io::Cursor::new(data.clone()), true);
+        assert!(seekable.is_seekable());
+        assert!(seekable.try_seek(2).unwrap());
+        let mut buf = [0u8; 2];
+        seekable.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [3, 4]);
+
+        let mut streaming = BddReader::new_streaming(std::io::Cursor::new(data));
+        assert!(!streaming.is_seekable());
+        assert!(!streaming.try_seek(2).unwrap());
     }
 }

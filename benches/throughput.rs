@@ -85,6 +85,7 @@ fn bench_unaligned_3bit_to_8bit() {
         reverse_bytes: false,
         reverse_unit: false,
         unit_size: 3,
+        seek_allowed: true,
     };
     let mut fs = FileInputStream::new(
         Cursor::new(raw_data),

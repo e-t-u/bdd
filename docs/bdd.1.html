@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 04:23:14 2026 -->
+<!-- CreationDate: Sat Sep 12 05:01:15 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -164,9 +164,10 @@ beginning of the input. If both skip-bits and skip-units are
 defined, they are done both. --skip has the same effect but
 sometimes it is more natural to use --input-skip-units to
 find units and use --skip for units. --input-skip-units is
-potentially more efficient because it is able to use seek to
-find the right place in the input file (look
---input-use-seek).</p>
+more efficient on regular files than repeated gaps because
+bdd automatically seeks directly over skipped bytes in O(1)
+time rather than reading and discarding data from disk (see
+--no-seek). (look --no-seek).</p>
 
 <p style="margin-left:9%;">--input-gap=BITS</p>
 
@@ -186,12 +187,29 @@ clearer in some cases.</p>
 input is not full units. Note that with --count you can
 cleanly stop reading non-aligned input.</p>
 
-<p style="margin-left:9%;">--input-use-seek</p>
+<p style="margin-left:9%;">--no-seek, --do-not-seek</p>
 
-<p style="margin-left:18%;">Use seek in input to do
---input-skip-bits, --input-skip-units and first
---input-pregap. Default is to read them and discard the
-result. Does not work if input is a pipe.</p>
+<p style="margin-left:18%;">Globally disable seeking on all
+inputs (both primary and merge streams), forcing streaming
+sequential reads. By default, <b>bdd</b> automatically
+attempts O(1) filesystem seek whenever the input stream is a
+seekable regular file or file descriptor, seamlessly falling
+back to sequential stream reads if the input is a pipe,
+socket, or FIFO.</p>
+
+<p style="margin-left:9%;">--input-no-seek,
+--no-input-seek</p>
+
+<p style="margin-left:18%;">Disable seeking specifically on
+the primary input stream, forcing sequential streaming
+reads.</p>
+
+<p style="margin-left:9%;">--input-use-seek,
+--input-seek</p>
+
+<p style="margin-left:18%;">Explicitly enable seeking on
+primary input (this is already the default whenever seeking
+is possible). Maintained for backwards compatibility.</p>
 
 <p style="margin-left:9%;">--input-reverse-bytes</p>
 
@@ -839,10 +857,20 @@ clearer in some cases.</p>
 was not used or the merge input did not end to the byte
 border.</p>
 
-<p style="margin-left:9%;">--merge-use-seek</p>
+<p style="margin-left:9%;">--merge-no-seek,
+--no-merge-seek</p>
 
-<p style="margin-left:18%;">Seek is used in skipping in
-merge input instead of reading skipped bytes.</p>
+<p style="margin-left:18%;">Disable seeking specifically on
+the merge input stream, forcing sequential streaming reads.
+By default, seeking is automatically attempted whenever the
+merge source is a seekable regular file.</p>
+
+<p style="margin-left:9%;">--merge-use-seek,
+--merge-seek</p>
+
+<p style="margin-left:18%;">Explicitly enable seeking on
+merge input (this is already the default whenever seeking is
+possible). Maintained for backwards compatibility.</p>
 
 <p style="margin-left:9%;">--merge-little-endian</p>
 
