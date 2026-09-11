@@ -117,8 +117,8 @@ def main():
     raw_24bit_data = bytearray()
     sample_values_24 = [0, 1000000, 4000000, -1000000, -4000000, 8388607, -8388608]
     for val in sample_values_24:
-        # 3 bytes, little-endian signed 24-bit
-        b = val.to_bytes(3, byteorder="little", signed=True)
+        # 3 bytes, big-endian signed 24-bit
+        b = val.to_bytes(3, byteorder="big", signed=True)
         raw_24bit_data.extend(b)
     raw24_path = os.path.join(data_dir, "sample_24bit.raw")
     with open(raw24_path, "wb") as f:

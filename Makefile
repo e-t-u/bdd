@@ -1,4 +1,4 @@
-.PHONY: all build release test lint fmt install clean bench docs pdf man-pdf pres-pdf
+.PHONY: all build release test lint fmt install clean bench docs pdf man-pdf pres-pdf contrib
 
 all: release
 
@@ -11,6 +11,9 @@ release:
 
 test: release
 	cargo test --all-targets --all-features
+
+contrib: release
+	$(MAKE) -C contrib test
 
 bench:
 	cargo bench
@@ -45,3 +48,4 @@ docs: pdf man-pdf pres-pdf
 clean:
 	cargo clean
 	rm -f bdd
+	$(MAKE) -C contrib clean

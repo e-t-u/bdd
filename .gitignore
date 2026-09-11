@@ -40,3 +40,7 @@ nosetests.xml
 # Rust
 /target/
 /bdd
+
+# Contrib test binaries
+/contrib/c/decode_media
+/contrib/c/decode_ai_weights
