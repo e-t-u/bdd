@@ -56,6 +56,34 @@ Most Unix tools (`dd`, `hexdump`, `od`, standard shell pipes) operate strictly o
 
 ## 1. Anatomy of a Bit Stream
 
+### The Default Baseline: 8-Bit Streaming
+
+The simplest invocation of `bdd` establishes its fundamental operating principle:
+
+```bash
+bdd < a > b
+```
+
+This command copies file `a` to file `b` in **default 8-bit units** (1 byte at a time) from standard input to standard output, without any modifications (acting like a byte-exact `cat` or `dd`).
+
+By default:
+- **Default Input Unit:** 8 bits (1 byte)
+- **Default Output Unit:** 8 bits (1 byte)
+- **Default Gaps & Skips:** 0 bits
+
+Every slicing and packing feature in `bdd` builds on top of this baseline. For example, if you change `--input-unit=3` without setting an output unit:
+
+```bash
+# Extracts 3-bit values and expands each into an 8-bit byte with 5 leading zero bits:
+bdd --input-unit=3 < a > b
+```
+
+Because the output unit remains at its default of 8 bits, each 3-bit input unit (`xxx`) is padded on the left with five zero bits (`00000xxx`) to produce an 8-bit byte on standard output.
+
+---
+
+### Units, Skips, and Gaps
+
 In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A stream is modeled as a repeating series of **units**:
 
 ```
@@ -67,9 +95,9 @@ In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A 
 └─────────────┴──────────────────┴──────────────┴──────────────────┴──────────────┘
 ```
 
-- **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit.
-- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit.
-- **`--input-gap=BITS`**: Number of bits skipped *between* successive units.
+- **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit (default: `8`).
+- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit (default: `0`).
+- **`--input-gap=BITS`**: Number of bits skipped *between* successive units (default: `0`).
 - **`--input-pregap=BITS`**: Initial gap before the first unit. A convenient shorthand identical to setting `--input-skip-bits` and `--input-gap` together.
 - **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
 
@@ -102,7 +130,7 @@ bdd --input-pregap=1 --input-unit=2 --input-gap=5 --output-hex < input.bin
 
 ### Unit Sizing and Alignment Rules
 
-- **Default Unit Size**: By default, input unit size is 8 bits and output unit size is 8 bits (`bdd < foo > bar` copies bytes unchanged).
+- **Default Unit Size**: As established above, both input unit size and output unit size default to 8 bits (`bdd < a > b` copies bytes unchanged).
 - **Expansion (Output > Input)**: If the output unit is larger than the input unit, the value is treated as an integer and the left (most significant) bits are padded with zeros.
 - **Truncation (Output < Input)**: If the output unit is smaller than the input unit, the left (most significant) bits are truncated.
 - **Stream Termination**: If the total bits written to an output byte stream are not a multiple of 8, the missing least-significant bits of the final byte are padded with zeros.
