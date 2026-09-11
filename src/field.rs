@@ -107,7 +107,11 @@ pub fn reverse_bits(val: &BigUint, bits: usize) -> BigUint {
             };
             let low = v & mask;
             let rev = low.reverse_bits() >> (64 - bits);
-            let res = if bits == 64 { rev } else { (high << bits) | rev };
+            let res = if bits == 64 {
+                rev
+            } else {
+                (high << bits) | rev
+            };
             return BigUint::from(res);
         }
     }

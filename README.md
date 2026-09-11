@@ -1,57 +1,25 @@
 # bdd — Bit Data Dump
 
-High-performance CLI tool and Rust library to unpack, manipulate, stream, merge, and pack arbitrary-width bitstreams.
+High-performance CLI tool and Rust library to interpret, manipulate, stream, merge, and pack arbitrary-width bitstreams.
 
-Originally written in Python 2, `bdd` was re-architected in modern Rust for speed, memory safety, and 20-year long-term maintainability with zero external C library dependencies.
+Originally created by Esa Turtiainen in Python 2 (2010), `bdd` was re-engineered in modern Rust for memory safety, 20-year maintainability, and multi-gigabit throughput with zero external C dependencies.
 
 ![Functionality Overview](diagram.png)
 
 ---
 
-## Core Concepts: Arbitrary Bit Fields & Tuples
+## What is bdd?
 
-### 1. Handling Arbitrary-Size Bit Fields
+Most Unix tools (`dd`, `hexdump`, `od`, standard shell pipes) operate strictly on byte (8-bit) or machine-word (16, 32, 64-bit) boundaries. Real-world binary streams—such as embedded sensor telemetry, cryptographic protocols, SDR/radio frames, network headers, compressed payloads, and legacy archives—frequently pack unaligned fields of arbitrary bit lengths (e.g., 1-bit flags, 3-bit opcodes, 12-bit ADC samples, or 57-bit mantissas).
 
-Traditional binary utilities (such as standard `dd`, `hexdump`, or language byte buffers) operate strictly on byte (8-bit) or machine-word (16, 32, 64-bit) boundaries. In contrast, real-world data sources—such as embedded sensor telemetry, cryptographic streams, radio protocols, network packet headers, legacy binary archives, and compressed bitstreams—frequently pack data into unaligned bit fields of arbitrary widths (e.g., 1-bit flags, 3-bit status codes, 12-bit ADC samples, 57-bit mantissas, or 1024-bit cryptographic integers).
-
-`bdd` handles bitstreams with single-bit precision through continuous stream buffering and arbitrary-precision integer arithmetic:
-
-- **Continuous Bit Accumulator**: Input bytes are drawn into a streaming bit accumulator buffer (`BigUint` buffer with bit tracking). Stream data is never forced into byte alignment; bits are shifted dynamically into the accumulator from the input source as required.
-- **Arbitrary-Precision Extraction**: When an $N$-bit field is requested by a pattern, `bdd` checks whether at least $N$ bits are available in the accumulator. If not, successive bytes are consumed from the source until sufficient bits are buffered. The top $N$ bits are then extracted via bitwise shifting and masking:
-  $$\text{value} = (\text{buffer} \gg (\text{bits\_in\_buffer} - N)) \ \& \ ((1 \ll N) - 1)$$
-  Any remaining unconsumed bits stay in the accumulator for subsequent fields, preserving exact bit alignment across arbitrary field boundaries with zero bit loss.
-- **Arbitrary Bignum Backing (`num-bigint`)**: All integer fields are backed by arbitrary-precision `BigUint` (unsigned) and `BigInt` (signed). Fields are never artificially clamped to 32 or 64 bits; they can span hundreds or thousands of bits without risk of integer overflow.
-- **Hardware-Accelerated Fast Path**: For fields $\le 64$ bits, `bdd` automatically selects native machine-register operations (such as direct CPU bit shifts and `u64::reverse_bits()`), ensuring raw I/O throughput is not throttled by bignum heap allocation overhead.
-
-### 2. The Bit Field as a Manipulable Tuple
-
-Once extracted, a unit of data is not treated as an opaque string of bits. Instead, **it is interpreted as a strongly-typed Tuple of discrete Fields** (analogous to a row in a relational database):
-
-- **Input Pattern Decomposition**: When given an input pattern such as `--input-pattern=2U3U3U`, `bdd` unpacks each 8-bit chunk of the bitstream into a 3-element tuple:
-  ```
-  Bitstream:  [ 0 1 | 0 1 0 | 1 1 0 ]
-  Tuple:      ( Field 0: 2U = 1,  Field 1: 3U = 2,  Field 2: 3U = 6 )
-  ```
-  Even a single unformatted unit such as `--input-unit=12` is internally a 1-element tuple: `( Field 0: 12U )`.
-
-- **In-Flight Tuple Manipulation**: Because the stream is processed as structured tuples, manipulators can inspect, transform, reorder, or filter individual fields before repacking:
-  - **Rearranging & Slicing (`--rearrange`)**: Reorder, duplicate, or drop fields by index (e.g. `--rearrange=1,0` swaps field 0 and field 1; negative indices like `-1,0` access fields relative to the end of the tuple).
-  - **Bit Truncation (`--remove-right`)**: Strips the $P$ least-significant bits from field $F$, useful for discarding low-order noise or downsampling sensor readings.
-  - **Range Limiting (`--cut-maxint`)**: Bounds field $F$ to $P$ bits (clamping values exceeding $2^P - 1$ to $2^P - 1$), useful for preventing overflow in downstream fixed-width systems.
-  - **Bitwise Masking (`--xor`)**: Applies a bitwise XOR key or inversion mask directly to a specific field in the tuple.
-  - **Sign/Magnitude Decomposition (`--abs`, `--sign`)**: Extracts absolute magnitude or isolates the sign bit (0 = positive, 1 = negative) from signed (`nS`) fields into dedicated tuple fields.
-
-- **Stream Merging & Interleaving**: Additional files or secondary streams can be merged into the tuple stream (`--merge-file`), enabling multi-channel interleaving and address/timestamp tagging.
-
-- **Packing & Sinks**: After manipulation, the resulting tuple is either:
-  - **Repacked** into a new arbitrary bitstream according to an `--output-pattern` (where an output bit accumulator re-assembles fields into aligned bytes, injecting constant padding bits `nZ`/`nO` as specified).
-  - **Serialized** directly to human-readable inspection formats: CSV tuples (`--output-tuples`), hex dump (`--output-hex`), bit-string dump (`--output-bits`), or raw integers (`--output-integers`).
+`bdd` is a **binary-dd for bitstreams**: it allows you to slice, unpack, inspect, transform, interleave, and repack streams of any bit width with single-bit precision.
 
 ```
                     [ Input Stream / File / Stdin ]
                                    │
                                    ▼
                        [ Input Bit Accumulator ]
+                          (Skip, Unit, Gap)
                                    │
                      (Unpack via --input-pattern)
                                    │
@@ -84,193 +52,341 @@ Once extracted, a unit of data is not treated as an opaque string of bits. Inste
 
 ---
 
-## Features
+## 1. Anatomy of a Bit Stream
 
-- **Arbitrary Bit-Widths**: Process bitfields of any length (not restricted to 8, 16, 32, or 64-bit boundaries).
-- **Flexible Pattern Grammar**: Declarative input and output packing patterns supporting unsigned/signed integers, raw characters, floats, doubles, bit-reversed bytes, and padding constants.
-- **Stream Generation & Merging**: Generate synthetic bit sequences (zeroes, ones, linear counters, PRNG noise) and interleave/merge multiple binary files.
-- **Stream Transformations**: Rearrange field ordering, truncate bit ranges, clip integers to maximum bit bounds, execute bitwise XOR masks, and perform sign/magnitude conversions.
-- **Multiple Output Formats**: Output raw binary bytes, hexadecimal representations, ASCII bit dumps (`0`/`1`), formatted integers, or CSV tuples.
-- **Pure Safe Rust Core**: Clean library-first architecture (`src/lib.rs`) with typed error handling, no panics, and zero unsafe code.
+In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A stream is modeled as a repeating series of **units**:
 
----
-
-## Installation
-
-### Prerequisites
-
-- Rust 1.70+ (`cargo`, `rustc`)
-
-### Build & Install
-
-```bash
-# Build optimized release binary
-make release
-
-# Or install directly to ~/.cargo/bin
-make install
+```
+ Stream Start
+      │
+      ▼
+┌─────────────┬──────────────────┬──────────────┬──────────────────┬──────────────┐
+│  Skip Bits  │   Unit (Size)    │     Gap      │   Unit (Size)    │     Gap      │  ...
+└─────────────┴──────────────────┴──────────────┴──────────────────┴──────────────┘
 ```
 
-To build manually with Cargo:
+- **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit.
+- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit.
+- **`--input-gap=BITS`**: Number of bits skipped *between* successive units.
+- **`--input-pregap=BITS`**: Initial gap before the first unit. A convenient shorthand identical to setting `--input-skip-bits` and `--input-gap` together.
+- **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
+
+### Slicing Bits from Byte Streams
+
+Consider extracting specific sub-fields from a continuous byte stream:
+
+```
+ Byte 0                                 Byte 1
+┌───────────┬────────────┬─────────────┬────────────┬─────────────┐
+│  Pre-Gap  │    Unit    │     Gap     │    Unit    │     Gap     │  ...
+│  (1 bit)  │  (2 bits)  │  (5 bits)   │  (2 bits)  │  (5 bits)   │
+└───────────┴────────────┴─────────────┴────────────┴─────────────┘
+```
 
 ```bash
-cargo build --release
-cp target/release/bdd ~/.local/bin/bdd
+bdd --input-pregap=1 --input-unit=2 --input-gap=5 --output-hex < input.bin
+```
+
+#### Common Slicing Recipes
+
+- **Extract the Most Significant Bit of every byte** (expands 1 bit to an 8-bit byte `0x00` or `0x01`):
+  ```bash
+  bdd --input-unit=1 --input-gap=7 --output-unit=8 < input.bin
+  ```
+- **Pack the Least Significant Bit of bytes into a dense bitstream** (e.g., 9 bytes with LSB=1 become two bytes `0xFF` and `0x80`):
+  ```bash
+  bdd --input-pregap=7 --input-unit=1 --output-unit=1 < input.bin
+  ```
+
+### Unit Sizing and Alignment Rules
+
+- **Default Unit Size**: By default, input unit size is 8 bits and output unit size is 8 bits (`bdd < foo > bar` copies bytes unchanged).
+- **Expansion (Output > Input)**: If the output unit is larger than the input unit, the value is treated as an integer and the left (most significant) bits are padded with zeros.
+- **Truncation (Output < Input)**: If the output unit is smaller than the input unit, the left (most significant) bits are truncated.
+- **Stream Termination**: If the total bits written to an output byte stream are not a multiple of 8, the missing least-significant bits of the final byte are padded with zeros.
+
+---
+
+## 2. The Tuple Concept & Pattern Grammar
+
+Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a unit into named fields called a **Tuple** (analogous to a structured row in a relational database):
+
+```
+ Raw Unit: 0 0 1 1 1 0 1 1 1  (9 bits)
+ Pattern:  3U 1x 2u 3M
+           │   │  │  │
+           │   │  │  └─► 3-bit Signed with Sign-Split  ──► Yields TWO fields: [1 (sign), 1 (abs)]
+           │   │  └────► 2-bit Unsigned (Bit-Reversed) ──► Field value: 1
+           │   └───────► 1-bit Skip                    ──► Discarded (not in tuple)
+           └───────────► 3-bit Unsigned Integer        ──► Field value: 1
+
+ Unpacked Tuple: (1, 1, 1, 1)
+```
+
+### Pattern Specifiers Reference
+
+Every field in an `--input-pattern` or `--output-pattern` is specified as `<bits><type>`:
+
+| Code | Name | Description | Allowed Bit Widths | Valid Context |
+|---|---|---|---|---|
+| `nU` | Unsigned Integer | Standard big-endian unsigned integer | Any positive integer | Input / Output |
+| `nu` | Unsigned (Reversed) | Unsigned integer with reversed bit order | Any positive integer | Input / Output |
+| `nS` | Signed Integer | Two's complement signed integer (returns negative values) | Any positive integer | Input / Output |
+| `ns` | Signed (Reversed) | Two's complement with reversed bit order | Any positive integer | Input / Output |
+| `nM` | Sign-Split Integer | Two's complement integer split into two fields: `[sign, abs(val)]` | Any positive integer | Input / Output |
+| `nm` | Sign-Split (Reversed)| Sign-split integer with reversed bit order | Any positive integer | Input / Output |
+| `32F`| 32-bit Float | IEEE 754 single-precision float | Exactly 32 bits | Input / Output |
+| `32f`| 32-bit Float (Rev) | IEEE 754 single-precision float (reversed bytes) | Exactly 32 bits | Input / Output |
+| `64D`| 64-bit Double | IEEE 754 double-precision float | Exactly 64 bits | Input / Output |
+| `64d`| 64-bit Double (Rev)| IEEE 754 double-precision float (reversed bytes) | Exactly 64 bits | Input / Output |
+| `nC` | Characters | Raw byte/character sequence (retains byte fidelity) | Multiples of 8 bits | Input / Output |
+| `nc` | Characters (Reversed)| Character sequence with bit-reversed bytes | Multiples of 8 bits | Input / Output |
+| `nx` | Skip / Discard | Discards $n$ bits from input without placing them in the tuple | Any positive integer | Input only |
+| `nz` | Fill Zeros | Inserts $n$ constant zero bits | Any positive integer | Output only |
+| `no` | Fill Ones | Inserts $n$ constant one bits | Any positive integer | Output only |
+| `nr` | Fill Random | Inserts $n$ pseudo-random bits | Any positive integer | Output only |
+
+### Distinction Between `S` and `M`
+
+- **`S` (Signed Integer)**: Directly represents negative values (e.g., `-5`). When printed via `--output-tuples`, it outputs `-5`.
+- **`M` (Magnitude & Sign Split)**: Decodes a signed two's complement number into **two separate unsigned fields**:
+  1. `sign`: `0` for positive, `1` for negative.
+  2. `magnitude`: `abs(value)`.
+  This allows arithmetic, filtering, or routing based on sign and absolute value independently.
+
+---
+
+## 3. In-Flight Tuple Manipulation
+
+Once unpacked into a tuple, fields can be transformed using pipeline manipulators before repacking. Fields are referenced by index starting from `0`. Negative indices count from the end of the tuple (`-1` = last field, `-2` = second to last):
+
+### Manipulators
+
+- **`--rearrange=F0,F1,...`**: Reorders, duplicates, or selects specific fields.
+  ```bash
+  # Swap field 0 and field 1:
+  bdd --input-pattern=1U2U --rearrange=1,0 --output-pattern=2U1U
+  ```
+- **`--cut-maxint=FIELD,MAX`**: Clamps field value within `[-MAX, MAX]`.
+- **`--remove-right=FIELD,BITS`**: Bitwise right-shifts field by `BITS`, stripping low-order bits.
+- **`--xor=FIELD,BITS`**: Bitwise XORs field with a mask of `BITS` ones (inverts $N$ bits).
+- **`--abs=FIELD`**: Converts a signed field to its absolute value.
+- **`--sign=FIELD`**: Isolates the sign bit of a signed field (`0` = positive, `1` = negative).
+
+### Advanced Pipeline Recipe
+
+*Problem from presentation:* Input is a stream of signed bytes (`8M`). We want to clamp the value so $-128$ becomes $-127$, isolate the magnitude, and extract only the most significant bit of the magnitude:
+
+```bash
+bdd --input-pattern=8M --rearrange=-1 --cut-maxint=0,127 --remove-right=0,6 --output-unit=1 < input.bin
+```
+
+Explanation:
+1. `8M` produces `[sign, magnitude]`.
+2. `--rearrange=-1` selects only the last field (magnitude).
+3. `--cut-maxint=0,127` clamps the magnitude to 127.
+4. `--remove-right=0,6` shifts right by 6 bits, leaving the 7th bit (MSB of magnitude).
+5. `--output-unit=1` outputs the single bit.
+
+---
+
+## 4. Synthetic ("Fake") Streams & Text Formats
+
+`bdd` can synthesize bitstreams without requiring input files, and output in human-readable or script-friendly formats:
+
+### Synthetic Stream Sources
+
+- **`--input-zeros` (`-0`)**: Endless stream of zero bits.
+- **`--input-ones` (`-1`)**: Endless stream of one bits.
+- **`--input-random` (`-r`)**: Pseudo-random bits (PRNG).
+- **`--input-counter` (`-c`)**: Sequential integer counter starting at 0, incrementing by 1 per unit.
+- **`--count=N`**: Limit processing to $N$ units (0 = infinite).
+- **`--skip=N`**: Skip $N$ initial units before processing.
+
+### Human-Readable & Script Sinks
+
+- **`--output-hex` (`-x`)**: Formatted hexadecimal representation per unit, grouped neatly into power-of-two line widths.
+- **`--output-bits` (`-b` / `--output-bit`)**: ASCII bit strings (`'0'` and `'1'`) per unit.
+- **`--output-integers` (`-i` / `--output-integer`)**: One unsigned decimal integer per line (ideal for Unix pipelines: `awk`, `sort`, `uniq`).
+- **`--output-tuples` (`-T` / `--output-tuple`)**: Comma-separated values per unit.
+- **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples.
+
+### Packing from Text & Tuples
+
+```bash
+# Pack octal numbers from text tuples into binary:
+printf "1,2,3\n3,7,7\n" | bdd --input-tuples --output-pattern='2U3U3U' | od -t o1
+# Outputs: 123 377
+
+# Pack two 4-bit numbers into hex bytes:
+echo -en "1,2\n3,4" | bdd --input-tuples --output-pattern=4U4U | od -t x1
+# Outputs: 12 34
+
+# Pack text numbers into 64-bit IEEE double-precision floats:
+printf "1.0\n2.0\n" | bdd --input-tuples --output-pattern=64D > doubles.bin
 ```
 
 ---
 
-## Pattern Grammar
+## 5. De-mystifying Bit Reversals
 
-Bit patterns specify the layout of fields within each input or output unit. A pattern consists of one or more field specifications, each written as `<bits><type>`:
+Reversing bits in binary processing can easily become confusing. `bdd` cleanly isolates bit reversals into four distinct operational layers:
 
-| Specifier | Description | Allowed Bit Widths |
-|---|---|---|
-| `nU` | Unsigned integer | Any positive integer (e.g. `2U`, `12U`, `128U`) |
-| `nS` | Signed integer (two's complement) | Any positive integer |
-| `nC` | Character / byte string | Multiples of 8 bits (e.g. `8C`, `32C`) |
-| `nc` | Character string with bit-reversed bytes | Multiples of 8 bits |
-| `32F` | IEEE 754 single-precision float | Exactly 32 bits |
-| `64D` | IEEE 754 double-precision float | Exactly 64 bits |
-| `nZ` / `nz` | Constant zeroes (padding) | Output patterns only |
-| `nO` / `no` | Constant ones (padding) | Output patterns only |
+```
+[ Input Byte Stream ]
+        │
+  (1)   ├─► --reverse-input-bytes   (Reverses bits within each 8-bit byte read)
+        ▼
+[ Input Units ]
+        │
+  (2)   ├─► --reverse-input-units   (Reverses all bits across the entire unit)
+        ▼
+[ Tuple Fields ]
+        │
+  (3)   ├─► Lowercase Pattern Codes (u, s, m, c - reverses bits within specific field)
+        ▼
+[ Output Units ]
+        │
+  (4)   ├─► --reverse-output-units  (Reverses all bits across the entire output unit)
+        ▼
+[ Output Byte Stream ]
+        │
+  (5)   └─► --reverse-output-bytes  (Reverses bits within each 8-bit byte written)
+```
 
-### Units vs Patterns
-
-- `--input-unit=N` is a shorthand for `--input-pattern=NU`.
-- `--output-unit=N` is a shorthand for `--output-pattern=NU`.
+- **`--input-little-endian`**: Shorthand combining `--reverse-input-bytes` and `--reverse-input-units`.
+- **`--output-little-endian`**: Shorthand combining `--reverse-output-bytes` and `--reverse-output-units`.
 
 ---
 
-## Command Line Usage
+## 6. Stream Merging & Interleaving
+
+The merge stream reads a secondary file and interleaves its data into the primary stream:
+
+```
+ Primary Stream Units:  [ Unit 0 ]              [ Unit 1 ]              [ Unit 2 ]
+                             │                      │                      │
+ Merge Stream Units:         │       [ Merge 0 ]    │       [ Merge 1 ]    │       [ Merge 2 ]
+                             ▼            ▼         ▼            ▼         ▼            ▼
+ Interleaved Output:    [ Unit 0 ]  [ Merge 0 ] [ Unit 1 ]  [ Merge 1 ] [ Unit 2 ]  [ Merge 2 ]
+```
+
+- **`--merge-file=PATH`**: Interleave data from a secondary file (`"-"` for stdin).
+- **`--merge-unit=BITS`**: Size of merge units in bits (default: 8).
+- **`--merge-copy-first=BITS`**: Copies an initial bit header/preamble from the merge file *before* starting the interleaved loop.
+
+### Example: Hex Dump with Interleaved Memory Addresses
+
+Interleave a 12-bit linear address counter with actual data bytes from `/etc/passwd`:
+
+```bash
+bdd --input-counter --count=16 --input-unit=12 --output-unit=12 --merge-file=/etc/passwd --output-hex
+```
+
+Output:
+```
+000 72 001 6f 002 6f 003 74 004 3a 005 78 006 3a 007 30
+008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a
+```
+
+---
+
+## 7. Command Line Options Reference
 
 ```
 Usage: bdd [OPTIONS] [FILE]
 
 Arguments:
-  [FILE]  Input file (defaults to standard input)
+  [FILE]  Input file (defaults to standard input '-')
 
-Options:
-  -p, --input-pattern <PATTERN>    Bit pattern to unpack input
+Input Unit & Pattern Options:
+  -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
   -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
-  -t, --input-tuples               Read fields from comma-separated input lines
-  -c, --input-counter              Generate sequential counter numbers
+      --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
+      --input-gap <BITS>           Bit gap skipped between units [default: 0]
+      --input-pregap <BITS>        Shorthand for initial skip & gap [default: 0]
+      --input-assert-aligned       Error if EOF is not byte-aligned
+
+Synthetic Stream Sources:
+  -c, --input-counter              Generate sequential counter numbers (0, 1, 2...)
   -0, --input-zeros                Generate endless stream of zero bits
   -1, --input-ones                 Generate endless stream of one bits
   -r, --input-random               Generate pseudo-random bits
-      --skip-bits <BITS>           Skip initial bits before processing [default: 0]
-      --skip <UNITS>               Skip initial units before processing [default: 0]
-      --count <COUNT>              Process at most COUNT units (0 = infinite) [default: 0]
-      --reverse-input-bytes        Reverse bit order of each input byte
-      --reverse-input-units        Reverse bit order of each input unit
+  -t, --input-tuples               Read comma-separated tuple lines from text input
+      --skip <UNITS>               Skip initial N units [default: 0]
+      --count <COUNT>              Process at most N units (0 = infinite) [default: 0]
+
+Bit Reversal Options:
+      --reverse-input-bytes        Reverse bit order within each input byte
+      --reverse-input-units        Reverse bit order across entire input unit
+      --input-little-endian        Combined byte and unit reversal for input
+      --reverse-output-bytes       Reverse bit order within each output byte
+      --reverse-output-units       Reverse bit order across entire output unit
+      --output-little-endian       Combined byte and unit reversal for output
+
+Tuple Manipulators:
+      --rearrange <FIELDS>         Reorder output fields (e.g. "1,0" or "-1,0")
+      --cut-maxint <F,MAX>         Clamp field F to [-MAX, MAX]
+      --remove-right <F,BITS>      Right-shift field F by BITS
+      --xor <F,BITS>               Bitwise XOR field F with mask of BITS ones
+      --abs <FIELD>                Replace signed field F with abs(F)
+      --sign <FIELD>               Replace signed field F with sign bit (0/1)
+
+Output Unit & Pattern Options:
       --output-pattern <PATTERN>   Bit pattern to pack output
       --output-unit <BITS>         Output unit size in bits (shorthand for <BITS>U)
-  -x, --output-hex                 Output units as hexadecimal strings
-  -b, --output-bit                 Output units as ASCII bit strings ('0' and '1')
-  -i, --output-integer             Output unsigned integer representation per unit
+  -x, --output-hex                 Output units as formatted hexadecimal strings
+  -b, --output-bits                Output units as ASCII bit strings ('0' and '1')
+  -i, --output-integers            Output unsigned integer per unit (one per line)
   -T, --output-tuples              Output fields as comma-separated tuples
-      --reverse-output-bytes       Reverse bit order of each output byte
-      --reverse-output-units       Reverse bit order of each output unit
-      --rearrange <FIELDS>         Reorder output fields by index (e.g. "1,0" or "-1,0")
-      --cut-maxint <F,P>           Clip field F to fit in P bits (F:field index, P:bit width)
-      --remove-right <F,P>         Remove P least-significant bits from field F
-      --xor <F,P>                  Bitwise XOR field F with value P
-      --abs <FIELD>                Convert signed field to absolute value
-      --sign <FIELD>               Extract sign bit (0 = positive, 1 = negative)
-      --merge-file <PATH>          Interleave stream from another file
+
+Merge Options:
+      --merge-file <PATH>          Interleave stream from secondary file
+      --merge-unit <BITS>          Bit width of each merge unit [default: 8]
+      --merge-copy-first <BITS>    Copy initial header bits from merge file first
+
+General:
   -h, --help                       Print help
   -V, --version                    Print version
 ```
 
 ---
 
-## Examples
+## 8. Performance & Throughput Benchmarks
 
-### 1. Simple Bit Inspection & Hex Dumps
+`bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
 
-Extract individual bits from standard input and display them:
+Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
 
-```bash
-echo -n "A" | bdd --input-unit=8 --output-bits
-# Outputs: 01000001
-```
-
-Print hexadecimal values of 12-bit unpacked units:
-
-```bash
-bdd --input-unit=12 --output-hex < input.bin
-```
-
-### 2. Endianness & Byte Swapping
-
-Swap every pair of adjacent bytes in a binary stream:
-
-```bash
-bdd --input-pattern=8U8U --rearrange=1,0 --output-pattern=8U8U < input.bin > swapped.bin
-```
-
-Reverse bit order within every byte:
-
-```bash
-bdd --reverse-input-bytes < input.bin > bits_reversed.bin
-```
-
-### 3. Bitfield Packing and Unpacking
-
-Pack non-byte-aligned numbers into arbitrary bit containers:
-
-```bash
-# Combine 2-bit, 3-bit, and 3-bit fields into single 8-bit octets:
-printf "1,2,3\n3,7,7\n" | bdd --input-tuples --output-pattern='2U3U3U' | od -t o1
-# Outputs: 123 377
-```
-
-Unpack 10-bit ADC sensor data into comma-separated tuples:
-
-```bash
-bdd --input-pattern=10U --output-tuples < sensor.raw
-```
-
-### 4. Synthetic Stream Generation
-
-Generate 16 sequential bytes formatted as hex:
-
-```bash
-bdd --input-counter --count=16 --output-hex
-# Outputs: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
-```
-
-Generate 1 megabyte of zero padding:
-
-```bash
-bdd --input-zeros --count=$((1024 * 1024)) --output-unit=8 > 1MB_zeros.bin
-```
-
-### 5. Stream Merging & Interleaving
-
-Interleave a sequential index address with data bytes from `/etc/passwd`:
-
-```bash
-bdd --input-counter --count=16 --input-unit=12 --output-unit=12 --merge-file=/etc/passwd --output-hex
-```
+| Operation | Total Volume | Throughput (bits/s) | Throughput (Bytes/s) | Notes |
+|---|---|---|---|---|
+| **Hardware 64-bit Bit Reversal** | 128 Mbits | **16.00 Gbps** | 2,000 MB/s | Direct CPU `u64::reverse_bits()` |
+| **Bignum 1024-bit Packing/Unpacking** | 10.2 Mbits | **5.27 Gbps** | 658.6 MB/s | Large-block bignum bitfield packing |
+| **Bignum 256-bit Packing/Unpacking** | 12.8 Mbits | **1.90 Gbps** | 237.2 MB/s | SHA-256 size field packing/unpacking |
+| **Synthetic 8-bit Linear Stream** | 16.0 Mbits | **234.5 Mbps** | 29.3 MB/s | Continuous bit generation & sink flush |
+| **1-bit Single-Bit Resolution Stream** | 0.5 Mbits | **43.3 Mbps** | 5.4 MB/s | Single-bit slice accumulation & packing |
+| **Bignum 1024-bit Bit Reversal** | 5.1 Mbits | **39.4 Mbps** | 4.9 MB/s | Full arbitrary-precision bit reversal |
+| **Unaligned 3-bit to 8-bit Extraction** | 3.0 Mbits | **39.0 Mbps** | 4.9 MB/s | Cross-byte boundary accumulation |
+| **Tuple Pipeline (`2U3U3U` -> Rearrange)** | 2.0 Mbits | **29.7 Mbps** | 3.7 MB/s | Multi-field unpack, reorder & repack |
 
 ---
 
-## Architecture & Codebase Design
+## 9. Architecture & Codebase Design
 
-The codebase is engineered defensively for decades-long maintainability:
+The Rust implementation is organized cleanly into modular crates:
 
 ```
 src/
 ├── lib.rs          # Public library crate interface
-├── main.rs         # Lean executable entry point & exit code translation
+├── main.rs         # Thin 18-line executable wrapper
 ├── error.rs        # Strongly-typed BddError hierarchy
+├── counter.rs      # Unit and skip counting logic
 ├── field.rs        # Arbitrary-precision Field enum & hardware-accelerated bit-reversals
 ├── pattern.rs      # Grammar parser, TupleUnpacker, and TuplePacker
 ├── stream.rs       # Stream generators (File, Counter, Zeros, Ones, Random, Tuples)
 ├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV Tuples)
 ├── manipulator.rs  # Field transformations (Rearrange, Xor, CutMaxint, Abs, Sign)
-├── cli.rs          # Clap CLI definition & mutual-exclusion configuration validation
+├── cli.rs          # Clap CLI definition & validation rules
 └── engine.rs       # End-to-end pipeline execution orchestrator
 ```
 
@@ -279,11 +395,11 @@ src/
 1. **Strict Type Safety**: All errors flow through `BddError`. Functions return `Result<T, BddError>` instead of panicking or calling `std::process::exit`.
 2. **Fast-Path Bit Reversal**: Sub-64-bit integer bit reversals execute via direct hardware `u64::reverse_bits()`, falling back to `BigUint` bit arithmetic only when necessary.
 3. **Byte-Level String Integrity**: The `C` and `c` pattern types store raw bytes internally (`Field::Bytes`) rather than lossy UTF-8 conversions, guaranteeing bit-perfect roundtrips.
-4. **Automated Verification**: Integrated test runner runs both native Rust unit tests and legacy golden-file integration tests.
+4. **Automated Verification**: Integrated test runner runs native Rust unit tests, bignum tests, and legacy golden-file integration tests.
 
 ---
 
-## Development & Testing
+## 10. Development, Testing & Documentation
 
 Run the test suite:
 
@@ -306,28 +422,7 @@ make lint
 make check-fmt
 ```
 
----
-
-## Performance & Throughput Benchmarks
-
-`bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
-
-Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
-
-| Operation | Total Volume | Throughput (bits/s) | Throughput (Bytes/s) | Notes |
-|---|---|---|---|---|
-| **Hardware 64-bit Bit Reversal** | 640 Mbits | **14.42 Gbps** | 1,803 MB/s | Direct CPU `u64::reverse_bits()` |
-| **Bignum 1024-bit Packing/Unpacking** | 25.6 Mbits | **6.49 Gbps** | 811.5 MB/s | Large-block bignum bitfield packing |
-| **Bignum 256-bit Packing/Unpacking** | 25.6 Mbits | **1.73 Gbps** | 216.1 MB/s | SHA-256 size field packing/unpacking |
-| **Synthetic 8-bit Linear Stream** | 80 Mbits | **270.1 Mbps** | 33.8 MB/s | Continuous bit generation & sink flush |
-| **Bignum 1024-bit Bit Reversal** | 25.6 Mbits | **43.1 Mbps** | 5.4 MB/s | Full arbitrary-precision bit reversal |
-| **1-bit Single-Bit Resolution Stream** | 2.0 Mbits | **39.2 Mbps** | 4.9 MB/s | Single-bit slice accumulation & packing |
-| **Unaligned 3-bit to 8-bit Extraction** | 9.0 Mbits | **39.1 Mbps** | 4.9 MB/s | Cross-byte boundary accumulation |
-| **Tuple Pipeline (`2U3U3U` -> Rearrange)** | 8.0 Mbits | **33.9 Mbps** | 4.2 MB/s | Multi-field unpack, reorder & repack |
-
----
-
-## Documentation & PDF Generation
+### Documentation & PDF Generation
 
 All project documentation compiles into clean, print-ready vector PDF and HTML files:
 
