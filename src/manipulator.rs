@@ -301,4 +301,41 @@ mod tests {
         let out_sign = sign_m.manipulate(vec![Field::Int(BigInt::from(-99))]);
         assert_eq!(out_sign, vec![Field::UInt(BigUint::from(1u32))]);
     }
+
+    #[test]
+    fn test_large_bignum_manipulators() {
+        // CutMaxint with 256-bit threshold
+        let max_256: BigInt = (BigInt::one() << 256usize) - BigInt::one();
+        let manip_cut = CutMaxintManipulator::new(&format!("0,{}", max_256)).unwrap();
+        let huge_val: BigInt = BigInt::one() << 300usize;
+        let out_cut = manip_cut.manipulate(vec![Field::Int(huge_val)]);
+        assert_eq!(out_cut, vec![Field::UInt(max_256.to_biguint().unwrap())]);
+
+        // RemoveRight with 256 bits shift
+        let manip_shift = RemoveRightManipulator::new("0,256").unwrap();
+        let val_512: BigInt = (BigInt::from(42u32) << 256usize) | BigInt::from(12345u32);
+        let out_shift = manip_shift.manipulate(vec![Field::Int(val_512)]);
+        assert_eq!(out_shift, vec![Field::UInt(BigUint::from(42u32))]);
+
+        // Xor with 256-bit mask (256 ones)
+        let manip_xor = XorManipulator::new("0,256").unwrap();
+        let val = BigInt::from(0xAAu32);
+        let out_xor = manip_xor.manipulate(vec![Field::Int(val.clone())]);
+        let expected_xor = val ^ ((BigInt::one() << 256usize) - BigInt::one());
+        assert_eq!(
+            out_xor,
+            vec![Field::UInt(expected_xor.to_biguint().unwrap())]
+        );
+
+        // Rearrange with 1000-element tuple
+        let tuple_1000: Vec<Field> = (0..1000)
+            .map(|i| Field::UInt(BigUint::from(i as u32)))
+            .collect();
+        let manip_rearrange = RearrangeManipulator::new("999,-1,0").unwrap();
+        let out_rearrange = manip_rearrange.manipulate(tuple_1000);
+        assert_eq!(out_rearrange.len(), 3);
+        assert_eq!(out_rearrange[0], Field::UInt(BigUint::from(999u32)));
+        assert_eq!(out_rearrange[1], Field::UInt(BigUint::from(999u32))); // -1 is index 999
+        assert_eq!(out_rearrange[2], Field::UInt(BigUint::from(0u32)));
+    }
 }

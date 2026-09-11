@@ -258,4 +258,60 @@ mod tests {
         }
         assert_eq!(String::from_utf8(buf).unwrap(), "05 \n");
     }
+
+    #[test]
+    fn test_large_unit_sinks() {
+        // Hex sink with 256-bit value
+        let val_256: BigUint = (BigUint::one() << 255usize) | BigUint::from(0xABu32);
+        let mut hex_buf = Vec::new();
+        {
+            let mut sink = HexOutputStream::new(&mut hex_buf);
+            sink.write_bits(val_256.clone(), 256).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let hex_str = String::from_utf8(hex_buf).unwrap();
+        // 256 bits = 64 hex characters + trailing space + newline
+        assert_eq!(hex_str.trim().len(), 64);
+        assert!(hex_str.starts_with("8000"));
+        assert!(hex_str.trim().ends_with("00ab"));
+
+        // Bit sink with 128 bits
+        let val_128: BigUint = (BigUint::one() << 127usize) | BigUint::one();
+        let mut bit_buf = Vec::new();
+        {
+            let mut sink = BitOutputStream::new(&mut bit_buf);
+            sink.write_bits(val_128, 128).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let bit_str = String::from_utf8(bit_buf).unwrap();
+        assert_eq!(bit_str.trim().len(), 128);
+        assert!(bit_str.starts_with('1'));
+        assert!(bit_str.trim().ends_with('1'));
+
+        // Integer sink with 256-bit number
+        let mut int_buf = Vec::new();
+        {
+            let mut sink = IntegerOutputStream::new(&mut int_buf);
+            sink.write_bits(val_256.clone(), 256).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let int_str = String::from_utf8(int_buf).unwrap();
+        assert_eq!(int_str.trim(), val_256.to_string());
+
+        // Tuple sink with 500 fields
+        let tuple_500: Vec<Field> = (0..500)
+            .map(|i| Field::UInt(BigUint::from(i as u32)))
+            .collect();
+        let mut tuple_buf = Vec::new();
+        {
+            let mut sink = TupleDirectOutput::new(&mut tuple_buf);
+            sink.write_tuple(&tuple_500).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let tuple_str = String::from_utf8(tuple_buf).unwrap();
+        let parts: Vec<&str> = tuple_str.trim().split(',').collect();
+        assert_eq!(parts.len(), 500);
+        assert_eq!(parts[0], "0");
+        assert_eq!(parts[499], "499");
+    }
 }

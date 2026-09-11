@@ -150,6 +150,26 @@ mod tests {
         let rev = reverse_bits(&big, 101);
         // Bit 0 was 1 (now bit 100), bit 100 was 1 (now bit 0)
         assert_eq!(rev, big);
+
+        // 256 bits
+        let val_256 = (BigUint::one() << 255) | (BigUint::one() << 100) | BigUint::one();
+        let rev_256 = reverse_bits(&val_256, 256);
+        let rev_rev_256 = reverse_bits(&rev_256, 256);
+        assert_eq!(rev_rev_256, val_256);
+        assert_eq!((&rev_256 >> 255) & BigUint::one(), BigUint::one());
+        assert_eq!(&rev_256 & BigUint::one(), BigUint::one());
+
+        // 1024 bits
+        let val_1024 = (BigUint::one() << 1023) | (BigUint::one() << 512);
+        let rev_1024 = reverse_bits(&val_1024, 1024);
+        assert_eq!(reverse_bits(&rev_1024, 1024), val_1024);
+        assert_eq!(&rev_1024 & BigUint::one(), BigUint::one());
+        assert_eq!((&rev_1024 >> 511) & BigUint::one(), BigUint::one());
+
+        // 4096 bits
+        let val_4096 = (BigUint::one() << 4095) | BigUint::from(0xDEADBEEFu64);
+        let rev_4096 = reverse_bits(&val_4096, 4096);
+        assert_eq!(reverse_bits(&rev_4096, 4096), val_4096);
     }
 
     #[test]

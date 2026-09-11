@@ -360,4 +360,60 @@ mod tests {
         let res = packer.pack(vec![Field::UInt(BigUint::from(1u32))]);
         assert_eq!(res, Err(BddError::InputHasLessFields));
     }
+
+    #[test]
+    fn test_large_units() {
+        // Test 1024-bit and 4096-bit unit packing and unpacking
+        let unpacker = TupleUnpacker::new("1024U").unwrap();
+        assert_eq!(unpacker.total_bits, 1024);
+
+        let big_val: BigUint =
+            (BigUint::one() << 1023usize) | (BigUint::one() << 500usize) | BigUint::from(12345u32);
+        let tuple = unpacker.unpack(big_val.clone());
+        assert_eq!(tuple.len(), 1);
+        assert_eq!(tuple[0], Field::UInt(big_val.clone()));
+
+        let packer = TuplePacker::new("1024U").unwrap();
+        let packed = packer.pack(tuple).unwrap();
+        assert_eq!(packed, big_val);
+
+        // 4096-bit unit
+        let unpacker_4096 = TupleUnpacker::new("4096U").unwrap();
+        assert_eq!(unpacker_4096.total_bits, 4096);
+        let big_4096: BigUint = (BigUint::one() << 4095usize) | BigUint::one();
+        let tuple_4096 = unpacker_4096.unpack(big_4096.clone());
+        assert_eq!(tuple_4096[0], Field::UInt(big_4096.clone()));
+        let packer_4096 = TuplePacker::new("4096U").unwrap();
+        assert_eq!(packer_4096.pack(tuple_4096).unwrap(), big_4096);
+    }
+
+    #[test]
+    fn test_large_tuple_size() {
+        // 1000 fields of 1U = 1000 bits total
+        let pattern = "1U".repeat(1000);
+        let unpacker = TupleUnpacker::new(&pattern).unwrap();
+        assert_eq!(unpacker.total_bits, 1000);
+
+        // Value with alternating bits (even bits 1, odd bits 0)
+        let mut big_val = BigUint::zero();
+        for i in 0..1000 {
+            if i % 2 == 0 {
+                big_val |= BigUint::one() << i;
+            }
+        }
+
+        let tuple = unpacker.unpack(big_val.clone());
+        assert_eq!(tuple.len(), 1000);
+        for (i, field) in tuple.iter().enumerate() {
+            // Note: Tuple unpacker reads from MSB to LSB.
+            // bit (999 - i)
+            let bit_idx = 999 - i;
+            let expected = if bit_idx % 2 == 0 { 1u32 } else { 0u32 };
+            assert_eq!(*field, Field::UInt(BigUint::from(expected)));
+        }
+
+        let packer = TuplePacker::new(&pattern).unwrap();
+        let packed = packer.pack(tuple).unwrap();
+        assert_eq!(packed, big_val);
+    }
 }
