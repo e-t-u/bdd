@@ -149,34 +149,192 @@ fn set_bigint_field(tuple: &mut [Field], idx: usize, val: BigInt) {
     };
 }
 
-/// Clamps field value within `[-maxint, maxint]`.
+/// Rounding and overflow handling modes for CutMaxintManipulator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutMode {
+    /// Saturate / clamp within [-maxint, maxint] (default)
+    Saturate,
+    /// Wrap around modulo bounds
+    Wrap,
+    /// Reset value to zero if out of bounds
+    Zero,
+    /// Drop/discard tuple if value is out of bounds
+    Drop,
+    /// Truncate magnitude toward zero
+    Trunc,
+    /// Round toward negative infinity (floor)
+    Floor,
+    /// Round toward positive infinity (ceil)
+    Ceil,
+    /// Round to nearest neighbor, ties away from zero (standard round)
+    Round,
+    /// Round to nearest neighbor, ties to even digit (banker's / IEEE 754 default)
+    RoundTiesEven,
+}
+
+impl std::str::FromStr for CutMode {
+    type Err = BddError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().replace('-', "_").as_str() {
+            "saturate" | "saturating" | "clamp" | "clamping" => Ok(CutMode::Saturate),
+            "wrap" | "wrapping" | "modulo" => Ok(CutMode::Wrap),
+            "zero" | "reset" => Ok(CutMode::Zero),
+            "drop" | "discard" | "filter" | "checked" => Ok(CutMode::Drop),
+            "trunc" | "truncate" | "toward_zero" | "towardzero" | "down" => Ok(CutMode::Trunc),
+            "floor" | "toward_negative" | "toward_neg" => Ok(CutMode::Floor),
+            "ceil" | "ceiling" | "toward_positive" | "toward_pos" | "up" => Ok(CutMode::Ceil),
+            "round" | "half_up" | "half_away" | "nearest" => Ok(CutMode::Round),
+            "round_ties_even" | "round_ties_to_even" | "ties_even" | "even" | "banker"
+            | "bankers" | "nearest_even" => Ok(CutMode::RoundTiesEven),
+            other => Err(BddError::ManipulatorArgumentError(format!(
+                "Unknown rounding/cut mode '{}' in --cut-maxint. Supported modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even",
+                other
+            ))),
+        }
+    }
+}
+
+/// Clamps or rounds field value within `[-maxint, maxint]` supporting Rust rounding and overflow modes.
 pub struct CutMaxintManipulator {
     field: isize,
     parameter: BigInt,
+    mode: CutMode,
 }
 
 impl CutMaxintManipulator {
     pub fn new(arg: &str) -> Result<Self, BddError> {
-        let (field, parameter) = parse_fp(arg, "--cut-maxint")?;
-        Ok(Self { field, parameter })
+        // Accepts:
+        // FIELD,MAXINT
+        // FIELD,MAXINT,MODE
+        // FIELD,MAXINT:MODE
+        let (field_str, maxint_str, mode_str) = if arg.contains(':') {
+            let parts: Vec<&str> = arg.splitn(2, ':').collect();
+            let fp_parts: Vec<&str> = parts[0].splitn(2, ',').collect();
+            if fp_parts.len() < 2 {
+                return Err(BddError::ManipulatorArgumentError(
+                    "Argument for --cut-maxint must be FIELD,MAXINT[:MODE]".to_string(),
+                ));
+            }
+            (fp_parts[0], fp_parts[1], Some(parts[1]))
+        } else {
+            let parts: Vec<&str> = arg.split(',').collect();
+            if parts.len() == 2 {
+                (parts[0], parts[1], None)
+            } else if parts.len() >= 3 {
+                (parts[0], parts[1], Some(parts[2]))
+            } else {
+                return Err(BddError::ManipulatorArgumentError(
+                    "Argument for --cut-maxint must be FIELD,MAXINT[,MODE]".to_string(),
+                ));
+            }
+        };
+
+        let field = field_str.trim().parse::<isize>().map_err(|_| {
+            BddError::ManipulatorArgumentError("Field in --cut-maxint must be a number".to_string())
+        })?;
+        let parameter = maxint_str
+            .trim()
+            .parse::<BigInt>()
+            .map_err(|_| {
+                BddError::ManipulatorArgumentError(
+                    "Parameter in --cut-maxint must be a number".to_string(),
+                )
+            })?
+            .abs();
+
+        let mode = match mode_str {
+            Some(m) if !m.trim().is_empty() => m.parse::<CutMode>()?,
+            _ => CutMode::Saturate,
+        };
+
+        Ok(Self {
+            field,
+            parameter,
+            mode,
+        })
     }
 }
 
 impl TupleManipulator for CutMaxintManipulator {
     fn manipulate(&self, mut tuple: Vec<Field>) -> Option<Vec<Field>> {
-        if let Some(idx) = resolve_index(tuple.len(), self.field) {
-            let mut val = tuple[idx].as_bigint();
-            let neg_max = -&self.parameter;
-            if val < neg_max {
-                val = neg_max;
-            } else if val > self.parameter {
-                val = self.parameter.clone();
+        let idx = match resolve_index(tuple.len(), self.field) {
+            Some(i) => i,
+            None => {
+                eprintln!("Field {} mentioned in --cut-maxint missing", self.field);
+                return Some(tuple);
             }
-            set_bigint_field(&mut tuple, idx, val);
-        } else {
-            eprintln!("Field {} mentioned in --cut-maxint missing", self.field);
+        };
+
+        let is_unsigned = matches!(tuple[idx], Field::UInt(_));
+        let max = &self.parameter;
+        let neg_max = -max;
+
+        // If field is float, apply float rounding mode first
+        let bi = match tuple[idx] {
+            Field::Float(f) => {
+                let rounded = match self.mode {
+                    CutMode::RoundTiesEven => f.round_ties_even(),
+                    CutMode::Round => f.round(),
+                    CutMode::Floor => f.floor(),
+                    CutMode::Ceil => f.ceil(),
+                    CutMode::Trunc => f.trunc(),
+                    _ => f.round(),
+                };
+                if rounded.is_finite() {
+                    if rounded >= (i64::MIN as f64) && rounded <= (i64::MAX as f64) {
+                        BigInt::from(rounded as i64)
+                    } else {
+                        rounded.to_string().parse::<BigInt>().unwrap_or_default()
+                    }
+                } else {
+                    BigInt::zero()
+                }
+            }
+            _ => tuple[idx].as_bigint(),
+        };
+
+        if bi >= neg_max && bi <= *max {
+            set_bigint_field(&mut tuple, idx, bi);
+            return Some(tuple);
         }
-        Some(tuple)
+
+        // Value exceeds bounds: apply CutMode
+        match self.mode {
+            CutMode::Drop => None,
+            CutMode::Zero => {
+                set_bigint_field(&mut tuple, idx, BigInt::zero());
+                Some(tuple)
+            }
+            CutMode::Saturate | CutMode::Trunc | CutMode::Round | CutMode::RoundTiesEven => {
+                let val = if bi > *max { max.clone() } else { neg_max };
+                set_bigint_field(&mut tuple, idx, val);
+                Some(tuple)
+            }
+            CutMode::Floor => {
+                let val = if bi > *max { max.clone() } else { neg_max };
+                set_bigint_field(&mut tuple, idx, val);
+                Some(tuple)
+            }
+            CutMode::Ceil => {
+                let val = if bi < neg_max { neg_max } else { max.clone() };
+                set_bigint_field(&mut tuple, idx, val);
+                Some(tuple)
+            }
+            CutMode::Wrap => {
+                let val = if is_unsigned {
+                    let span = max + 1;
+                    ((&bi % &span) + &span) % &span
+                } else {
+                    let span = max * 2 + 1;
+                    let shifted = bi + max;
+                    let rem = ((shifted % &span) + &span) % &span;
+                    rem - max
+                };
+                set_bigint_field(&mut tuple, idx, val);
+                Some(tuple)
+            }
+        }
     }
 }
 
@@ -717,5 +875,74 @@ mod tests {
 
         assert!(filt.manipulate(t1).is_some());
         assert!(filt.manipulate(t2).is_none());
+    }
+
+    #[test]
+    fn test_cut_maxint_modes() {
+        // 1. Default / Saturate
+        let sat = CutMaxintManipulator::new("0,10").unwrap();
+        let sat_res = sat
+            .manipulate(vec![Field::UInt(BigUint::from(15u32))])
+            .unwrap();
+        assert_eq!(sat_res[0], Field::UInt(BigUint::from(10u32)));
+
+        let sat_neg = sat.manipulate(vec![Field::Int(BigInt::from(-20))]).unwrap();
+        assert_eq!(sat_neg[0], Field::Int(BigInt::from(-10)));
+
+        // 2. Wrap mode (unsigned)
+        let wrap = CutMaxintManipulator::new("0,10,wrap").unwrap();
+        let wrap_u = wrap
+            .manipulate(vec![Field::UInt(BigUint::from(11u32))])
+            .unwrap();
+        // 11 % 11 = 0
+        assert_eq!(wrap_u[0], Field::UInt(BigUint::from(0u32)));
+
+        let wrap_u2 = wrap
+            .manipulate(vec![Field::UInt(BigUint::from(12u32))])
+            .unwrap();
+        // 12 % 11 = 1
+        assert_eq!(wrap_u2[0], Field::UInt(BigUint::from(1u32)));
+
+        // 3. Zero mode
+        let zero = CutMaxintManipulator::new("0,10,zero").unwrap();
+        let zero_res = zero
+            .manipulate(vec![Field::UInt(BigUint::from(15u32))])
+            .unwrap();
+        assert_eq!(zero_res[0], Field::UInt(BigUint::from(0u32)));
+
+        let zero_in = zero
+            .manipulate(vec![Field::UInt(BigUint::from(7u32))])
+            .unwrap();
+        assert_eq!(zero_in[0], Field::UInt(BigUint::from(7u32)));
+
+        // 4. Drop mode (checked)
+        let drop_m = CutMaxintManipulator::new("0,10,drop").unwrap();
+        assert!(drop_m
+            .manipulate(vec![Field::UInt(BigUint::from(8u32))])
+            .is_some());
+        assert!(drop_m
+            .manipulate(vec![Field::UInt(BigUint::from(12u32))])
+            .is_none());
+
+        // 5. Float rounding modes
+        let even = CutMaxintManipulator::new("0,100,round_ties_even").unwrap();
+        // 2.5 ties to even 2
+        let r1 = even.manipulate(vec![Field::Float(2.5)]).unwrap();
+        assert_eq!(r1[0], Field::UInt(BigUint::from(2u32)));
+        // 3.5 ties to even 4
+        let r2 = even.manipulate(vec![Field::Float(3.5)]).unwrap();
+        assert_eq!(r2[0], Field::UInt(BigUint::from(4u32)));
+
+        let floor_m = CutMaxintManipulator::new("0,100,floor").unwrap();
+        let rf = floor_m.manipulate(vec![Field::Float(2.9)]).unwrap();
+        assert_eq!(rf[0], Field::UInt(BigUint::from(2u32)));
+
+        let ceil_m = CutMaxintManipulator::new("0,100,ceil").unwrap();
+        let rc = ceil_m.manipulate(vec![Field::Float(2.1)]).unwrap();
+        assert_eq!(rc[0], Field::UInt(BigUint::from(3u32)));
+
+        let trunc_m = CutMaxintManipulator::new("0,100,trunc").unwrap();
+        let rt = trunc_m.manipulate(vec![Field::Float(-2.9)]).unwrap();
+        assert_eq!(rt[0], Field::Int(BigInt::from(-2)));
     }
 }

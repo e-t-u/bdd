@@ -392,11 +392,30 @@ Extracts the sign of the field: 1 if the value was negative and 0 if non-negativ
 Filters tuples based on a predicate condition where OP is one of ==, !=, <, <=, >, or >=. Tuples failing the predicate are discarded from the output stream.
 
 .TP
---cut-maxint=FIELD,MAXINT
-Cuts the maximum positive or negative integer value in the field to
-maxint. The values bigger than maxint get the value maxint and values
-smaller than -maxint get the value -maxint. Field number can be
-negative when the position is counted from the end of the tuple.
+--cut-maxint=FIELD,MAXINT[,MODE]
+Cuts, bounds, or rounds the value in FIELD within [-MAXINT, MAXINT] (or [0, MAXINT] if unsigned). An optional MODE parameter may be appended using comma or colon delimiter (e.g. \f(CR--cut-maxint=0,127,wrap\fR or \f(CR--cut-maxint=0,127:round_ties_even\fR).
+Supported modes:
+.RS
+.IP \(bu 2
+\fBsaturate\fR or \fBclamp\fR (default): Clamps out-of-range values to MAXINT or -MAXINT.
+.IP \(bu 2
+\fBwrap\fR or \fBwrapping\fR: Wraps values around using modular arithmetic (modulo MAXINT+1 for unsigned, or across [-MAXINT, MAXINT] for signed).
+.IP \(bu 2
+\fBzero\fR or \fBreset\fR: Replaces out-of-range values with zero.
+.IP \(bu 2
+\fBdrop\fR or \fBfilter\fR: Discards the entire tuple from the output stream if value exceeds bounds.
+.IP \(bu 2
+\fBtrunc\fR: Truncates magnitude toward zero.
+.IP \(bu 2
+\fBfloor\fR: Rounds toward negative infinity.
+.IP \(bu 2
+\fBceil\fR: Rounds toward positive infinity.
+.IP \(bu 2
+\fBround\fR: Rounds to nearest neighbor, ties away from zero.
+.IP \(bu 2
+\fBround_ties_even\fR: Rounds to nearest neighbor, ties to even digit (Rust and IEEE 754 default banker's rounding).
+.RE
+Field number can be negative when the position is counted from the end of the tuple.
 
 .TP
 --remove-right=FIELD,BITS

@@ -174,8 +174,17 @@ Once unpacked into a tuple, fields can be transformed using pipeline manipulator
 ### Pipeline Manipulators
 
 - **`--rearrange=F0,F1,...`**: Reorders, duplicates, or drops fields (e.g., `--rearrange=1,0`).
-- **`--cut-maxint=FIELD,MAX`**: Clamps field value within `[-MAX, MAX]`.
-- **`--remove-right=FIELD,BITS`** / **`--shift-right=FIELD,BITS`**: Bitwise right-shifts field by `BITS`.
+- **`--cut-maxint=FIELD,MAX[,MODE]`**: Bounds or rounds field value within `[-MAX, MAX]` (or `[0, MAX]` if unsigned). `MODE` can be specified as `,MODE` or `:MODE`. Supported Rust rounding and overflow modes:
+  - `saturate` / `clamp` (default): Clamps out-of-bounds values to `MAX` or `-MAX`.
+  - `wrap` / `wrapping`: Wraps values around using modular arithmetic (`[0, MAX]` for unsigned, `[-MAX, MAX]` for signed).
+  - `zero` / `reset`: Sets out-of-bounds values to 0.
+  - `drop` / `filter` / `checked`: Discards the tuple entirely if the value exceeds bounds.
+  - `trunc` / `truncate`: Truncates magnitude toward zero.
+  - `floor`: Rounds toward negative infinity.
+  - `ceil`: Rounds toward positive infinity.
+  - `round`: Rounds to nearest neighbor, ties away from zero.
+  - `round_ties_even` / `even` / `bankers`: Rounds to nearest neighbor, ties to nearest even digit (Rust `f64::round_ties_even`).
+
 - **`--shift-left=FIELD,BITS`**: Bitwise left-shifts field by `BITS`.
 - **`--xor=FIELD,PARAM`**: Bitwise XOR with parameter (supports hex `0x...`, bin `0b...`, or bit-count mask).
 - **`--and=FIELD,PARAM`**: Bitwise AND with parameter.
@@ -355,7 +364,7 @@ Bit Reversal Options:
 
 Tuple Manipulators:
       --rearrange <FIELDS>         Reorder output fields (e.g. "1,0" or "-1,0")
-      --cut-maxint <F,MAX>         Clamp field F to [-MAX, MAX]
+      --cut-maxint <F,MAX[,MODE]>  Clamp or round field F to [-MAX, MAX] (modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
       --remove-right <F,BITS>      Right-shift field F by BITS
       --shift-right <F,BITS>       Right-shift field F by BITS (synonym)
       --shift-left <F,BITS>        Left-shift field F by BITS

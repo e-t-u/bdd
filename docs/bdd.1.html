@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 04:15:38 2026 -->
+<!-- CreationDate: Sat Sep 12 04:23:14 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -545,16 +545,129 @@ predicate condition where OP is one of ==, !=, &lt;, &lt;=,
 &gt;, or &gt;=. Tuples failing the predicate are discarded
 from the output stream.</p>
 
-<p style="margin-left:9%;">--cut-maxint=FIELD,MAXINT</p>
 
-<p style="margin-left:18%;">Cuts the maximum positive or
-negative integer value in the field to maxint. The values
-bigger than maxint get the value maxint and values smaller
-than -maxint get the value -maxint. Field number can be
-negative when the position is counted from the end of the
-tuple.</p>
+<p style="margin-left:9%;">--cut-maxint=FIELD,MAXINT[,MODE]</p>
 
-<p style="margin-left:9%;">--remove-right=FIELD,BITS</p>
+<p style="margin-left:18%;">Cuts, bounds, or rounds the
+value in FIELD within [-MAXINT, MAXINT] (or [0, MAXINT] if
+unsigned). An optional MODE parameter may be appended using
+comma or colon delimiter (e.g. --cut-maxint=0,127,wrap or
+--cut-maxint=0,127:round_ties_even). Supported modes:</p>
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>saturate</b> or <b>clamp</b> (default): Clamps
+out-of-range values to MAXINT or -MAXINT.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>wrap</b> or <b>wrapping</b>: Wraps values around
+using modular arithmetic (modulo MAXINT+1 for unsigned, or
+across [-MAXINT, MAXINT] for signed).</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>zero</b> or <b>reset</b>: Replaces out-of-range
+values with zero.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>drop</b> or <b>filter</b>: Discards the entire tuple
+from the output stream if value exceeds bounds.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>trunc</b>: Truncates magnitude toward zero.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>floor</b>: Rounds toward negative infinity.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>ceil</b>: Rounds toward positive infinity.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>round</b>: Rounds to nearest neighbor, ties away from
+zero.</p> </td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p><b>round_ties_even</b>: Rounds to nearest neighbor, ties
+to even digit (Rust and IEEE 754 default banker&rsquo;s
+rounding).</p> </td></tr>
+</table>
+
+<p style="margin-left:9%;">Field number can be negative
+when the position is counted from the end of the tuple. <br>
+--remove-right=FIELD,BITS</p>
 
 <p style="margin-left:18%;">If we want to output other bits
 from the field than the rightmost ones, we can remove BITS
