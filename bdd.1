@@ -290,13 +290,9 @@ used in making a unit, it will cause an error. The only
 way to use negative values correctly is --output-pattern=nS,
 --abs or --output-tuples.
 
-Float can be written to output using output-patterns F, f, D 
-and d which means that it can be used to make conversion from 32-bit
-float to 64-bit float and vice versa. Other uses of floats in the output
-stream is not possible. If the idea is 
-only to re-arrange bits, you can use type character U more
-effciently to handle the unit as whole without internal
-interpretation for the field.
+Floating-point numbers can be read and written using any of the supported float patterns: 64D/64d (FP64), 32F/32f (FP32), 16H/16h (IEEE FP16), 16Y/16y (Google Brain BF16), 8E/8e (OCP FP8 E4M3FN), 8Q/8q (OCP FP8 E5M2), 6E/6e (OCP FP6 E3M2), and 4E/4e (NVIDIA Blackwell / OCP FP4 E2M1).
+.PP
+Internally, all input floats are decoded into IEEE 754 64-bit doubles (\fIf64\fR) in the tuple field pipeline. When written out through an output pattern, \fIbdd\fR encodes the internal \fIf64\fR value directly into the requested output float format using standard round-to-nearest-even rules (or round-to-nearest). This provides native, loss-free upcasting and bit-exact downcasting/quantization between arbitrary floating-point representations (e.g. \f(CR--input-pattern=32F --output-pattern=16H\fR or \f(CR--input-pattern=16H --output-pattern=4E\fR). The \f(CR--round\fR manipulator can additionally be used to apply explicit rounding modes (such as \fBfloor\fR, \fBceil\fR, \fBtrunc\fR, or \fBround_ties_even\fR) prior to packing.
 
 Most likely, you want to use upper case variants of
 the patterns (bitwise big-endian representation). If
@@ -408,8 +404,8 @@ Extracts the sign of the field: 1 if the value was negative and 0 if non-negativ
 Filters tuples based on a predicate condition where OP is one of ==, !=, <, <=, >, or >=. Tuples failing the predicate are discarded from the output stream.
 
 .TP
---cut-maxint=FIELD,MAXINT[,MODE]
-Cuts, bounds, or rounds the value in FIELD within [-MAXINT, MAXINT] (or [0, MAXINT] if unsigned). An optional MODE parameter may be appended using comma or colon delimiter (e.g. \f(CR--cut-maxint=0,127,wrap\fR or \f(CR--cut-maxint=0,127:round_ties_even\fR).
+--round=FIELD,LIMIT[,MODE] | --round=FIELD,MODE
+Rounds floating-point fields or bounds/clamps integer fields within [-LIMIT, LIMIT] (or [0, LIMIT] if unsigned). Visible alias: \f(CR--cut-maxint\fR. When LIMIT is omitted (e.g. \f(CR--round=0,floor\fR or \f(CR--round=0,round_ties_even\fR), the rounding mode is applied directly without magnitude clamping. An optional MODE parameter may be appended using comma or colon delimiter (e.g. \f(CR--round=0,127,wrap\fR or \f(CR--round=0,127:round_ties_even\fR).
 Supported modes:
 .RS
 .IP \(bu 2

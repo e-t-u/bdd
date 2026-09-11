@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 05:39:53 2026 -->
+<!-- CreationDate: Sat Sep 12 05:47:32 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -432,14 +432,27 @@ unit, it will cause an error. The only way to use negative
 values correctly is --output-pattern=nS, --abs or
 --output-tuples.</p>
 
-<p style="margin-left:9%; margin-top: 1em">Float can be
-written to output using output-patterns F, f, D and d which
-means that it can be used to make conversion from 32-bit
-float to 64-bit float and vice versa. Other uses of floats
-in the output stream is not possible. If the idea is only to
-re-arrange bits, you can use type character U more
-effciently to handle the unit as whole without internal
-interpretation for the field.</p>
+<p style="margin-left:9%; margin-top: 1em">Floating-point
+numbers can be read and written using any of the supported
+float patterns: 64D/64d (FP64), 32F/32f (FP32), 16H/16h
+(IEEE FP16), 16Y/16y (Google Brain BF16), 8E/8e (OCP FP8
+E4M3FN), 8Q/8q (OCP FP8 E5M2), 6E/6e (OCP FP6 E3M2), and
+4E/4e (NVIDIA Blackwell / OCP FP4 E2M1).</p>
+
+<p style="margin-left:9%; margin-top: 1em">Internally, all
+input floats are decoded into IEEE 754 64-bit doubles
+(<i>f64</i>) in the tuple field pipeline. When written out
+through an output pattern, <i>bdd</i> encodes the internal
+<i>f64</i> value directly into the requested output float
+format using standard round-to-nearest-even rules (or
+round-to-nearest). This provides native, loss-free upcasting
+and bit-exact downcasting/quantization between arbitrary
+floating-point representations (e.g. --input-pattern=32F
+--output-pattern=16H or --input-pattern=16H
+--output-pattern=4E). The --round manipulator can
+additionally be used to apply explicit rounding modes (such
+as <b>floor</b>, <b>ceil</b>, <b>trunc</b>, or
+<b>round_ties_even</b>) prior to packing.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Most likely, you
 want to use upper case variants of the patterns (bitwise
@@ -590,14 +603,18 @@ predicate condition where OP is one of ==, !=, &lt;, &lt;=,
 &gt;, or &gt;=. Tuples failing the predicate are discarded
 from the output stream.</p>
 
+<p style="margin-left:9%;">--round=FIELD,LIMIT[,MODE] |
+--round=FIELD,MODE</p>
 
-<p style="margin-left:9%;">--cut-maxint=FIELD,MAXINT[,MODE]</p>
-
-<p style="margin-left:18%;">Cuts, bounds, or rounds the
-value in FIELD within [-MAXINT, MAXINT] (or [0, MAXINT] if
-unsigned). An optional MODE parameter may be appended using
-comma or colon delimiter (e.g. --cut-maxint=0,127,wrap or
---cut-maxint=0,127:round_ties_even). Supported modes:</p>
+<p style="margin-left:18%;">Rounds floating-point fields or
+bounds/clamps integer fields within [-LIMIT, LIMIT] (or [0,
+LIMIT] if unsigned). Visible alias: --cut-maxint. When LIMIT
+is omitted (e.g. --round=0,floor or
+--round=0,round_ties_even), the rounding mode is applied
+directly without magnitude clamping. An optional MODE
+parameter may be appended using comma or colon delimiter
+(e.g. --round=0,127,wrap or --round=0,127:round_ties_even).
+Supported modes:</p>
 
 <table width="100%" border="0" rules="none" frame="void"
        cellspacing="0" cellpadding="0">

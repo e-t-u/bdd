@@ -88,8 +88,8 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         if let Some(ref arg) = config.rearrange {
             manipulators.push(Box::new(RearrangeManipulator::new(arg)?));
         }
-        if let Some(ref arg) = config.cut_maxint {
-            manipulators.push(Box::new(CutMaxintManipulator::new(arg)?));
+        if let Some(ref arg) = config.round {
+            manipulators.push(Box::new(RoundManipulator::new(arg)?));
         }
         if let Some(ref arg) = config.remove_right {
             manipulators.push(Box::new(RemoveRightManipulator::new(arg)?));

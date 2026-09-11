@@ -95,8 +95,9 @@ pub struct Cli {
     #[arg(long, default_missing_value = "", num_args = 0..=1)]
     pub rearrange: Option<String>,
 
-    #[arg(long)]
-    pub cut_maxint: Option<String>,
+    /// Round, bound, or clamp field F (modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
+    #[arg(long, visible_alias = "cut-maxint")]
+    pub round: Option<String>,
 
     #[arg(long)]
     pub remove_right: Option<String>,
@@ -266,6 +267,7 @@ pub struct ValidatedConfig {
     pub skip: u64,
     pub count: Option<u64>,
     pub rearrange: Option<String>,
+    pub round: Option<String>,
     pub cut_maxint: Option<String>,
     pub remove_right: Option<String>,
     pub shift_right: Option<String>,
@@ -781,7 +783,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         skip,
         count,
         rearrange: cli.rearrange,
-        cut_maxint: cli.cut_maxint,
+        round: cli.round.clone(),
+        cut_maxint: cli.round,
         remove_right: cli.remove_right,
         shift_right: cli.shift_right,
         shift_left: cli.shift_left,

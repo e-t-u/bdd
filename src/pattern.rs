@@ -258,22 +258,14 @@ impl TupleUnpacker {
                 let mask = (BigUint::one() << 32) - 1u32;
                 let val = &unit & &mask;
                 let u = val.to_u32().unwrap_or(0);
-                let s3 = (u & 0xFF) as u8;
-                let s2 = ((u >> 8) & 0xFF) as u8;
-                let s1 = ((u >> 16) & 0xFF) as u8;
-                let s0 = ((u >> 24) & 0xFF) as u8;
-                let fl = f32::from_ne_bytes([s0, s1, s2, s3]);
+                let fl = f32::from_bits(u);
                 tuple.push(Field::Float(fl as f64));
                 unit >>= 32;
             } else if c == 'D' || c == 'd' {
                 let mask = (BigUint::one() << 64) - 1u32;
                 let val = &unit & &mask;
                 let u = val.to_u64().unwrap_or(0);
-                let mut bytes = [0u8; 8];
-                for idx in 0..8 {
-                    bytes[7 - idx] = ((u >> (idx * 8)) & 0xFF) as u8;
-                }
-                let fl = f64::from_ne_bytes(bytes);
+                let fl = f64::from_bits(u);
                 tuple.push(Field::Float(fl));
                 unit >>= 64;
             } else if c == 'H' || c == 'h' {
@@ -389,22 +381,12 @@ impl TuplePacker {
                 'F' | 'f' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let fl = f.as_f64() as f32;
-                    let bytes = fl.to_ne_bytes();
-                    let mut v = BigUint::zero();
-                    for b in bytes {
-                        v = (v << 8) | BigUint::from(b);
-                    }
-                    v
+                    BigUint::from(fl.to_bits())
                 }
                 'D' | 'd' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let fl = f.as_f64();
-                    let bytes = fl.to_ne_bytes();
-                    let mut v = BigUint::zero();
-                    for b in bytes {
-                        v = (v << 8) | BigUint::from(b);
-                    }
-                    v
+                    BigUint::from(fl.to_bits())
                 }
                 'H' | 'h' => {
                     let f = Self::pop_field(&mut tuple)?;

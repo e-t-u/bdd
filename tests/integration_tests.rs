@@ -291,3 +291,92 @@ fn test_cli_gigabyte_seek_and_suffixes() {
 
     let _ = std::fs::remove_file(test_path);
 }
+
+#[test]
+fn test_cli_round_and_float_transcoding() {
+    use std::io::Write;
+
+    // 1. Test --round with mode-only (floor, round_ties_even)
+    let out_round = Command::new("./bdd")
+        .args(["--input-tuples", "--round=0,floor", "--output-tuples"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.as_mut().unwrap().write_all(b"2.9\n").unwrap();
+            child.wait_with_output()
+        })
+        .expect("failed to run bdd --round 0,floor");
+
+    assert!(out_round.status.success());
+    let stdout_round = String::from_utf8(out_round.stdout).unwrap();
+    assert_eq!(stdout_round.trim(), "2");
+
+    // 2. Test --round alias --cut-maxint
+    let out_cut = Command::new("./bdd")
+        .args([
+            "--input-tuples",
+            "--cut-maxint=0,10,saturate",
+            "--output-tuples",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.as_mut().unwrap().write_all(b"42\n").unwrap();
+            child.wait_with_output()
+        })
+        .expect("failed to run bdd --cut-maxint");
+
+    assert!(out_cut.status.success());
+    let stdout_cut = String::from_utf8(out_cut.stdout).unwrap();
+    assert_eq!(stdout_cut.trim(), "10");
+
+    // 3. Test cross-precision transcoding: FP32 (32F) -> FP16 (16H)
+    // 1.0f32 big-endian is 0x3F800000; 1.0 in FP16 is 0x3C00
+    let out_transcode = Command::new("./bdd")
+        .args([
+            "--input-pattern=32F",
+            "--output-pattern=16H",
+            "--output-hex",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(&[0x3F, 0x80, 0x00, 0x00])
+                .unwrap();
+            child.wait_with_output()
+        })
+        .expect("failed to run bdd transcode 32F -> 16H");
+
+    assert!(out_transcode.status.success());
+    let hex_transcode = String::from_utf8(out_transcode.stdout).unwrap();
+    assert_eq!(hex_transcode.trim(), "3c00");
+
+    // 4. Test cross-precision transcoding: FP16 (16H) -> FP8 E4M3 (8E)
+    // 1.0 in FP16 is 0x3C00; 1.0 in FP8 E4M3 is 0x38
+    let out_fp8 = Command::new("./bdd")
+        .args(["--input-pattern=16H", "--output-pattern=8E", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(&[0x3C, 0x00])
+                .unwrap();
+            child.wait_with_output()
+        })
+        .expect("failed to run bdd transcode 16H -> 8E");
+
+    assert!(out_fp8.status.success());
+    let hex_fp8 = String::from_utf8(out_fp8.stdout).unwrap();
+    assert_eq!(hex_fp8.trim(), "38");
+}

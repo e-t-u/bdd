@@ -29,7 +29,7 @@ Most Unix tools (`dd`, `hexdump`, `od`, standard shell pipes) operate strictly o
               ┌────────────────────┴────────────────────┐
               ▼                                         ▼
     [ Ordered Pipeline Manipulators ]         [ Secondary Merge ]
-    --rearrange, --cut-maxint,                --merge-file
+    --rearrange, --round, --cut-maxint,       --merge-file
     --xor, --and, --or, --not,
     --shift-left, --shift-right,
     --add, --sub, --mul, --div, --mod,
@@ -249,6 +249,46 @@ Patterns support multiplier syntax for repetitive fields and tensor arrays:
   2. `magnitude`: `abs(value)`.
   This allows arithmetic, filtering, or routing based on sign and absolute value independently.
 
+### Floating-Point Format Transcoding & The Universal `f64` Currency
+
+`bdd` provides native bitstream transcoding between all IEEE 754 and modern AI/GPU floating-point formats:
+- **64-bit Double (`64D` / `64d`)**: IEEE 754 binary64
+- **32-bit Float (`32F` / `32f`)**: IEEE 754 binary32
+- **16-bit Half (`16H` / `16h`)**: IEEE 754 binary16 (FP16)
+- **16-bit Bfloat16 (`16Y` / `16y`)**: Google Brain Bfloat16 (BF16)
+- **8-bit FP8 E4M3 (`8E` / `8e`)**: OCP / NVIDIA Hopper FP8 E4M3FN (1-4-3, bias 7)
+- **8-bit FP8 E5M2 (`8Q` / `8q`)**: OCP / NVIDIA Ada FP8 E5M2 (1-5-2, bias 15)
+- **6-bit FP6 E3M2 (`6E` / `6e`)**: OCP Microscaling FP6 E3M2 (1-3-2, bias 3)
+- **4-bit FP4 E2M1 (`4E` / `4e`)**: NVIDIA Blackwell / OCP Microscaling NVFP4 (1-2-1, bias 1)
+
+#### The `f64` Pipeline Architecture
+1. **Universal Decoding to `f64`**: When reading bitstreams through `--input-pattern`, any floating-point token (`32F`, `64D`, `16H`, `16Y`, `8E`, `8Q`, `6E`, `4E`) is decoded into an IEEE 754 64-bit double (`f64`) in the internal tuple representation (`Field::Float(f64)`). Subnormal numbers (gradual underflow), infinities, and NaNs are decoded according to IEEE 754 and OCP specifications.
+2. **Intermediate Manipulation & Rounding**: Inside the tuple pipeline, floating-point values can be rearranged, filtered, or rounded using `--round` (e.g. `--round 0,round_ties_even`, `--round 0,floor`, `--round 0,ceil`, `--round 0,trunc`).
+3. **Universal Encoding / Downcasting from `f64`**: When packing tuples into an output bitstream through `--output-pattern`, each target float token encodes the internal `f64` into its target bit layout using round-to-nearest-even (or round-to-nearest).
+
+#### Zero-Dependency Pure-Rust AI Codecs
+Standard Rust (`std`) only supports `f32` and `f64` natively. Experimental features (`f16`/`f128`) are unstable, and standard Rust provides no primitives for OCP FP8, FP6, or Blackwell FP4. `bdd` avoids heavy or unstable external dependencies by implementing custom, bit-exact codecs directly in `src/float_types.rs`, ensuring maximum performance and portability.
+
+#### Transcoding Examples
+Convert between arbitrary float representations simply by combining `--input-pattern` and `--output-pattern`:
+
+```bash
+# Transcode 32-bit float to 16-bit IEEE half-precision (FP32 -> FP16):
+bdd --input-pattern=32F --output-pattern=16H < weights_fp32.bin > weights_fp16.bin
+
+# Quantize FP16 weights directly to NVIDIA Hopper OCP FP8 (E4M3):
+bdd --input-pattern=16H --output-pattern=8E < model_fp16.bin > model_fp8.bin
+
+# Quantize FP16 to NVIDIA Blackwell 4-bit float (NVFP4 E2M1):
+bdd --input-pattern=16H --output-pattern=4E < model_fp16.bin > model_fp4.bin
+
+# Upcast Blackwell 4-bit floats back to FP32 single precision:
+bdd --input-pattern=4E --output-pattern=32F < model_fp4.bin > unpacked_fp32.bin
+
+# Quantize with explicit downward truncation before packing:
+bdd --input-pattern=32F --round=0,floor --output-pattern=8E < in.bin > out.bin
+```
+
 ---
 
 ## 3. Flexible Pipeline & Tuple Manipulation
@@ -258,16 +298,16 @@ Once unpacked into a tuple, fields can be transformed using pipeline manipulator
 ### Pipeline Manipulators
 
 - **`--rearrange=F0,F1,...`**: Reorders, duplicates, or drops fields (e.g., `--rearrange=1,0`).
-- **`--cut-maxint=FIELD,MAX[,MODE]`**: Bounds or rounds field value within `[-MAX, MAX]` (or `[0, MAX]` if unsigned). `MODE` can be specified as `,MODE` or `:MODE`. Supported Rust rounding and overflow modes:
-  - `saturate` / `clamp` (default): Clamps out-of-bounds values to `MAX` or `-MAX`.
-  - `wrap` / `wrapping`: Wraps values around using modular arithmetic (`[0, MAX]` for unsigned, `[-MAX, MAX]` for signed).
+- **`--round=FIELD,LIMIT[,MODE]`** or **`--round=FIELD,MODE`** *(alias: `--cut-maxint`)*: Rounds floating-point fields or clamps/bounds integer fields within `[-LIMIT, LIMIT]` (or `[0, LIMIT]` if unsigned). `MODE` can be specified using comma or colon (e.g. `--round 0,floor` or `--round 0,127,wrap`). When `LIMIT` is omitted, the rounding mode is applied without magnitude clamping. Supported modes:
+  - `saturate` / `clamp` (default when limit is specified): Clamps out-of-bounds values to `LIMIT` or `-LIMIT`.
+  - `wrap` / `wrapping`: Wraps values around using modular arithmetic (`[0, LIMIT]` for unsigned, `[-LIMIT, LIMIT]` for signed).
   - `zero` / `reset`: Sets out-of-bounds values to 0.
   - `drop` / `filter` / `checked`: Discards the tuple entirely if the value exceeds bounds.
   - `trunc` / `truncate`: Truncates magnitude toward zero.
   - `floor`: Rounds toward negative infinity.
   - `ceil`: Rounds toward positive infinity.
   - `round`: Rounds to nearest neighbor, ties away from zero.
-  - `round_ties_even` / `even` / `bankers`: Rounds to nearest neighbor, ties to nearest even digit (Rust `f64::round_ties_even`).
+  - `round_ties_even` / `even` / `bankers`: Rounds to nearest neighbor, ties to nearest even digit (Rust `f64::round_ties_even` / IEEE 754 default).
 
 - **`--shift-left=FIELD,BITS`**: Bitwise left-shifts field by `BITS`.
 - **`--xor=FIELD,PARAM`**: Bitwise XOR with parameter (supports hex `0x...`, bin `0b...`, or bit-count mask).
@@ -453,7 +493,7 @@ Bit Reversal Options:
 
 Tuple Manipulators:
       --rearrange <FIELDS>         Reorder output fields (e.g. "1,0" or "-1,0")
-      --cut-maxint <F,MAX[,MODE]>  Clamp or round field F to [-MAX, MAX] (modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
+      --round <F,LIMIT[,MODE]>     Round or clamp field F (alias: --cut-maxint; modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
       --remove-right <F,BITS>      Right-shift field F by BITS
       --shift-right <F,BITS>       Right-shift field F by BITS (synonym)
       --shift-left <F,BITS>        Left-shift field F by BITS
