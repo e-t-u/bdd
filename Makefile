@@ -1,6 +1,4 @@
-# Modern Makefile for bdd
-
-.PHONY: all build release test lint fmt install clean
+.PHONY: all build release test lint fmt install clean bench docs pdf man-pdf pres-pdf
 
 all: release
 
@@ -14,6 +12,9 @@ release:
 test: release
 	cargo test --all-targets --all-features
 
+bench:
+	cargo bench
+
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
@@ -26,6 +27,20 @@ check-fmt:
 install:
 	cargo install --path .
 	ln -sf ~/.cargo/bin/bdd ~/.local/bin/bdd
+
+pdf:
+	node scripts/render_pdf.js README.md README.pdf
+
+man-pdf:
+	mkdir -p docs
+	groff -man -T ps bdd.1 | ps2pdf - docs/bdd.1.pdf
+	groff -man -T html bdd.1 > docs/bdd.1.html
+
+pres-pdf:
+	mkdir -p docs
+	libreoffice --headless --convert-to pdf legacy/old_src/Presentation.odp --outdir docs/
+
+docs: pdf man-pdf pres-pdf
 
 clean:
 	cargo clean

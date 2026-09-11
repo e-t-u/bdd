@@ -107,7 +107,7 @@ pub fn reverse_bits(val: &BigUint, bits: usize) -> BigUint {
             };
             let low = v & mask;
             let rev = low.reverse_bits() >> (64 - bits);
-            let res = (high << bits) | rev;
+            let res = if bits == 64 { rev } else { (high << bits) | rev };
             return BigUint::from(res);
         }
     }
@@ -142,6 +142,10 @@ mod tests {
             BigUint::from(0xAAu32)
         );
         assert_eq!(reverse_bits(&BigUint::from(0u32), 16), BigUint::zero());
+        assert_eq!(
+            reverse_bits(&BigUint::from(0x0123456789ABCDEFu64), 64),
+            BigUint::from(0x0123456789ABCDEFu64.reverse_bits())
+        );
     }
 
     #[test]

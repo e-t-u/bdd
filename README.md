@@ -292,11 +292,54 @@ make test
 # or: cargo test --all-targets --all-features
 ```
 
+Run benchmarks:
+
+```bash
+make bench
+# or: cargo bench
+```
+
 Run code linter and formatting checks:
 
 ```bash
 make lint
 make check-fmt
+```
+
+---
+
+## Performance & Throughput Benchmarks
+
+`bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
+
+Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
+
+| Operation | Total Volume | Throughput (bits/s) | Throughput (Bytes/s) | Notes |
+|---|---|---|---|---|
+| **Hardware 64-bit Bit Reversal** | 640 Mbits | **14.42 Gbps** | 1,803 MB/s | Direct CPU `u64::reverse_bits()` |
+| **Bignum 1024-bit Packing/Unpacking** | 25.6 Mbits | **6.49 Gbps** | 811.5 MB/s | Large-block bignum bitfield packing |
+| **Bignum 256-bit Packing/Unpacking** | 25.6 Mbits | **1.73 Gbps** | 216.1 MB/s | SHA-256 size field packing/unpacking |
+| **Synthetic 8-bit Linear Stream** | 80 Mbits | **270.1 Mbps** | 33.8 MB/s | Continuous bit generation & sink flush |
+| **Bignum 1024-bit Bit Reversal** | 25.6 Mbits | **43.1 Mbps** | 5.4 MB/s | Full arbitrary-precision bit reversal |
+| **1-bit Single-Bit Resolution Stream** | 2.0 Mbits | **39.2 Mbps** | 4.9 MB/s | Single-bit slice accumulation & packing |
+| **Unaligned 3-bit to 8-bit Extraction** | 9.0 Mbits | **39.1 Mbps** | 4.9 MB/s | Cross-byte boundary accumulation |
+| **Tuple Pipeline (`2U3U3U` -> Rearrange)** | 8.0 Mbits | **33.9 Mbps** | 4.2 MB/s | Multi-field unpack, reorder & repack |
+
+---
+
+## Documentation & PDF Generation
+
+All project documentation compiles into clean, print-ready vector PDF and HTML files:
+
+- **[`README.pdf`](file:///home/etu/git/bdd/README.pdf)**: Generated from `README.md` via headless Chromium / Puppeteer with vector math, diagrams, and GFM styling.
+- **[`docs/bdd.1.pdf`](file:///home/etu/git/bdd/docs/bdd.1.pdf)**: Unix manual page rendered as clean vector PDF via `groff` and `ps2pdf`.
+- **[`docs/bdd.1.html`](file:///home/etu/git/bdd/docs/bdd.1.html)**: Unix manual page rendered as standalone HTML.
+- **[`docs/Presentation.pdf`](file:///home/etu/git/bdd/docs/Presentation.pdf)**: Architectural slide deck compiled from OpenDocument Presentation (`legacy/old_src/Presentation.odp`) via headless LibreOffice.
+
+To regenerate all documentation artifacts in one command:
+
+```bash
+make docs
 ```
 
 ---
