@@ -8,6 +8,82 @@ Originally written in Python 2, `bdd` was re-architected in modern Rust for spee
 
 ---
 
+## Core Concepts: Arbitrary Bit Fields & Tuples
+
+### 1. Handling Arbitrary-Size Bit Fields
+
+Traditional binary utilities (such as standard `dd`, `hexdump`, or language byte buffers) operate strictly on byte (8-bit) or machine-word (16, 32, 64-bit) boundaries. In contrast, real-world data sources—such as embedded sensor telemetry, cryptographic streams, radio protocols, network packet headers, legacy binary archives, and compressed bitstreams—frequently pack data into unaligned bit fields of arbitrary widths (e.g., 1-bit flags, 3-bit status codes, 12-bit ADC samples, 57-bit mantissas, or 1024-bit cryptographic integers).
+
+`bdd` handles bitstreams with single-bit precision through continuous stream buffering and arbitrary-precision integer arithmetic:
+
+- **Continuous Bit Accumulator**: Input bytes are drawn into a streaming bit accumulator buffer (`BigUint` buffer with bit tracking). Stream data is never forced into byte alignment; bits are shifted dynamically into the accumulator from the input source as required.
+- **Arbitrary-Precision Extraction**: When an $N$-bit field is requested by a pattern, `bdd` checks whether at least $N$ bits are available in the accumulator. If not, successive bytes are consumed from the source until sufficient bits are buffered. The top $N$ bits are then extracted via bitwise shifting and masking:
+  $$\text{value} = (\text{buffer} \gg (\text{bits\_in\_buffer} - N)) \ \& \ ((1 \ll N) - 1)$$
+  Any remaining unconsumed bits stay in the accumulator for subsequent fields, preserving exact bit alignment across arbitrary field boundaries with zero bit loss.
+- **Arbitrary Bignum Backing (`num-bigint`)**: All integer fields are backed by arbitrary-precision `BigUint` (unsigned) and `BigInt` (signed). Fields are never artificially clamped to 32 or 64 bits; they can span hundreds or thousands of bits without risk of integer overflow.
+- **Hardware-Accelerated Fast Path**: For fields $\le 64$ bits, `bdd` automatically selects native machine-register operations (such as direct CPU bit shifts and `u64::reverse_bits()`), ensuring raw I/O throughput is not throttled by bignum heap allocation overhead.
+
+### 2. The Bit Field as a Manipulable Tuple
+
+Once extracted, a unit of data is not treated as an opaque string of bits. Instead, **it is interpreted as a strongly-typed Tuple of discrete Fields** (analogous to a row in a relational database):
+
+- **Input Pattern Decomposition**: When given an input pattern such as `--input-pattern=2U3U3U`, `bdd` unpacks each 8-bit chunk of the bitstream into a 3-element tuple:
+  ```
+  Bitstream:  [ 0 1 | 0 1 0 | 1 1 0 ]
+  Tuple:      ( Field 0: 2U = 1,  Field 1: 3U = 2,  Field 2: 3U = 6 )
+  ```
+  Even a single unformatted unit such as `--input-unit=12` is internally a 1-element tuple: `( Field 0: 12U )`.
+
+- **In-Flight Tuple Manipulation**: Because the stream is processed as structured tuples, manipulators can inspect, transform, reorder, or filter individual fields before repacking:
+  - **Rearranging & Slicing (`--rearrange`)**: Reorder, duplicate, or drop fields by index (e.g. `--rearrange=1,0` swaps field 0 and field 1; negative indices like `-1,0` access fields relative to the end of the tuple).
+  - **Bit Truncation (`--remove-right`)**: Strips the $P$ least-significant bits from field $F$, useful for discarding low-order noise or downsampling sensor readings.
+  - **Range Limiting (`--cut-maxint`)**: Bounds field $F$ to $P$ bits (clamping values exceeding $2^P - 1$ to $2^P - 1$), useful for preventing overflow in downstream fixed-width systems.
+  - **Bitwise Masking (`--xor`)**: Applies a bitwise XOR key or inversion mask directly to a specific field in the tuple.
+  - **Sign/Magnitude Decomposition (`--abs`, `--sign`)**: Extracts absolute magnitude or isolates the sign bit (0 = positive, 1 = negative) from signed (`nS`) fields into dedicated tuple fields.
+
+- **Stream Merging & Interleaving**: Additional files or secondary streams can be merged into the tuple stream (`--merge-file`), enabling multi-channel interleaving and address/timestamp tagging.
+
+- **Packing & Sinks**: After manipulation, the resulting tuple is either:
+  - **Repacked** into a new arbitrary bitstream according to an `--output-pattern` (where an output bit accumulator re-assembles fields into aligned bytes, injecting constant padding bits `nZ`/`nO` as specified).
+  - **Serialized** directly to human-readable inspection formats: CSV tuples (`--output-tuples`), hex dump (`--output-hex`), bit-string dump (`--output-bits`), or raw integers (`--output-integers`).
+
+```
+                    [ Input Stream / File / Stdin ]
+                                   │
+                                   ▼
+                       [ Input Bit Accumulator ]
+                                   │
+                     (Unpack via --input-pattern)
+                                   │
+                                   ▼
+             Tuple: ( Field 0, Field 1, Field 2, ... )
+                                   │
+              ┌────────────────────┴────────────────────┐
+              ▼                                         ▼
+    [ Field Manipulators ]                    [ Secondary Merge ]
+    --rearrange, --xor,                       --merge-file
+    --cut-maxint, --remove-right,
+    --abs, --sign
+              │                                         │
+              └────────────────────┬────────────────────┘
+                                   │
+                                   ▼
+         Manipulated Tuple: ( Field 0', Field 1', ... )
+                                   │
+        ┌──────────────────────────┴──────────────────────────┐
+        ▼                                                     ▼
+ [ Text Sinks ]                                     [ Output Packing ]
+ --output-tuples (CSV)                              --output-pattern
+ --output-hex                                                 │
+ --output-bits                                                ▼
+ --output-integers                               [ Output Bit Accumulator ]
+                                                              │
+                                                              ▼
+                                                [ Output Stream / Stdout ]
+```
+
+---
+
 ## Features
 
 - **Arbitrary Bit-Widths**: Process bitfields of any length (not restricted to 8, 16, 32, or 64-bit boundaries).
