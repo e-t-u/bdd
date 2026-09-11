@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 03:50:52 2026 -->
+<!-- CreationDate: Sat Sep 12 04:15:38 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -35,6 +35,7 @@
 <a href="#Collect output data stream">Collect output data stream</a><br>
 <a href="#Merge output with another data stream:">Merge output with another data stream:</a><br>
 <a href="#Show output as human readable">Show output as human readable</a><br>
+<a href="#Stream demuxing and routing">Stream demuxing and routing</a><br>
 <a href="#EXAMPLES">EXAMPLES</a><br>
 <a href="#bdd &lt; foo &gt; bar">bdd &lt; foo &gt; bar</a><br>
 <a href="#bdd --input-unit=3">bdd --input-unit=3</a><br>
@@ -355,16 +356,38 @@ F - d - IEEE-754 32-bit floating point number <br>
 f - d - same, lsb first <br>
 D - d - IEEE-754 64-bit floating point number <br>
 d - d - same, lsb first <br>
+16H - d - IEEE-754 16-bit half precision float (FP16, msb)
+<br>
+16h - d - IEEE-754 16-bit half precision float (FP16, lsb)
+<br>
+16Y - d - Google Brain 16-bit bfloat16 (BF16, msb) <br>
+16y - d - Google Brain 16-bit bfloat16 (BF16, lsb) <br>
+8E - d - OCP FP8 E4M3FN (8-bit AI float, msb) <br>
+8e - d - OCP FP8 E4M3FN (8-bit AI float, lsb) <br>
+8Q - d - OCP FP8 E5M2 (8-bit AI float, msb) <br>
+8q - d - OCP FP8 E5M2 (8-bit AI float, lsb) <br>
+6E - d - OCP FP6 E3M2 (6-bit AI float, msb) <br>
+6e - d - OCP FP6 E3M2 (6-bit AI float, lsb) <br>
+4E - d - NVIDIA Blackwell / OCP FP4 E2M1 (4-bit AI float,
+msb) <br>
+4e - d - NVIDIA Blackwell / OCP FP4 E2M1 (4-bit AI float,
+lsb) <br>
 c - s - field is unicode UTF-8 character string <br>
 C - s - same, lsb first</p>
 
-<p style="margin-left:18%; margin-top: 1em">S and s should
+<p style="margin-left:9%; margin-top: 1em">Patterns also
+support repetition multipliers in the format
+<i>COUNT*SPEC</i> or <i>COUNT*(SPEC1 SPEC2 ...)</i>. For
+example, 4*8B expands to four 8-bit unsigned bytes, and
+2*(4U4u) expands to 4U4u4U4u.</p>
+
+<p style="margin-left:9%; margin-top: 1em">S and s should
 be used with caution. If negative value is used in making a
 unit, it will cause an error. The only way to use negative
 values correctly is --output-pattern=nS, --abs or
 --output-tuples.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Float can be
+<p style="margin-left:9%; margin-top: 1em">Float can be
 written to output using output-patterns F, f, D and d which
 means that it can be used to make conversion from 32-bit
 float to 64-bit float and vice versa. Other uses of floats
@@ -373,8 +396,8 @@ re-arrange bits, you can use type character U more
 effciently to handle the unit as whole without internal
 interpretation for the field.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Most likely,
-you want to use upper case variants of the patterns (bitwise
+<p style="margin-left:9%; margin-top: 1em">Most likely, you
+want to use upper case variants of the patterns (bitwise
 big-endian representation). If you want to interpret
 bytewise little-endian numbers, you likely want to use
 --input-little-endian and still use uppercase patterns.
@@ -382,17 +405,17 @@ Lowercase patterns are for the (rare) case that the value in
 bit stream is exactly in the bitwise (not bytewise) opposite
 order, least significant bit first.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Rule to
+<p style="margin-left:9%; margin-top: 1em">Rule to
 remember: uppercase letters are big-endian, lowercase
 letters are little-endian.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Floating point
+<p style="margin-left:9%; margin-top: 1em">Floating point
 number length must match the bit length. D must be always
 written as pattern 64D.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Also, the
-string must be right amount of bytes. Some byte strings can
-not be output as a valid UTF-8 string.</p>
+<p style="margin-left:9%; margin-top: 1em">Also, the string
+must be right amount of bytes. Some byte strings can not be
+output as a valid UTF-8 string.</p>
 
 <h3>Bypass unit and field selection
 <a name="Bypass unit and field selection"></a>
@@ -430,8 +453,13 @@ Strings (UTF-8)</p>
 
 
 <p style="margin-left:9%; margin-top: 1em">Fields are
-represented with field numbers (starting from 0). Currently,
-the same option can not be used several times. <br>
+represented with field numbers (starting from 0, negative
+indices count from the end with -1 being the last field).
+The manipulation pipeline is ordered and stackable:
+operations execute in the exact order they are specified on
+the command line. Multiple operations (such as arithmetic,
+bit shifts, logical masks, filtering, and reordering) can be
+chained together. <br>
 --rearrange=FIELDLIST</p>
 
 <p style="margin-left:18%;">Selects fields from input tuple
@@ -442,6 +470,81 @@ end of the tuple (-1 is the last field). The same field
 number can exist several times duplicating the input field.
 Not all input fields need to be in the output tuple.</p>
 
+<p style="margin-left:9%;">--add=FIELD,VALUE</p>
+
+<p style="margin-left:18%;">Adds VALUE to the numerical
+value of FIELD.</p>
+
+<p style="margin-left:9%;">--sub=FIELD,VALUE</p>
+
+<p style="margin-left:18%;">Subtracts VALUE from the
+numerical value of FIELD.</p>
+
+<p style="margin-left:9%;">--mul=FIELD,VALUE</p>
+
+<p style="margin-left:18%;">Multiplies FIELD by VALUE.</p>
+
+<p style="margin-left:9%;">--div=FIELD,VALUE</p>
+
+<p style="margin-left:18%;">Performs integer or
+floating-point division of FIELD by VALUE.</p>
+
+<p style="margin-left:9%;">--mod=FIELD,VALUE</p>
+
+<p style="margin-left:18%;">Computes modulo remainder of
+FIELD by VALUE.</p>
+
+<p style="margin-left:9%;">--shift-left=FIELD,BITS</p>
+
+<p style="margin-left:18%;">Shifts FIELD left by BITS bits
+(multiplies by 2&#710;BITS).</p>
+
+<p style="margin-left:9%;">--shift-right=FIELD,BITS</p>
+
+<p style="margin-left:18%;">Shifts FIELD right by BITS bits
+(integer division by 2&#710;BITS).</p>
+
+<p style="margin-left:9%;">--and=FIELD,MASK</p>
+
+<p style="margin-left:18%;">Performs bitwise AND of FIELD
+with MASK (decimal, 0x hex, or 0b binary).</p>
+
+<p style="margin-left:9%;">--or=FIELD,MASK</p>
+
+<p style="margin-left:18%;">Performs bitwise OR of FIELD
+with MASK (decimal, 0x hex, or 0b binary).</p>
+
+<p style="margin-left:9%;">--xor=FIELD,BITS</p>
+
+<p style="margin-left:18%;">Inverts the rightmost BITS bits
+of FIELD, or applies a direct bitwise XOR mask if specified
+in hex or binary format. For example, the sign of a number
+read using pattern &quot;M&quot; can be changed using
+--xor=0,1.</p>
+
+<p style="margin-left:9%;">--not=FIELD</p>
+
+<p style="margin-left:18%;">Inverts all bits of FIELD.</p>
+
+<p style="margin-left:9%;">--abs=FIELD</p>
+
+<p style="margin-left:18%;">Removes sign from the value of
+the field (calculates absolute value). Legacy syntax
+--abs=FIELD,0 is also accepted.</p>
+
+<p style="margin-left:9%;">--sign=FIELD</p>
+
+<p style="margin-left:18%;">Extracts the sign of the field:
+1 if the value was negative and 0 if non-negative. Legacy
+syntax --sign=FIELD,0 is also accepted.</p>
+
+<p style="margin-left:9%;">--filter=FIELD,OP,VALUE</p>
+
+<p style="margin-left:18%;">Filters tuples based on a
+predicate condition where OP is one of ==, !=, &lt;, &lt;=,
+&gt;, or &gt;=. Tuples failing the predicate are discarded
+from the output stream.</p>
+
 <p style="margin-left:9%;">--cut-maxint=FIELD,MAXINT</p>
 
 <p style="margin-left:18%;">Cuts the maximum positive or
@@ -451,40 +554,11 @@ than -maxint get the value -maxint. Field number can be
 negative when the position is counted from the end of the
 tuple.</p>
 
-<p style="margin-left:18%; margin-top: 1em">One of the
-reasons to use this command is that the maximum negative
-number of 8-bit 2&rsquo;s complement number is -128. If we
-cut the magnitude of the number with pattern type
-&rsquo;m&rsquo;, we have to have 8 bits to represent
-magnitude in the output bit stream. If we want to output the
-result back to a 8-bit stream with separate sign and
-magnitude, we have to strip values -128 to -127 using
---cut-maxint=1,127.</p>
-
 <p style="margin-left:9%;">--remove-right=FIELD,BITS</p>
 
 <p style="margin-left:18%;">If we want to output other bits
 from the field than the rightmost ones, we can remove BITS
 rightmost bits from the field.</p>
-
-<p style="margin-left:9%;">--xor=FIELD,BITS</p>
-
-<p style="margin-left:18%;">Turns the righmost n BITS from
-0 to 1 and vice versa. For example, sign of a number read
-using pattern &quot;M&quot; can be changed using
---xor=0,1.</p>
-
-<p style="margin-left:9%;">--abs=FIELD,0</p>
-
-<p style="margin-left:18%;">Removes sign from the value of
-the field. Typically used with field that is read using
-pattern S and the result can be output to pattern U.</p>
-
-<p style="margin-left:9%;">--sign=FIELD,0</p>
-
-<p style="margin-left:18%;">Removes magnitude of the field.
-The result is 1 if the value was negative and 0 if the value
-was positive.</p>
 
 <h3>Skip a part of tuples
 <a name="Skip a part of tuples"></a>
@@ -730,6 +804,50 @@ between 40 and 80 characters.</p>
 human-readable output of units as bits. Look --output-hex
 for more information.</p>
 
+<p style="margin-left:9%;">--output-json</p>
+
+<p style="margin-left:18%;">Output stream of structured
+JSON objects (NDJSON), one object per line with typed field
+names and decoded values.</p>
+
+<p style="margin-left:9%;">--output-csv</p>
+
+<p style="margin-left:18%;">Output stream as
+comma-separated values (CSV).</p>
+
+<p style="margin-left:9%;">--csv-header=COL1,COL2,...</p>
+
+<p style="margin-left:18%;">Specify custom column names for
+CSV output header row.</p>
+
+<p style="margin-left:9%;">--output-visual</p>
+
+<p style="margin-left:18%;">ANSI color-coded visual stream
+inspector highlighting bit boundaries and field values.</p>
+
+<h3>Stream demuxing and routing
+<a name="Stream demuxing and routing"></a>
+</h3>
+
+
+
+<p style="margin-left:9%; margin-top: 1em">--demux=FIELD:PATH</p>
+
+<p style="margin-left:18%;">Extract individual tuple field
+by index and stream it directly to a dedicated file or FIFO.
+Can be repeated.</p>
+
+
+<p style="margin-left:9%;">--demux-files=PATH1,PATH2,...</p>
+
+<p style="margin-left:18%;">Demux tuple fields in order to
+a comma-separated list of target files.</p>
+
+<p style="margin-left:9%;">--input-repeat=COUNT</p>
+
+<p style="margin-left:18%;">Loop through the input stream
+COUNT times (supports seeking or memory buffering).</p>
+
 <h2>EXAMPLES
 <a name="EXAMPLES"></a>
 </h2>
@@ -815,25 +933,9 @@ hex address of the byte:</p>
 </h2>
 
 
-<p style="margin-left:9%; margin-top: 1em">bdd is pretty
-slow.</p>
-
-<p style="margin-left:9%; margin-top: 1em">Implementation
-does not allow duplicate manipulation options (--xor
-etc.).</p>
-
-<p style="margin-left:9%; margin-top: 1em">Syntax for --abs
-and --sign is painful.</p>
-
-<p style="margin-left:9%; margin-top: 1em">--input-tuples
-translates even quoted numbers to numbers, not strings.</p>
-
-<p style="margin-left:9%; margin-top: 1em">In many cases,
-warning of bad input repeats for each unit.</p>
-
-<p style="margin-left:9%; margin-top: 1em">In the next
-version, it is very likely that --output-unit will default
-to --input-unit, not to 8 bits.</p>
+<p style="margin-left:9%; margin-top: 1em">None known in
+the current release. Please report issues at
+https://github.com/turtiainen/bdd.</p>
 
 <h2>AUTHOR
 <a name="AUTHOR"></a>

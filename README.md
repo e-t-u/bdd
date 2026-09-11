@@ -28,26 +28,28 @@ Most Unix tools (`dd`, `hexdump`, `od`, standard shell pipes) operate strictly o
                                    │
               ┌────────────────────┴────────────────────┐
               ▼                                         ▼
-    [ Field Manipulators ]                    [ Secondary Merge ]
-    --rearrange, --xor,                       --merge-file
-    --cut-maxint, --remove-right,
-    --abs, --sign
+    [ Ordered Pipeline Manipulators ]         [ Secondary Merge ]
+    --rearrange, --cut-maxint,                --merge-file
+    --xor, --and, --or, --not,
+    --shift-left, --shift-right,
+    --add, --sub, --mul, --div, --mod,
+    --abs, --sign, --filter
               │                                         │
               └────────────────────┬────────────────────┘
                                    │
                                    ▼
          Manipulated Tuple: ( Field 0', Field 1', ... )
                                    │
-        ┌──────────────────────────┴──────────────────────────┐
-        ▼                                                     ▼
- [ Text Sinks ]                                     [ Output Packing ]
- --output-tuples (CSV)                              --output-pattern
+        ┌──────────────────────────┼──────────────────────────┐
+        ▼                          ▼                          ▼
+ [ Output Sinks ]          [ Channel Demuxing ]      [ Output Packing ]
+ --output-tuples (CSV)     --demux 0:f0.bin          --output-pattern
+ --output-json (NDJSON)    --demux-files f0,f1,...            │
+ --output-csv                                                 ▼
+ --output-visual (ANSI)                          [ Output Bit Accumulator ]
  --output-hex                                                 │
  --output-bits                                                ▼
- --output-integers                               [ Output Bit Accumulator ]
-                                                              │
-                                                              ▼
-                                                [ Output Stream / Stdout ]
+ --output-integers                               [ Output Stream / Stdout ]
 ```
 
 ---
@@ -125,26 +127,35 @@ Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a un
 
 ### Pattern Specifiers Reference
 
-Every field in an `--input-pattern` or `--output-pattern` is specified as `<bits><type>`:
+Every field in an `--input-pattern` or `--output-pattern` is specified as `<bits><type>` (with optional repetition multipliers like `4*8B` or `2*(4U4u)`):
 
 | Code | Name | Description | Allowed Bit Widths | Valid Context |
 |---|---|---|---|---|
-| `nU` | Unsigned Integer | Standard big-endian unsigned integer | Any positive integer | Input / Output |
-| `nu` | Unsigned (Reversed) | Unsigned integer with reversed bit order | Any positive integer | Input / Output |
+| `nU` / `nB` | Unsigned Integer / Byte | Standard big-endian unsigned integer | Any positive integer | Input / Output |
+| `nu` / `nb` | Unsigned (Reversed) | Unsigned integer with reversed bit order | Any positive integer | Input / Output |
 | `nS` | Signed Integer | Two's complement signed integer (returns negative values) | Any positive integer | Input / Output |
 | `ns` | Signed (Reversed) | Two's complement with reversed bit order | Any positive integer | Input / Output |
 | `nM` | Sign-Split Integer | Two's complement integer split into two fields: `[sign, abs(val)]` | Any positive integer | Input / Output |
 | `nm` | Sign-Split (Reversed)| Sign-split integer with reversed bit order | Any positive integer | Input / Output |
-| `32F`| 32-bit Float | IEEE 754 single-precision float | Exactly 32 bits | Input / Output |
-| `32f`| 32-bit Float (Rev) | IEEE 754 single-precision float (reversed bytes) | Exactly 32 bits | Input / Output |
-| `64D`| 64-bit Double | IEEE 754 double-precision float | Exactly 64 bits | Input / Output |
-| `64d`| 64-bit Double (Rev)| IEEE 754 double-precision float (reversed bytes) | Exactly 64 bits | Input / Output |
-| `nC` | Characters | Raw byte/character sequence (retains byte fidelity) | Multiples of 8 bits | Input / Output |
-| `nc` | Characters (Reversed)| Character sequence with bit-reversed bytes | Multiples of 8 bits | Input / Output |
+| `32F` / `32f` | 32-bit Float | IEEE 754 single-precision float (`f` reverses bits) | Exactly 32 bits | Input / Output |
+| `64D` / `64d` | 64-bit Double | IEEE 754 double-precision float (`d` reverses bits) | Exactly 64 bits | Input / Output |
+| `16H` / `16h` | Half-Precision Float | IEEE 754 half-precision float (FP16) | Exactly 16 bits | Input / Output |
+| `16Y` / `16y` | Bfloat16 | Google Brain Bfloat16 float (BF16) | Exactly 16 bits | Input / Output |
+| `8E` / `8e` | OCP FP8 (E4M3) | Open Compute / NVIDIA Hopper FP8 E4M3FN | Exactly 8 bits | Input / Output |
+| `8Q` / `8q` | OCP FP8 (E5M2) | Open Compute / NVIDIA Ada FP8 E5M2 | Exactly 8 bits | Input / Output |
+| `6E` / `6e` | OCP FP6 (E3M2) | Open Compute Microscaling FP6 E3M2 | Exactly 6 bits | Input / Output |
+| `4E` / `4e` | OCP / NVFP4 (E2M1) | NVIDIA Blackwell / OCP Microscaling FP4 E2M1 | Exactly 4 bits | Input / Output |
+| `nC` / `nc` | Characters / Bytes | Raw byte/character sequence (retains byte fidelity) | Multiples of 8 bits | Input / Output |
 | `nx` | Skip / Discard | Discards $n$ bits from input without placing them in the tuple | Any positive integer | Input only |
 | `nz` | Fill Zeros | Inserts $n$ constant zero bits | Any positive integer | Output only |
 | `no` | Fill Ones | Inserts $n$ constant one bits | Any positive integer | Output only |
 | `nr` | Fill Random | Inserts $n$ pseudo-random bits | Any positive integer | Output only |
+
+### Pattern Repetition Multipliers
+Patterns support multiplier syntax for repetitive fields and tensor arrays:
+- `4*8B`: Expands to `8B8B8B8B` (4 bytes).
+- `10*16H`: Expands to ten 16-bit half-precision floats.
+- `2*(4U4u)`: Expands to `4U4u4U4u`.
 
 ### Distinction Between `S` and `M`
 
@@ -156,24 +167,39 @@ Every field in an `--input-pattern` or `--output-pattern` is specified as `<bits
 
 ---
 
-## 3. In-Flight Tuple Manipulation
+## 3. Flexible Pipeline & Tuple Manipulation
 
-Once unpacked into a tuple, fields can be transformed using pipeline manipulators before repacking. Fields are referenced by index starting from `0`. Negative indices count from the end of the tuple (`-1` = last field, `-2` = second to last):
+Once unpacked into a tuple, fields can be transformed using pipeline manipulators executed in the exact order specified on the command line. Fields are referenced by index starting from `0` (or negative index from end):
 
-### Manipulators
+### Pipeline Manipulators
 
-- **`--rearrange=F0,F1,...`**: Reorders, duplicates, or selects specific fields.
-  ```bash
-  # Swap field 0 and field 1:
-  bdd --input-pattern=1U2U --rearrange=1,0 --output-pattern=2U1U
-  ```
+- **`--rearrange=F0,F1,...`**: Reorders, duplicates, or drops fields (e.g., `--rearrange=1,0`).
 - **`--cut-maxint=FIELD,MAX`**: Clamps field value within `[-MAX, MAX]`.
-- **`--remove-right=FIELD,BITS`**: Bitwise right-shifts field by `BITS`, stripping low-order bits.
-- **`--xor=FIELD,BITS`**: Bitwise XORs field with a mask of `BITS` ones (inverts $N$ bits).
-- **`--abs=FIELD`**: Converts a signed field to its absolute value.
-- **`--sign=FIELD`**: Isolates the sign bit of a signed field (`0` = positive, `1` = negative).
+- **`--remove-right=FIELD,BITS`** / **`--shift-right=FIELD,BITS`**: Bitwise right-shifts field by `BITS`.
+- **`--shift-left=FIELD,BITS`**: Bitwise left-shifts field by `BITS`.
+- **`--xor=FIELD,PARAM`**: Bitwise XOR with parameter (supports hex `0x...`, bin `0b...`, or bit-count mask).
+- **`--and=FIELD,PARAM`**: Bitwise AND with parameter.
+- **`--or=FIELD,PARAM`**: Bitwise OR with parameter.
+- **`--not=FIELD`**: Bitwise NOT (inverts field bits).
+- **`--add=FIELD,PARAM`**: Adds integer parameter to field.
+- **`--sub=FIELD,PARAM`**: Subtracts integer parameter from field.
+- **`--mul=FIELD,PARAM`**: Multiplies field by parameter.
+- **`--div=FIELD,PARAM`**: Integer division of field by parameter.
+- **`--mod=FIELD,PARAM`**: Modulo of field by parameter.
+- **`--abs=FIELD`**: Converts a signed field to its absolute value (syntax: `--abs 0` or legacy `--abs 0,0`).
+- **`--sign=FIELD`**: Isolates sign bit (`0` = positive, `1` = negative).
+- **`--filter=FIELD,OP,VALUE`**: Drops tuples where predicate is false (`==`, `!=`, `<`, `<=`, `>`, `>=`).
 
-### Advanced Pipeline Recipe
+### Ordered Pipeline Example
+
+Chain multiple transformations in arbitrary sequence:
+```bash
+# Add 10, multiply by 2, and filter values greater than 25:
+bdd --input-counter --count 10 --input-pattern 8U \
+    --add 0,10 --mul 0,2 --filter "0,>,25" --output-json
+```
+
+### Advanced Bit-Slicing Recipe
 
 *Problem from presentation:* Input is a stream of signed bytes (`8M`). We want to clamp the value so $-128$ becomes $-127$, isolate the magnitude, and extract only the most significant bit of the magnitude:
 
@@ -209,6 +235,9 @@ Explanation:
 - **`--output-bits` (`-b` / `--output-bit`)**: ASCII bit strings (`'0'` and `'1'`) per unit.
 - **`--output-integers` (`-i` / `--output-integer`)**: One unsigned decimal integer per line (ideal for Unix pipelines: `awk`, `sort`, `uniq`).
 - **`--output-tuples` (`-T` / `--output-tuple`)**: Comma-separated values per unit.
+- **`--output-json`**: Newline-delimited JSON (NDJSON) record per tuple (ideal for `jq`, Python, databases).
+- **`--output-csv`**: Comma-separated values (with optional `--csv-header="col1,col2"`).
+- **`--output-visual`**: Interactive colorized terminal dump rendering unaligned field slices in alternating ANSI colors.
 - **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples.
 
 ### Packing from Text & Tuples
@@ -328,17 +357,37 @@ Tuple Manipulators:
       --rearrange <FIELDS>         Reorder output fields (e.g. "1,0" or "-1,0")
       --cut-maxint <F,MAX>         Clamp field F to [-MAX, MAX]
       --remove-right <F,BITS>      Right-shift field F by BITS
-      --xor <F,BITS>               Bitwise XOR field F with mask of BITS ones
+      --shift-right <F,BITS>       Right-shift field F by BITS (synonym)
+      --shift-left <F,BITS>        Left-shift field F by BITS
+      --xor <F,PARAM>              Bitwise XOR field F with PARAM (or mask of N ones)
+      --and <F,PARAM>              Bitwise AND field F with PARAM
+      --or <F,PARAM>               Bitwise OR field F with PARAM
+      --not <FIELD>                Bitwise NOT (inverts bits of field F)
+      --add <F,PARAM>              Add PARAM to field F
+      --sub <F,PARAM>              Subtract PARAM from field F
+      --mul <F,PARAM>              Multiply field F by PARAM
+      --div <F,PARAM>              Integer division of field F by PARAM
+      --mod <F,PARAM>              Modulo of field F by PARAM
       --abs <FIELD>                Replace signed field F with abs(F)
       --sign <FIELD>               Replace signed field F with sign bit (0/1)
+      --filter <F,OP,VAL>          Filter tuples where predicate is false (==, !=, <, <=, >, >=)
 
 Output Unit & Pattern Options:
-      --output-pattern <PATTERN>   Bit pattern to pack output
+      --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats & multipliers)
       --output-unit <BITS>         Output unit size in bits (shorthand for <BITS>U)
   -x, --output-hex                 Output units as formatted hexadecimal strings
   -b, --output-bits                Output units as ASCII bit strings ('0' and '1')
   -i, --output-integers            Output unsigned integer per unit (one per line)
   -T, --output-tuples              Output fields as comma-separated tuples
+      --output-json                Output tuples as newline-delimited JSON (NDJSON)
+      --output-csv                 Output tuples as CSV
+      --csv-header <HEADER>        Optional CSV column header row
+      --output-visual              Colorized ANSI terminal dump of unaligned fields
+
+Demuxing & Channel Splitting:
+      --demux <FIELD:PATH>         Route individual tuple field to a dedicated output file
+      --demux-files <PATHS>        Comma-separated list of output files for fields 0, 1, 2...
+      --input-repeat <COUNT>       Repeat input stream N times (0 = infinite)
 
 Merge Options:
       --merge-file <PATH>          Interleave stream from secondary file
@@ -352,7 +401,71 @@ General:
 
 ---
 
-## 8. Performance & Throughput Benchmarks
+## 8. Channel Demuxing & Splitting
+
+When processing multiplexed packet formats or interleaved bitstreams (e.g. audio + video, header + payload), `bdd` can demux fields into independent files or pipes:
+
+```bash
+# Split interleaved 16-bit audio and 32-bit video into separate streams:
+bdd --input-pattern=16B32B \
+    --demux 0:audio.raw \
+    --demux 1:video.raw < input.bin
+
+# Alternatively, using --demux-files shorthand:
+bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin
+```
+
+---
+
+## 9. Programmatic Interfaces (C Header & Python)
+
+`bdd` exports clean C-ABI symbols in `libbdd.so` and includes an official C header ([`include/bdd.h`](include/bdd.h)) and a zero-dependency Python wrapper ([`python/bdd.py`](python/bdd.py)):
+
+### Python (`ctypes`)
+
+```python
+from bdd import Bdd
+
+b = Bdd()
+
+# Fast hardware bit-reversal:
+assert b.reverse_bits(0x0F, 8) == 0xF0
+
+# Unpack bitfields into Python tuple:
+fields = b.unpack("4U4U", 0xA5)   # -> (10, 5)
+
+# Pack Python tuple into raw integer:
+unit = b.pack("4U4U", (10, 5))    # -> 0xA5
+
+# Native AI float conversion (FP16, BF16, FP8, FP4):
+val = b.decode_f16(0x3C00)        # -> 1.0
+bits = b.encode_f16(1.0)          # -> 0x3C00
+```
+
+### C / C++ API
+
+```c
+#include "bdd.h"
+#include <stdio.h>
+
+int main() {
+    uint64_t fields[2];
+    bdd_unpack_u64("4U4U", 0xA5, fields, 2);
+    printf("Field 0: %lu, Field 1: %lu\n", fields[0], fields[1]); // 10, 5
+    return 0;
+}
+```
+
+---
+
+## 10. UTF-8 Stream Processing & Architectural Study
+
+For an in-depth analysis of UTF-8 bitstream hazards, byte-alignment constraints, continuation header preservation, and Unicode scalar value processing in `bdd`, consult the technical report:
+* [`docs/utf8_study.md`](docs/utf8_study.md)
+
+---
+
+## 11. Performance & Throughput Benchmarks
 
 `bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
 
@@ -371,7 +484,7 @@ Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
 
 ---
 
-## 9. Architecture & Codebase Design
+## 12. Architecture & Codebase Design
 
 The Rust implementation is organized cleanly into modular crates:
 
@@ -381,13 +494,19 @@ src/
 ├── main.rs         # Thin 18-line executable wrapper
 ├── error.rs        # Strongly-typed BddError hierarchy
 ├── counter.rs      # Unit and skip counting logic
-├── field.rs        # Arbitrary-precision Field enum & hardware-accelerated bit-reversals
-├── pattern.rs      # Grammar parser, TupleUnpacker, and TuplePacker
+├── field.rs        # Arbitrary-precision Field enum & hardware bit-reversals
+├── float_types.rs  # AI/GPU float codecs (FP16, BF16, FP8 E4M3/E5M2, FP6, FP4)
+├── ffi.rs          # C-ABI export symbols for native integration
+├── pattern.rs      # Grammar parser, multipliers, TupleUnpacker & TuplePacker
 ├── stream.rs       # Stream generators (File, Counter, Zeros, Ones, Random, Tuples)
-├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV Tuples)
-├── manipulator.rs  # Field transformations (Rearrange, Xor, CutMaxint, Abs, Sign)
+├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV, NDJSON, ANSI Visual)
+├── manipulator.rs  # Ordered pipeline transformations (Arithmetic, Bitwise, Filter)
 ├── cli.rs          # Clap CLI definition & validation rules
 └── engine.rs       # End-to-end pipeline execution orchestrator
+include/
+└── bdd.h           # C/C++ API header
+python/
+└── bdd.py          # Zero-dependency Python ctypes wrapper
 ```
 
 ### Key Design Principles
@@ -399,7 +518,7 @@ src/
 
 ---
 
-## 10. Development, Testing & Documentation
+## 13. Development, Testing & Documentation
 
 Run the test suite:
 

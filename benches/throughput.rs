@@ -122,7 +122,7 @@ fn bench_tuple_unpack_rearrange_pack() {
     let mut total_packed = BigUint::from(0u32);
     for _ in 0..count {
         let tuple = unpacker.unpack(input_unit.clone());
-        let modified = manip.manipulate(tuple);
+        let modified = manip.manipulate(tuple).unwrap();
         let packed = packer.pack(modified).unwrap();
         total_packed += packed;
     }

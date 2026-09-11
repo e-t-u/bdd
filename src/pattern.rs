@@ -11,13 +11,83 @@ pub struct PatternItem {
     pub char_code: char,
 }
 
-/// Parse and validate an input pattern string (e.g. "2U3U5U", "32F").
+/// Expands repetition multipliers in pattern strings, e.g. "4*8B" -> "8B8B8B8B"
+/// and "2*(4U4U)" -> "4U4U4U4U".
+pub fn expand_pattern_multipliers(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            let mut num_str = String::new();
+            num_str.push(c);
+            while let Some(&next_c) = chars.peek() {
+                if next_c.is_ascii_digit() {
+                    num_str.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            if chars.peek() == Some(&'*') {
+                chars.next(); // consume '*'
+                if chars.peek() == Some(&'(') {
+                    chars.next(); // consume '('
+                    let mut inner = String::new();
+                    let mut depth = 1;
+                    for ic in chars.by_ref() {
+                        if ic == '(' {
+                            depth += 1;
+                            inner.push(ic);
+                        } else if ic == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            } else {
+                                inner.push(ic);
+                            }
+                        } else {
+                            inner.push(ic);
+                        }
+                    }
+                    let count: usize = num_str.parse().unwrap_or(1);
+                    let expanded_inner = expand_pattern_multipliers(&inner);
+                    for _ in 0..count {
+                        out.push_str(&expanded_inner);
+                    }
+                } else {
+                    let mut token_digits = String::new();
+                    while let Some(&next_c) = chars.peek() {
+                        if next_c.is_ascii_digit() {
+                            token_digits.push(chars.next().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(letter) = chars.next() {
+                        let count: usize = num_str.parse().unwrap_or(1);
+                        let token = format!("{}{}", token_digits, letter);
+                        for _ in 0..count {
+                            out.push_str(&token);
+                        }
+                    }
+                }
+            } else {
+                out.push_str(&num_str);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse and validate an input pattern string (e.g. "2U3U5U", "32F", "4*8B", "16H", "8E").
 pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
+    let expanded = expand_pattern_multipliers(pattern_str);
     let mut items = Vec::new();
     let mut digits = String::new();
     let mut matched_len = 0;
 
-    for c in pattern_str.chars() {
+    for c in expanded.chars() {
         if c.is_ascii_digit() {
             digits.push(c);
         } else {
@@ -38,7 +108,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
 
     for item in &items {
         let c = item.char_code;
-        if !"xUuSsMmFfDdCc".contains(c) {
+        if !"xUuBbSsMmFfDdHhYyEeQqCc".contains(c) {
             return Err(BddError::IllegalInputPatternChar(c));
         }
         if item.bits == 0 {
@@ -50,6 +120,18 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
         if "Dd".contains(c) && item.bits != 64 {
             return Err(BddError::InvalidInputBitLength(c, 64));
         }
+        if "Hh".contains(c) && item.bits != 16 {
+            return Err(BddError::InvalidInputBitLength(c, 16));
+        }
+        if "Yy".contains(c) && item.bits != 16 {
+            return Err(BddError::InvalidInputBitLength(c, 16));
+        }
+        if "Qq".contains(c) && item.bits != 8 {
+            return Err(BddError::InvalidInputBitLength(c, 8));
+        }
+        if "Ee".contains(c) && item.bits != 8 && item.bits != 6 && item.bits != 4 {
+            return Err(BddError::InvalidInputBitLength(c, 8));
+        }
         if "Cc".contains(c) && item.bits % 8 != 0 {
             eprintln!("Number of bits for input pattern {} should be n*8 bits", c);
         }
@@ -58,12 +140,13 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
     Ok(items)
 }
 
-/// Parse and validate an output pattern string (e.g. "4z4M", "8u8U8u").
+/// Parse and validate an output pattern string (e.g. "4z4M", "8u8U8u", "4*16H").
 pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
+    let expanded = expand_pattern_multipliers(pattern_str);
     let mut items = Vec::new();
     let mut digits = String::new();
 
-    for c in pattern_str.chars() {
+    for c in expanded.chars() {
         if c.is_ascii_digit() {
             digits.push(c);
         } else {
@@ -83,7 +166,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
 
     for item in &items {
         let c = item.char_code;
-        if !"UuSsMmFfDdCczor".contains(c) {
+        if !"UuBbSsMmFfDdHhYyEeQqCczor".contains(c) {
             return Err(BddError::IllegalOutputPatternChar(c));
         }
         if item.bits == 0 {
@@ -95,6 +178,18 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
         if "Dd".contains(c) && item.bits != 64 {
             return Err(BddError::InvalidOutputBitLength(c, 64));
         }
+        if "Hh".contains(c) && item.bits != 16 {
+            return Err(BddError::InvalidOutputBitLength(c, 16));
+        }
+        if "Yy".contains(c) && item.bits != 16 {
+            return Err(BddError::InvalidOutputBitLength(c, 16));
+        }
+        if "Qq".contains(c) && item.bits != 8 {
+            return Err(BddError::InvalidOutputBitLength(c, 8));
+        }
+        if "Ee".contains(c) && item.bits != 8 && item.bits != 6 && item.bits != 4 {
+            return Err(BddError::InvalidOutputBitLength(c, 8));
+        }
         if "Cc".contains(c) && item.bits % 8 != 0 {
             eprintln!("Number of bits for output pattern {} should be n*8 bits", c);
         }
@@ -105,6 +200,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
 
 /// Unpacks a bitstream integer unit into individual fields according to an input pattern.
 pub struct TupleUnpacker {
+    pub pattern_items: Vec<PatternItem>,
     reversed_pattern: Vec<PatternItem>,
     pub total_bits: usize,
 }
@@ -113,9 +209,10 @@ impl TupleUnpacker {
     pub fn new(pattern_str: &str) -> Result<Self, BddError> {
         let pattern = parse_input_pattern(pattern_str)?;
         let total_bits = pattern.iter().map(|p| p.bits).sum();
-        let mut reversed_pattern = pattern;
+        let mut reversed_pattern = pattern.clone();
         reversed_pattern.reverse();
         Ok(Self {
+            pattern_items: pattern,
             reversed_pattern,
             total_bits,
         })
@@ -126,12 +223,12 @@ impl TupleUnpacker {
         for p in &self.reversed_pattern {
             let bits = p.bits;
             let c = p.char_code;
-            if "usmfdc".contains(c) {
+            if "usmfdchyqeb".contains(c) {
                 unit = reverse_bits(&unit, bits);
             }
             if c == 'x' {
                 unit >>= bits;
-            } else if c == 'U' || c == 'u' {
+            } else if c == 'U' || c == 'u' || c == 'B' || c == 'b' {
                 let mask = (BigUint::one() << bits) - 1u32;
                 let val = &unit & &mask;
                 tuple.push(Field::UInt(val));
@@ -179,6 +276,39 @@ impl TupleUnpacker {
                 let fl = f64::from_ne_bytes(bytes);
                 tuple.push(Field::Float(fl));
                 unit >>= 64;
+            } else if c == 'H' || c == 'h' {
+                let mask = (BigUint::one() << 16) - 1u32;
+                let val = &unit & &mask;
+                let u = val.to_u16().unwrap_or(0);
+                let fl = crate::float_types::decode_f16(u);
+                tuple.push(Field::Float(fl));
+                unit >>= 16;
+            } else if c == 'Y' || c == 'y' {
+                let mask = (BigUint::one() << 16) - 1u32;
+                let val = &unit & &mask;
+                let u = val.to_u16().unwrap_or(0);
+                let fl = crate::float_types::decode_bf16(u);
+                tuple.push(Field::Float(fl));
+                unit >>= 16;
+            } else if c == 'Q' || c == 'q' {
+                let mask = (BigUint::one() << 8) - 1u32;
+                let val = &unit & &mask;
+                let u = val.to_u8().unwrap_or(0);
+                let fl = crate::float_types::decode_fp8_e5m2(u);
+                tuple.push(Field::Float(fl));
+                unit >>= 8;
+            } else if c == 'E' || c == 'e' {
+                let mask = (BigUint::one() << bits) - 1u32;
+                let val = &unit & &mask;
+                let u = val.to_u8().unwrap_or(0);
+                let fl = match bits {
+                    8 => crate::float_types::decode_fp8_e4m3(u),
+                    6 => crate::float_types::decode_fp6_e3m2(u),
+                    4 => crate::float_types::decode_fp4_e2m1(u),
+                    _ => 0.0,
+                };
+                tuple.push(Field::Float(fl));
+                unit >>= bits;
             } else if c == 'C' || c == 'c' {
                 let mut bytes = Vec::new();
                 let mask = BigUint::from(0xFFu32);
@@ -227,7 +357,7 @@ impl TuplePacker {
             let bits = p.bits;
             let c = p.char_code;
             let mut val = match c {
-                'U' | 'u' => {
+                'U' | 'u' | 'B' | 'b' => {
                     let f = Self::pop_field(&mut tuple)?;
                     f.as_biguint()
                 }
@@ -276,6 +406,32 @@ impl TuplePacker {
                     }
                     v
                 }
+                'H' | 'h' => {
+                    let f = Self::pop_field(&mut tuple)?;
+                    let u = crate::float_types::encode_f16(f.as_f64());
+                    BigUint::from(u)
+                }
+                'Y' | 'y' => {
+                    let f = Self::pop_field(&mut tuple)?;
+                    let u = crate::float_types::encode_bf16(f.as_f64());
+                    BigUint::from(u)
+                }
+                'Q' | 'q' => {
+                    let f = Self::pop_field(&mut tuple)?;
+                    let u = crate::float_types::encode_fp8_e5m2(f.as_f64());
+                    BigUint::from(u)
+                }
+                'E' | 'e' => {
+                    let f = Self::pop_field(&mut tuple)?;
+                    let fl = f.as_f64();
+                    let u = match bits {
+                        8 => crate::float_types::encode_fp8_e4m3(fl),
+                        6 => crate::float_types::encode_fp6_e3m2(fl),
+                        4 => crate::float_types::encode_fp4_e2m1(fl),
+                        _ => 0,
+                    };
+                    BigUint::from(u)
+                }
                 'C' | 'c' => {
                     let f = Self::pop_field(&mut tuple)?;
                     match f {
@@ -300,7 +456,7 @@ impl TuplePacker {
                 _ => BigUint::zero(),
             };
 
-            if "usmfdc".contains(c) {
+            if "usmfdchyqeb".contains(c) {
                 val = reverse_bits(&val, bits);
             }
             let mask = (BigUint::one() << bits) - 1u32;
@@ -415,5 +571,41 @@ mod tests {
         let packer = TuplePacker::new(&pattern).unwrap();
         let packed = packer.pack(tuple).unwrap();
         assert_eq!(packed, big_val);
+    }
+
+    #[test]
+    fn test_pattern_multipliers() {
+        assert_eq!(expand_pattern_multipliers("4*8B"), "8B8B8B8B");
+        assert_eq!(expand_pattern_multipliers("2*(4U4u)"), "4U4u4U4u");
+        let p = parse_input_pattern("4*8B").unwrap();
+        assert_eq!(p.len(), 4);
+        assert_eq!(p.iter().map(|item| item.bits).sum::<usize>(), 32);
+    }
+
+    #[test]
+    fn test_ai_floats_roundtrip() {
+        // FP16 (16H), BF16 (16Y), FP8 E4M3 (8E), FP8 E5M2 (8Q), FP4 E2M1 (4E)
+        let pattern = "16H16Y8E8Q4E";
+        let packer = TuplePacker::new(pattern).unwrap();
+        assert_eq!(packer.total_bits, 16 + 16 + 8 + 8 + 4);
+
+        let tuple = vec![
+            Field::Float(1.0),
+            Field::Float(-1.0),
+            Field::Float(2.0),
+            Field::Float(-2.0),
+            Field::Float(0.5),
+        ];
+
+        let packed = packer.pack(tuple).unwrap();
+        let unpacker = TupleUnpacker::new(pattern).unwrap();
+        let unpacked = unpacker.unpack(packed);
+
+        assert_eq!(unpacked.len(), 5);
+        assert_eq!(unpacked[0].as_f64(), 1.0);
+        assert_eq!(unpacked[1].as_f64(), -1.0);
+        assert_eq!(unpacked[2].as_f64(), 2.0);
+        assert_eq!(unpacked[3].as_f64(), -2.0);
+        assert_eq!(unpacked[4].as_f64(), 0.5);
     }
 }

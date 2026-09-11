@@ -5,8 +5,8 @@ use crate::field::Field;
 use crate::manipulator::*;
 use crate::pattern::{TuplePacker, TupleUnpacker};
 use crate::sink::{
-    BitOutputStream, FileOutputStream, HexOutputStream, IntegerOutputStream, TupleDirectOutput,
-    UnitSink,
+    BitOutputStream, CsvOutputStream, FileOutputStream, HexOutputStream, IntegerOutputStream,
+    JsonOutputStream, TupleDirectOutput, TupleSink, UnitSink, VisualOutputStream,
 };
 use crate::stream::{
     CounterStream, FileInputStream, IntegerInputStream, OneStream, RandomStream, StreamConfig,
@@ -76,24 +76,65 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
             None
         };
 
-    let mut manipulators: Vec<Box<dyn TupleManipulator>> = Vec::new();
-    if let Some(ref arg) = config.rearrange {
-        manipulators.push(Box::new(RearrangeManipulator::new(arg)?));
-    }
-    if let Some(ref arg) = config.cut_maxint {
-        manipulators.push(Box::new(CutMaxintManipulator::new(arg)?));
-    }
-    if let Some(ref arg) = config.remove_right {
-        manipulators.push(Box::new(RemoveRightManipulator::new(arg)?));
-    }
-    if let Some(ref arg) = config.xor {
-        manipulators.push(Box::new(XorManipulator::new(arg)?));
-    }
-    if let Some(ref arg) = config.abs {
-        manipulators.push(Box::new(AbsManipulator::new(arg)?));
-    }
-    if let Some(ref arg) = config.sign {
-        manipulators.push(Box::new(SignManipulator::new(arg)?));
+    // Build manipulation pipeline: ordered from CLI arguments if available, else from flags
+    let mut manipulators: Vec<Box<dyn TupleManipulator>> = if !config.raw_args.is_empty() {
+        build_pipeline_from_args(&config.raw_args)?
+    } else {
+        Vec::new()
+    };
+
+    if manipulators.is_empty() {
+        if let Some(ref arg) = config.rearrange {
+            manipulators.push(Box::new(RearrangeManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.cut_maxint {
+            manipulators.push(Box::new(CutMaxintManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.remove_right {
+            manipulators.push(Box::new(RemoveRightManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.shift_right {
+            manipulators.push(Box::new(ShiftRightManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.shift_left {
+            manipulators.push(Box::new(ShiftLeftManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.xor {
+            manipulators.push(Box::new(XorManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.and {
+            manipulators.push(Box::new(AndManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.or {
+            manipulators.push(Box::new(OrManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.not {
+            manipulators.push(Box::new(NotManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.abs {
+            manipulators.push(Box::new(AbsManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.sign {
+            manipulators.push(Box::new(SignManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.add {
+            manipulators.push(Box::new(AddManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.sub {
+            manipulators.push(Box::new(SubManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.mul {
+            manipulators.push(Box::new(MulManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.div {
+            manipulators.push(Box::new(DivManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.r#mod {
+            manipulators.push(Box::new(ModManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.filter {
+            manipulators.push(Box::new(FilterManipulator::new(arg)?));
+        }
     }
 
     let out_writer: Box<dyn Write> = if config.output_file == "-" {
@@ -105,11 +146,20 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         }
     };
 
-    let mut tuple_direct_out: Option<TupleDirectOutput<Box<dyn Write>>> = None;
+    let mut tuple_sink: Option<Box<dyn TupleSink>> = None;
     let mut unit_sink: Option<Box<dyn UnitSink>> = None;
 
     if config.output_tuples {
-        tuple_direct_out = Some(TupleDirectOutput::new(out_writer));
+        tuple_sink = Some(Box::new(TupleDirectOutput::new(out_writer)));
+    } else if config.output_json {
+        tuple_sink = Some(Box::new(JsonOutputStream::new(out_writer)));
+    } else if config.output_csv {
+        tuple_sink = Some(Box::new(CsvOutputStream::new(
+            out_writer,
+            config.csv_header.clone(),
+        )));
+    } else if config.output_visual {
+        tuple_sink = Some(Box::new(VisualOutputStream::new(out_writer)));
     } else if config.output_integers {
         unit_sink = Some(Box::new(IntegerOutputStream::new(out_writer)));
     } else if config.output_hex {
@@ -122,6 +172,39 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
             config.output_reverse_bytes,
             config.output_reverse_unit,
         )));
+    }
+
+    // Demux sinks
+    let mut demux_sinks: Vec<(usize, Box<dyn UnitSink>)> = Vec::new();
+    if let Some(ref df) = config.demux_files {
+        for (i, path) in df.split(',').enumerate() {
+            let p = path.trim();
+            if !p.is_empty() {
+                let w: Box<dyn Write> = if p == "-" {
+                    Box::new(io::stdout())
+                } else {
+                    Box::new(BufWriter::new(
+                        File::create(p).map_err(|_| BddError::CannotOpenOutputFile)?,
+                    ))
+                };
+                demux_sinks.push((i, Box::new(FileOutputStream::new(w, false, false))));
+            }
+        }
+    }
+    for spec in &config.demux {
+        let parts: Vec<&str> = spec.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            let field_idx = parts[0].trim().parse::<usize>().unwrap_or(0);
+            let p = parts[1].trim();
+            let w: Box<dyn Write> = if p == "-" {
+                Box::new(io::stdout())
+            } else {
+                Box::new(BufWriter::new(
+                    File::create(p).map_err(|_| BddError::CannotOpenOutputFile)?,
+                ))
+            };
+            demux_sinks.push((field_idx, Box::new(FileOutputStream::new(w, false, false))));
+        }
     }
 
     if let Some(ref mut ms) = merge_stream {
@@ -147,10 +230,36 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         let mut tuple_in = TupleDirectInput::new(in_reader, counter);
 
         while let Some(mut tuple) = tuple_in.next_tuple()? {
+            let mut maybe_tuple = Some(tuple);
             for m in &manipulators {
-                tuple = m.manipulate(tuple);
+                if let Some(t) = maybe_tuple {
+                    maybe_tuple = m.manipulate(t);
+                } else {
+                    break;
+                }
             }
-            if let Some(ref mut tout) = tuple_direct_out {
+            tuple = match maybe_tuple {
+                Some(t) => t,
+                None => continue,
+            };
+
+            for (f_idx, sink) in demux_sinks.iter_mut() {
+                if *f_idx < tuple.len() {
+                    let val = tuple[*f_idx].as_biguint();
+                    let bits = if let Some(ref u) = unpacker {
+                        if *f_idx < u.pattern_items.len() {
+                            u.pattern_items[*f_idx].bits
+                        } else {
+                            out_unit_size
+                        }
+                    } else {
+                        out_unit_size
+                    };
+                    sink.write_bits(val, bits)?;
+                }
+            }
+
+            if let Some(ref mut tout) = tuple_sink {
                 tout.write_tuple(&tuple)?;
             } else {
                 let unit = if let Some(ref p) = packer {
@@ -223,17 +332,42 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         };
 
         while let Some(unit) = unit_stream.next_unit()? {
-            let mut tuple = if let Some(ref u) = unpacker {
+            let tuple = if let Some(ref u) = unpacker {
                 u.unpack(unit)
             } else {
                 vec![Field::UInt(unit)]
             };
 
+            let mut maybe_tuple = Some(tuple);
             for m in &manipulators {
-                tuple = m.manipulate(tuple);
+                if let Some(t) = maybe_tuple {
+                    maybe_tuple = m.manipulate(t);
+                } else {
+                    break;
+                }
+            }
+            let tuple = match maybe_tuple {
+                Some(t) => t,
+                None => continue,
+            };
+
+            for (f_idx, sink) in demux_sinks.iter_mut() {
+                if *f_idx < tuple.len() {
+                    let val = tuple[*f_idx].as_biguint();
+                    let bits = if let Some(ref u) = unpacker {
+                        if *f_idx < u.pattern_items.len() {
+                            u.pattern_items[*f_idx].bits
+                        } else {
+                            out_unit_size
+                        }
+                    } else {
+                        out_unit_size
+                    };
+                    sink.write_bits(val, bits)?;
+                }
             }
 
-            if let Some(ref mut tout) = tuple_direct_out {
+            if let Some(ref mut tout) = tuple_sink {
                 tout.write_tuple(&tuple)?;
             } else {
                 let out_unit = if let Some(ref p) = packer {
@@ -266,10 +400,13 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         }
     }
 
-    if let Some(ref mut tout) = tuple_direct_out {
+    if let Some(ref mut tout) = tuple_sink {
         tout.flush_stream()?;
     }
     if let Some(ref mut sink) = unit_sink {
+        sink.flush_stream()?;
+    }
+    for (_, sink) in demux_sinks.iter_mut() {
         sink.flush_stream()?;
     }
 

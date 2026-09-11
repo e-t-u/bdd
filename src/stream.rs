@@ -391,13 +391,14 @@ impl<R: BufRead> TupleDirectInput<R> {
     }
 
     pub fn next_tuple(&mut self) -> Result<Option<Vec<Field>>, BddError> {
-        let mut line = String::new();
+        let mut raw_bytes = Vec::new();
         loop {
-            line.clear();
-            match self.reader.read_line(&mut line) {
+            raw_bytes.clear();
+            match self.reader.read_until(b'\n', &mut raw_bytes) {
                 Ok(0) => return Ok(None),
                 Ok(_) => {
-                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+                    let lossy = String::from_utf8_lossy(&raw_bytes);
+                    let trimmed = lossy.trim_end_matches(&['\r', '\n'][..]);
                     if trimmed.is_empty() {
                         continue;
                     }

@@ -238,9 +238,36 @@ necessary and it makes sense to output them to the bit stream:
 .br
     d - d  - same, lsb first
 .br
+    16H - d  - IEEE-754 16-bit half precision float (FP16, msb)
+.br
+    16h - d  - IEEE-754 16-bit half precision float (FP16, lsb)
+.br
+    16Y - d  - Google Brain 16-bit bfloat16 (BF16, msb)
+.br
+    16y - d  - Google Brain 16-bit bfloat16 (BF16, lsb)
+.br
+    8E  - d  - OCP FP8 E4M3FN (8-bit AI float, msb)
+.br
+    8e  - d  - OCP FP8 E4M3FN (8-bit AI float, lsb)
+.br
+    8Q  - d  - OCP FP8 E5M2 (8-bit AI float, msb)
+.br
+    8q  - d  - OCP FP8 E5M2 (8-bit AI float, lsb)
+.br
+    6E  - d  - OCP FP6 E3M2 (6-bit AI float, msb)
+.br
+    6e  - d  - OCP FP6 E3M2 (6-bit AI float, lsb)
+.br
+    4E  - d  - NVIDIA Blackwell / OCP FP4 E2M1 (4-bit AI float, msb)
+.br
+    4e  - d  - NVIDIA Blackwell / OCP FP4 E2M1 (4-bit AI float, lsb)
+.br
     c - s  - field is unicode UTF-8 character string
 .br
     C - s  - same, lsb first
+.PP
+Patterns also support repetition multipliers in the format \fICOUNT*SPEC\fR or \fICOUNT*(SPEC1 SPEC2 ...)\fR.
+For example, \f(CR4*8B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
 
 S and s should be used with caution. If negative value is
 used in making a unit, it will cause an error. The only
@@ -296,8 +323,8 @@ Allowed types and their internal representations are:
 
 .SS Manipulate tuple
 
-Fields are represented with field numbers (starting from 0).
-Currently, the same option can not be used several times.
+Fields are represented with field numbers (starting from 0, negative indices count from the end with -1 being the last field).
+The manipulation pipeline is ordered and stackable: operations execute in the exact order they are specified on the command line. Multiple operations (such as arithmetic, bit shifts, logical masks, filtering, and reordering) can be chained together.
 
 .TP
 --rearrange=FIELDLIST
@@ -309,38 +336,72 @@ exist several times duplicating the input field. Not all input fields
 need to be in the output tuple.
 
 .TP
+--add=FIELD,VALUE
+Adds VALUE to the numerical value of FIELD.
+
+.TP
+--sub=FIELD,VALUE
+Subtracts VALUE from the numerical value of FIELD.
+
+.TP
+--mul=FIELD,VALUE
+Multiplies FIELD by VALUE.
+
+.TP
+--div=FIELD,VALUE
+Performs integer or floating-point division of FIELD by VALUE.
+
+.TP
+--mod=FIELD,VALUE
+Computes modulo remainder of FIELD by VALUE.
+
+.TP
+--shift-left=FIELD,BITS
+Shifts FIELD left by BITS bits (multiplies by 2^BITS).
+
+.TP
+--shift-right=FIELD,BITS
+Shifts FIELD right by BITS bits (integer division by 2^BITS).
+
+.TP
+--and=FIELD,MASK
+Performs bitwise AND of FIELD with MASK (decimal, 0x hex, or 0b binary).
+
+.TP
+--or=FIELD,MASK
+Performs bitwise OR of FIELD with MASK (decimal, 0x hex, or 0b binary).
+
+.TP
+--xor=FIELD,BITS
+Inverts the rightmost BITS bits of FIELD, or applies a direct bitwise XOR mask if specified in hex or binary format. For example, the sign of a number read using pattern "M" can be changed using --xor=0,1.
+
+.TP
+--not=FIELD
+Inverts all bits of FIELD.
+
+.TP
+--abs=FIELD
+Removes sign from the value of the field (calculates absolute value). Legacy syntax --abs=FIELD,0 is also accepted.
+
+.TP
+--sign=FIELD
+Extracts the sign of the field: 1 if the value was negative and 0 if non-negative. Legacy syntax --sign=FIELD,0 is also accepted.
+
+.TP
+--filter=FIELD,OP,VALUE
+Filters tuples based on a predicate condition where OP is one of ==, !=, <, <=, >, or >=. Tuples failing the predicate are discarded from the output stream.
+
+.TP
 --cut-maxint=FIELD,MAXINT
 Cuts the maximum positive or negative integer value in the field to
 maxint. The values bigger than maxint get the value maxint and values
 smaller than -maxint get the value -maxint. Field number can be
 negative when the position is counted from the end of the tuple.
 
-One of the reasons to use this command is that the maximum negative
-number of 8-bit 2's complement number is -128.  If we cut the
-magnitude of the number with pattern type 'm', we have to have 8 bits
-to represent magnitude in the output bit stream. If we want to output
-the result back to a 8-bit stream with separate sign and magnitude, we
-have to strip values -128 to -127 using --cut-maxint=1,127.
-
 .TP
 --remove-right=FIELD,BITS
 If we want to output other bits from the field than the rightmost ones,
 we can remove BITS rightmost bits from the field.
-
-.TP
---xor=FIELD,BITS
-Turns the righmost n BITS from 0 to 1 and vice versa. For example,
-sign of a number read using pattern "M" can be changed using --xor=0,1.
-
-.TP
---abs=FIELD,0
-Removes sign from the value of the field. Typically used with field that
-is read using pattern S and the result can be output to pattern U.
-
-.TP
---sign=FIELD,0
-Removes magnitude of the field. The result is 1 if the value was negative
-and 0 if the value was positive.
 
 .SS Skip a part of tuples
 
@@ -540,6 +601,36 @@ is always between 40 and 80 characters.
 Replace bit output with human-readable output of units as bits.
 Look --output-hex for more information.
 
+.TP
+--output-json
+Output stream of structured JSON objects (NDJSON), one object per line with typed field names and decoded values.
+
+.TP
+--output-csv
+Output stream as comma-separated values (CSV).
+
+.TP
+--csv-header=COL1,COL2,...
+Specify custom column names for CSV output header row.
+
+.TP
+--output-visual
+ANSI color-coded visual stream inspector highlighting bit boundaries and field values.
+
+.SS Stream demuxing and routing
+
+.TP
+--demux=FIELD:PATH
+Extract individual tuple field by index and stream it directly to a dedicated file or FIFO. Can be repeated.
+
+.TP
+--demux-files=PATH1,PATH2,...
+Demux tuple fields in order to a comma-separated list of target files.
+
+.TP
+--input-repeat=COUNT
+Loop through the input stream COUNT times (supports seeking or memory buffering).
+
 .SH EXAMPLES
 
 .SS bdd < foo > bar
@@ -582,17 +673,7 @@ Look --output-hex for more information.
 dd(1)
 
 .SH BUGS
-bdd is pretty slow.
-
-Implementation does not allow duplicate manipulation options (--xor etc.).
-
-Syntax for --abs and --sign is painful.
-
---input-tuples translates even quoted numbers to numbers, not strings.
-
-In many cases, warning of bad input repeats for each unit.
-
-In the next version, it is very likely that --output-unit will default to --input-unit, not to 8 bits.
+None known in the current release. Please report issues at https://github.com/turtiainen/bdd.
 
 .SH AUTHOR
 Esa Turtiainen (esa<at>turtiainen<dot>eu)

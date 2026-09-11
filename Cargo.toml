@@ -6,6 +6,10 @@ description = "Command line tool to interpret, manipulate, merge and create bit 
 authors = ["Esa Turtiainen"]
 license = "GPL-3.0"
 
+[lib]
+name = "bdd"
+crate-type = ["lib", "cdylib"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 num-bigint = "0.4"

@@ -212,6 +212,12 @@ impl<W: Write> UnitSink for IntegerOutputStream<W> {
 }
 
 /// Direct tuple sink printing CSV-delimited lines.
+/// Generic sink interface for receiving unpacked/processed tuples.
+pub trait TupleSink {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()>;
+    fn flush_stream(&mut self) -> std::io::Result<()>;
+}
+
 pub struct TupleDirectOutput<W> {
     writer: W,
 }
@@ -220,14 +226,155 @@ impl<W: Write> TupleDirectOutput<W> {
     pub fn new(writer: W) -> Self {
         Self { writer }
     }
+}
 
-    pub fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+impl<W: Write> TupleSink for TupleDirectOutput<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
         let str_list: Vec<String> = tuple.iter().map(|f| f.to_string()).collect();
         writeln!(self.writer, "{}", str_list.join(","))?;
         Ok(())
     }
 
-    pub fn flush_stream(&mut self) -> std::io::Result<()> {
+    fn flush_stream(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+/// Sink formatting tuples as NDJSON records.
+pub struct JsonOutputStream<W> {
+    writer: W,
+}
+
+impl<W: Write> JsonOutputStream<W> {
+    pub fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<W: Write> TupleSink for JsonOutputStream<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+        let items: Vec<String> = tuple
+            .iter()
+            .map(|f| match f {
+                Field::UInt(u) => u.to_string(),
+                Field::Int(i) => i.to_string(),
+                Field::Float(fl) => {
+                    if fl.is_nan() {
+                        "null".to_string()
+                    } else if fl.is_infinite() {
+                        if fl.is_sign_negative() {
+                            "-1e999".to_string()
+                        } else {
+                            "1e999".to_string()
+                        }
+                    } else {
+                        format!("{}", fl)
+                    }
+                }
+                Field::Bytes(b) => {
+                    let s = String::from_utf8_lossy(b);
+                    format!("\"{}\"", s.escape_default())
+                }
+            })
+            .collect();
+        writeln!(self.writer, "[{}]", items.join(","))?;
+        Ok(())
+    }
+
+    fn flush_stream(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+/// Sink formatting tuples as CSV rows with optional header.
+pub struct CsvOutputStream<W> {
+    writer: W,
+    header: Option<String>,
+    header_written: bool,
+}
+
+impl<W: Write> CsvOutputStream<W> {
+    pub fn new(writer: W, header: Option<String>) -> Self {
+        Self {
+            writer,
+            header,
+            header_written: false,
+        }
+    }
+}
+
+impl<W: Write> TupleSink for CsvOutputStream<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+        if !self.header_written {
+            if let Some(ref h) = self.header {
+                writeln!(self.writer, "{}", h)?;
+            }
+            self.header_written = true;
+        }
+        let items: Vec<String> = tuple
+            .iter()
+            .map(|f| match f {
+                Field::UInt(u) => u.to_string(),
+                Field::Int(i) => i.to_string(),
+                Field::Float(fl) => format!("{}", fl),
+                Field::Bytes(b) => {
+                    let s = String::from_utf8_lossy(b);
+                    if s.contains(',') || s.contains('"') || s.contains('\n') {
+                        format!("\"{}\"", s.replace('"', "\"\""))
+                    } else {
+                        s.to_string()
+                    }
+                }
+            })
+            .collect();
+        writeln!(self.writer, "{}", items.join(","))?;
+        Ok(())
+    }
+
+    fn flush_stream(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+const ANSI_COLORS: &[&str] = &[
+    "\x1b[36m", // Cyan
+    "\x1b[33m", // Yellow
+    "\x1b[32m", // Green
+    "\x1b[35m", // Magenta
+    "\x1b[34m", // Blue
+    "\x1b[96m", // Bright Cyan
+];
+const ANSI_RESET: &str = "\x1b[0m";
+
+/// Colorized terminal dumper that visually color-codes and annotates tuple fields.
+pub struct VisualOutputStream<W> {
+    writer: W,
+    unit_index: usize,
+}
+
+impl<W: Write> VisualOutputStream<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer,
+            unit_index: 0,
+        }
+    }
+}
+
+impl<W: Write> TupleSink for VisualOutputStream<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+        write!(self.writer, "[#{:04}] ", self.unit_index)?;
+        self.unit_index += 1;
+
+        for (i, field) in tuple.iter().enumerate() {
+            let color = ANSI_COLORS[i % ANSI_COLORS.len()];
+            write!(self.writer, "{}[f{}: {}]{} ", color, i, field, ANSI_RESET)?;
+        }
+        writeln!(self.writer)?;
+        Ok(())
+    }
+
+    fn flush_stream(&mut self) -> std::io::Result<()> {
         self.writer.flush()
     }
 }
@@ -313,5 +460,34 @@ mod tests {
         assert_eq!(parts.len(), 500);
         assert_eq!(parts[0], "0");
         assert_eq!(parts[499], "499");
+    }
+
+    #[test]
+    fn test_structured_sinks() {
+        let tuple = vec![
+            Field::UInt(BigUint::from(10u32)),
+            Field::Float(3.5),
+            Field::Bytes(b"test".to_vec()),
+        ];
+
+        // JSON sink
+        let mut json_buf = Vec::new();
+        {
+            let mut sink = JsonOutputStream::new(&mut json_buf);
+            sink.write_tuple(&tuple).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let json_str = String::from_utf8(json_buf).unwrap();
+        assert_eq!(json_str.trim(), "[10,3.5,\"test\"]");
+
+        // CSV sink
+        let mut csv_buf = Vec::new();
+        {
+            let mut sink = CsvOutputStream::new(&mut csv_buf, Some("a,b,c".to_string()));
+            sink.write_tuple(&tuple).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let csv_str = String::from_utf8(csv_buf).unwrap();
+        assert_eq!(csv_str.trim(), "a,b,c\n10,3.5,test");
     }
 }

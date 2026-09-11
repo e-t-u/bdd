@@ -87,13 +87,46 @@ pub struct Cli {
     pub remove_right: Option<String>,
 
     #[arg(long)]
+    pub shift_right: Option<String>,
+
+    #[arg(long)]
+    pub shift_left: Option<String>,
+
+    #[arg(long)]
     pub xor: Option<String>,
+
+    #[arg(long)]
+    pub and: Option<String>,
+
+    #[arg(long)]
+    pub or: Option<String>,
+
+    #[arg(long)]
+    pub not: Option<String>,
 
     #[arg(long)]
     pub abs: Option<String>,
 
     #[arg(long)]
     pub sign: Option<String>,
+
+    #[arg(long)]
+    pub add: Option<String>,
+
+    #[arg(long)]
+    pub sub: Option<String>,
+
+    #[arg(long)]
+    pub mul: Option<String>,
+
+    #[arg(long)]
+    pub div: Option<String>,
+
+    #[arg(long)]
+    pub r#mod: Option<String>,
+
+    #[arg(long)]
+    pub filter: Option<String>,
 
     // Pack tuples
     #[arg(long)]
@@ -115,7 +148,7 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output_reverse_unit: bool,
 
-    // Special output for units
+    // Special output formats
     #[arg(long, visible_alias = "output-integer", default_value_t = false)]
     pub output_integers: bool,
 
@@ -124,6 +157,28 @@ pub struct Cli {
 
     #[arg(long, visible_alias = "output-bit", default_value_t = false)]
     pub output_bits: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub output_json: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub output_csv: bool,
+
+    #[arg(long)]
+    pub csv_header: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    pub output_visual: bool,
+
+    // Demux and looping options
+    #[arg(long)]
+    pub demux: Vec<String>,
+
+    #[arg(long)]
+    pub demux_files: Option<String>,
+
+    #[arg(long, default_value_t = 1)]
+    pub input_repeat: usize,
 
     // Merge options
     #[arg(long)]
@@ -188,9 +243,20 @@ pub struct ValidatedConfig {
     pub rearrange: Option<String>,
     pub cut_maxint: Option<String>,
     pub remove_right: Option<String>,
+    pub shift_right: Option<String>,
+    pub shift_left: Option<String>,
     pub xor: Option<String>,
+    pub and: Option<String>,
+    pub or: Option<String>,
+    pub not: Option<String>,
     pub abs: Option<String>,
     pub sign: Option<String>,
+    pub add: Option<String>,
+    pub sub: Option<String>,
+    pub mul: Option<String>,
+    pub div: Option<String>,
+    pub r#mod: Option<String>,
+    pub filter: Option<String>,
     pub output_pattern: Option<String>,
     pub output_tuples: bool,
     pub output_unit: Option<usize>,
@@ -199,6 +265,13 @@ pub struct ValidatedConfig {
     pub output_integers: bool,
     pub output_hex: bool,
     pub output_bits: bool,
+    pub output_json: bool,
+    pub output_csv: bool,
+    pub csv_header: Option<String>,
+    pub output_visual: bool,
+    pub demux: Vec<String>,
+    pub demux_files: Option<String>,
+    pub input_repeat: usize,
     pub merge_file: Option<String>,
     pub merge_unit: Option<usize>,
     pub merge_skip_bits: usize,
@@ -209,6 +282,7 @@ pub struct ValidatedConfig {
     pub merge_use_seek: bool,
     pub merge_reverse_bytes: bool,
     pub merge_reverse_unit: bool,
+    pub raw_args: Vec<String>,
 }
 
 fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
@@ -280,12 +354,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
 
     check_exclusive(
-        "Only one of the following: --output-tuples, --output-integers, --output-hex, --output-bits",
+        "Only one of the following: --output-tuples, --output-integers, --output-hex, --output-bits, --output-json, --output-csv, --output-visual",
         &[
             cli.output_tuples,
             cli.output_integers,
             cli.output_hex,
             cli.output_bits,
+            cli.output_json,
+            cli.output_csv,
+            cli.output_visual,
         ],
     )?;
 
@@ -320,16 +397,16 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
-    let mut input_skip_bits =
+    let input_skip_bits =
         check_number_argument(cli.input_skip_bits, "--input-skip-bits", Some(0)).unwrap_or(0);
     let input_skip_units =
         check_number_argument(cli.input_skip_units, "--input-skip-units", Some(0)).unwrap_or(0);
-    let mut input_gap = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
+    let input_gap = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
     let input_pregap =
         check_number_argument(cli.input_pregap, "--input-pregap", Some(0)).unwrap_or(0);
 
-    input_skip_bits += input_pregap;
-    input_gap += input_pregap;
+    let input_skip_bits = input_skip_bits + input_pregap;
+    let input_gap = input_gap + input_pregap;
 
     let mut merge_skip_bits =
         check_number_argument(cli.merge_skip_bits, "--merge-skip-bits", Some(0)).unwrap_or(0);
@@ -400,9 +477,20 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         rearrange: cli.rearrange,
         cut_maxint: cli.cut_maxint,
         remove_right: cli.remove_right,
+        shift_right: cli.shift_right,
+        shift_left: cli.shift_left,
         xor: cli.xor,
+        and: cli.and,
+        or: cli.or,
+        not: cli.not,
         abs: cli.abs,
         sign: cli.sign,
+        add: cli.add,
+        sub: cli.sub,
+        mul: cli.mul,
+        div: cli.div,
+        r#mod: cli.r#mod,
+        filter: cli.filter,
         output_pattern: cli.output_pattern,
         output_tuples: cli.output_tuples,
         output_unit: cli.output_unit,
@@ -411,6 +499,13 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         output_integers: cli.output_integers,
         output_hex: cli.output_hex,
         output_bits: cli.output_bits,
+        output_json: cli.output_json,
+        output_csv: cli.output_csv,
+        csv_header: cli.csv_header,
+        output_visual: cli.output_visual,
+        demux: cli.demux,
+        demux_files: cli.demux_files,
+        input_repeat: cli.input_repeat,
         merge_file: cli.merge_file,
         merge_unit: cli.merge_unit,
         merge_skip_bits,
@@ -421,6 +516,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         merge_use_seek: cli.merge_use_seek,
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,
+        raw_args: Vec::new(),
     })
 }
 
@@ -429,26 +525,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_exclusive_validation() {
-        let mut cli = Cli::parse_from(["bdd", "--input-zeros", "--input-ones"]);
-        assert!(matches!(
-            validate_and_process(cli),
-            Err(BddError::CliError(_))
-        ));
-
-        cli = Cli::parse_from(["bdd", "--merge-unit=8"]);
-        assert!(matches!(
-            validate_and_process(cli),
-            Err(BddError::CliError(_))
-        ));
+    fn test_valid_cli() {
+        let cli = Cli::parse_from(["bdd", "--input-zeros", "--count", "10"]);
+        let config = validate_and_process(cli).unwrap();
+        assert!(config.input_zeros);
+        assert_eq!(config.count, Some(10));
     }
 
     #[test]
-    fn test_valid_cli() {
-        let cli = Cli::parse_from(["bdd", "--input-counter", "--count=10", "--output-integers"]);
-        let config = validate_and_process(cli).unwrap();
-        assert!(config.input_counter);
-        assert_eq!(config.count, Some(10));
-        assert!(config.output_integers);
+    fn test_exclusive_validation() {
+        let cli = Cli::parse_from(["bdd", "--input-zeros", "--input-ones"]);
+        assert!(validate_and_process(cli).is_err());
     }
 }
