@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 05:15:02 2026 -->
+<!-- CreationDate: Sat Sep 12 05:39:53 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -25,7 +25,8 @@
 <a href="#DESCRIPTION">DESCRIPTION</a><br>
 <a href="#OPTIONS">OPTIONS</a><br>
 <a href="#Input and output file selection:">Input and output file selection:</a><br>
-<a href="#Input unit selection">Input unit selection</a><br>
+<a href="#Input Units, Skips, and Gaps">Input Units, Skips, and Gaps</a><br>
+<a href="#Raw Units &amp; Containers">Raw Units &amp; Containers</a><br>
 <a href="#Bypass bit stream input (fake inputs)">Bypass bit stream input (fake inputs)</a><br>
 <a href="#Unpack a unit to a tuple">Unpack a unit to a tuple</a><br>
 <a href="#Bypass unit and field selection">Bypass unit and field selection</a><br>
@@ -134,67 +135,78 @@ output instead pipe output. Filename can also be
 file must not exist, bdd does not overwrite an existing
 file.</p>
 
-<h3>Input unit selection
-<a name="Input unit selection"></a>
+<h3>Input Units, Skips, and Gaps
+<a name="Input Units, Skips, and Gaps"></a>
 </h3>
 
 
 <p style="margin-left:9%; margin-top: 1em">A unit is a
-constant bit amount that repeats in the input: <br>
+constant bit amount that repeats in the input stream. All
+stream dimensions are measured strictly in bits: <br>
 --input-unit=BITS</p>
 
-<p style="margin-left:18%;">Breaks input to units of BITS.
-If input is less than even amount of units, the most
-significant bits of the last unit are taken from the input
-file and the least significant bits are filled with zeroes.
-Input unit defaults to 8, or to the remaining bits in
---input-raw-unit after --input-offset. If --input-pattern is
-defined, the combined bit size of the --input-pattern
-defines the input unit. You must not define both
---input-unit and --input-pattern.</p>
-
-<p style="margin-left:9%;">--input-raw-unit=BITS</p>
-
-<p style="margin-left:18%;">Defines the repeating container
-or frame size in bits (e.g. 8 for bytes, 16 for half-words,
-32 for words). Within each raw unit, an active unit of
---input-unit bits is extracted starting at --input-offset
-bits. The remainder of the raw unit is automatically
-skipped, removing the need to manually compute post-gaps.
-Any extra padding between raw units can be specified with
---input-gap.</p>
-
-<p style="margin-left:9%;">--input-offset=BITS,
---input-pregap=BITS</p>
-
-<p style="margin-left:18%;">Bit offset of the active unit
-within each raw unit (default: 0). When --input-raw-unit is
-not set, functions as the legacy --input-pregap
-parameter.</p>
-
-<p style="margin-left:9%;">--input-gap=BITS,
---input-postgap=BITS</p>
-
-<p style="margin-left:18%;">When --input-raw-unit is set,
-defines the gap in bits between successive raw units
-(default: 0). When --input-raw-unit is omitted, specifies
-the bits skipped after reading each unit.</p>
+<p style="margin-left:18%;">Breaks input into active units
+of BITS. If input is less than an even amount of units, the
+most significant bits of the last unit are taken from the
+input file and the least significant bits are filled with
+zeroes. Input unit defaults to 8 bits, or to the remaining
+bits in --input-raw-unit after --input-offset. If
+--input-pattern is defined, the combined bit size of the
+--input-pattern defines the input unit. You must not define
+both --input-unit and --input-pattern.</p>
 
 <p style="margin-left:9%;">--input-skip-bits=BITS</p>
 
 <p style="margin-left:18%;">Skip BITS bits from the
-beginning of the input.</p>
+beginning of the input before reading the first unit.
+Supports 64-bit integer values (up to 18.4 Exabits / 2.3
+Exabytes) and human-friendly size suffixes: binary multiples
+(K, M, G, T, P, E or Ki, Mi, Gi, Ti, Pi, Ei, e.g. 10G =
+10*1024&#710;3 bits), decimal multiples (KB, MB, GB, TB, PB,
+EB), and byte-scaled multiples (e.g. 10GiB =
+10*1024&#710;3*8 bits, 100B = 800 bits).</p>
 
 <p style="margin-left:9%;">--input-skip-units=UNITS</p>
 
-<p style="margin-left:18%;">Skip UNITS raw units (if
---input-raw-unit is set) or active units from the beginning
-of the input. If both skip-bits and skip-units are defined,
-both skips are performed. --input-skip-units is more
-efficient on regular files than repeated gaps because bdd
-automatically seeks directly over skipped bytes in O(1) time
+<p style="margin-left:18%;">Skip UNITS units (or raw units,
+if --input-raw-unit is set) from the beginning of the input.
+Supports size suffixes (e.g. 10M, 1G). If both skip-bits and
+skip-units are defined, both skips are performed.
+--input-skip-units and --input-skip-bits automatically seek
+directly over skipped bytes in O(1) time on regular files
 rather than reading and discarding data from disk (see
 --no-seek).</p>
+
+<p style="margin-left:9%;">--input-gap=BITS</p>
+
+<p style="margin-left:18%;">Number of bits skipped after
+reading each unit. When --input-raw-unit is set, defines the
+gap in bits between successive raw units (default: 0).</p>
+
+<h3>Raw Units &amp; Containers
+<a name="Raw Units &amp; Containers"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">In structured
+binary files, active units often reside inside larger
+repeating containers, words, or frames (such as 8-bit bytes,
+16-bit half-words, or 32-bit words): <br>
+--input-raw-unit=BITS</p>
+
+<p style="margin-left:18%;">Defines the repeating container
+or frame size in bits. Within each raw unit, an active unit
+of --input-unit bits is extracted starting at --input-offset
+bits. The remainder of the raw unit (post-gap = raw-unit -
+(offset + unit)) is automatically skipped without requiring
+manual calculation. Extra padding between successive raw
+units can be specified with --input-gap.</p>
+
+<p style="margin-left:9%;">--input-offset=BITS</p>
+
+<p style="margin-left:18%;">Bit offset of the active unit
+within each raw unit (default: 0). Requires --input-raw-unit
+to be specified.</p>
 
 <p style="margin-left:9%;">--input-assert-aligned</p>
 
@@ -854,6 +866,13 @@ beginning of the merge file before writing the first unit.
 If both skip (bits and/or units) and --merge-copy-first are
 defined, skip is done first.</p>
 
+<p style="margin-left:9%;">--merge-gap=BITS</p>
+
+<p style="margin-left:18%;">When --merge-raw-unit is set,
+defines the gap in bits between successive merge raw units
+(default: 0). When --merge-raw-unit is omitted, specifies
+the bits skipped after writing each unit.</p>
+
 <p style="margin-left:9%;">--merge-raw-unit=BITS</p>
 
 <p style="margin-left:18%;">Defines the repeating container
@@ -862,21 +881,11 @@ merge raw unit, an active unit of --merge-unit bits is
 extracted starting at --merge-offset bits. The remainder of
 the merge raw unit is automatically skipped.</p>
 
-<p style="margin-left:9%;">--merge-offset=BITS,
---merge-pregap=BITS</p>
+<p style="margin-left:9%;">--merge-offset=BITS</p>
 
 <p style="margin-left:18%;">Bit offset of the active unit
-within each merge raw unit (default: 0). When
---merge-raw-unit is not set, functions as the legacy
---merge-pregap parameter.</p>
-
-<p style="margin-left:9%;">--merge-gap=BITS,
---merge-postgap=BITS</p>
-
-<p style="margin-left:18%;">When --merge-raw-unit is set,
-defines the gap in bits between successive merge raw units
-(default: 0). When --merge-raw-unit is omitted, specifies
-the bits skipped after writing each unit.</p>
+within each merge raw unit (default: 0). Requires
+--merge-raw-unit to be specified.</p>
 
 <p style="margin-left:9%;">--merge-assert-aligned</p>
 

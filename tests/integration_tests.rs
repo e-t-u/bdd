@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::Write;
 use std::process::Command;
 
 #[test]
@@ -237,6 +239,55 @@ fn test_cli_raw_unit_and_offset() {
     let stdout_b = String::from_utf8(out_b.stdout).unwrap();
     let lines_b: Vec<&str> = stdout_b.lines().collect();
     assert_eq!(lines_b, vec!["0", "1"]);
+
+    let _ = std::fs::remove_file(test_path);
+}
+
+#[test]
+fn test_cli_gigabyte_seek_and_suffixes() {
+    use std::io::Seek;
+    let test_path = "/tmp/bdd_gigabyte_test.bin";
+    {
+        let mut f = File::create(test_path).expect("failed to create 10GB test file");
+        // Create 10 GiB sparse file
+        f.set_len(10 * 1024 * 1024 * 1024 + 4)
+            .expect("failed to set len");
+        f.seek(std::io::SeekFrom::Start(10 * 1024 * 1024 * 1024))
+            .expect("failed to seek in test file");
+        f.write_all(&[0xDE, 0xAD, 0xBE, 0xEF])
+            .expect("failed to write magic bytes at 10GiB offset");
+    }
+
+    // Seek directly over 10GiB in O(1) time using size suffix
+    let out = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-bits=10GiB",
+            "--count=4",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd gigabyte seek");
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "de ad be ef");
+
+    // Also test unit-based skipping over 10GiB
+    let out_units = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-unit=8",
+            "--input-skip-units=10Gi",
+            "--count=4",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd gigabyte skip-units");
+
+    assert!(out_units.status.success());
+    let stdout_units = String::from_utf8(out_units.stdout).unwrap();
+    assert_eq!(stdout_units.trim(), "de ad be ef");
 
     let _ = std::fs::remove_file(test_path);
 }

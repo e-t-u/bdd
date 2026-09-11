@@ -32,7 +32,7 @@ fn format_rate(bits: u64, duration_secs: f64) -> String {
 
 fn bench_zero_stream_8bit() {
     let count = 2_000_000;
-    let mut zs = ZeroStream::new(Counter::new(0, Some(count)));
+    let mut zs = ZeroStream::new(Counter::new(0, Some(count as u64)));
     let mut out = Vec::with_capacity(count);
     let mut sink = FileOutputStream::new(&mut out, false, false);
 
@@ -54,7 +54,7 @@ fn bench_zero_stream_8bit() {
 
 fn bench_single_bit_streaming() {
     let count = 500_000;
-    let mut zs = ZeroStream::new(Counter::new(0, Some(count)));
+    let mut zs = ZeroStream::new(Counter::new(0, Some(count as u64)));
     let mut out = Vec::with_capacity(count / 8);
     let mut sink = FileOutputStream::new(&mut out, false, false);
 
@@ -90,7 +90,7 @@ fn bench_unaligned_3bit_to_8bit() {
     let mut fs = FileInputStream::new(
         Cursor::new(raw_data),
         stream_conf,
-        Counter::new(0, Some(count)),
+        Counter::new(0, Some(count as u64)),
     );
     let mut out = Vec::with_capacity(count);
     let mut sink = FileOutputStream::new(&mut out, false, false);

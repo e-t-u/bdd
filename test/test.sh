@@ -36,8 +36,8 @@ echo "should print: 03 (gap goes several bytes over eof)"
 echo -en "\0300" | ./bdd --input-unit=2 --input-gap=17 --output-hex
 echo "should print: 04 (gap ends to byte limit)"
 echo -en "\040" | ./bdd --input-unit=5 --input-gap=3 --output-hex
-echo "should print: 004 005 (pregap)"
-echo -en "\0\010\020\030\040\050" | ./bdd --input-skip-bits=32 --input-pregap=2 --input-unit=3 --input-gap=3 --output-unit=8 | od -t o1
+echo "should print: 004 005 (raw unit and offset)"
+echo -en "\0\010\020\030\040\050" | ./bdd --input-skip-bits=32 --input-raw-unit=8 --input-offset=2 --input-unit=3 --output-unit=8 | od -t o1
 echo "should print 00 00 02 (no assert aligned)"
 echo -en "\001" | ./bdd --input-unit=3 --output-hex
 echo "should not warn, print 00 01 (assert aligned)"
@@ -285,8 +285,8 @@ echo "should print 80 C0 and error (flushes last byte in case of premature end o
 echo -en "\001" |./bdd --input-ones --input-unit=1 --output-unit=1 --count=2 --merge-file=- | od -t x1
 echo "should print 92 60 (unit size not 8 in merge file, <> normal output unit size)"
 echo -en "\002" | ./bdd --input-ones --input-unit=1 --output-unit=1 --count=4 --merge-file=- --merge-unit=2 | od -t x1
-echo "should print: 45 (--merge-pregap)"
-echo -en "\0\010\020\030\040\050" | ./bdd --input-zeros --count=2 --output-unit=1 --merge-file=- --merge-skip-bits=32 --merge-pregap=2 --merge-unit=3 --merge-gap=3 | od -t x1
+echo "should print: 45 (--merge-raw-unit and --merge-offset)"
+echo -en "\0\010\020\030\040\050" | ./bdd --input-zeros --count=2 --output-unit=1 --merge-file=- --merge-skip-bits=32 --merge-raw-unit=8 --merge-offset=2 --merge-unit=3 | od -t x1
 echo "should print 01 FF 02 (--merge-copy-first)"
 echo -en "\01\02" | ./bdd --input-ones --count=1 --merge-file=- --merge-unit=8 --merge-copy-first=8 | od -t x1
 echo "should print 01 02 FF 03 FF 04  (--merge-copy-first and --merge-skip-bits at the same time)"

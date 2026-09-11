@@ -18,25 +18,25 @@ pub struct Cli {
 
     // Input unit and raw unit container selection
     #[arg(long)]
-    pub input_unit: Option<usize>,
+    pub input_unit: Option<String>,
 
     /// Size of repeating raw unit / container in bits
     #[arg(long)]
-    pub input_raw_unit: Option<usize>,
+    pub input_raw_unit: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub input_skip_bits: Option<isize>,
+    pub input_skip_bits: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub input_skip_units: Option<isize>,
+    pub input_skip_units: Option<String>,
 
-    /// Bit gap between raw units (alias: --input-postgap)
-    #[arg(long, visible_alias = "input-postgap", allow_hyphen_values = true)]
-    pub input_gap: Option<isize>,
+    /// Bit gap between raw units (if --input-raw-unit is set) or between units
+    #[arg(long, allow_hyphen_values = true)]
+    pub input_gap: Option<String>,
 
-    /// Bit offset of unit within raw unit (alias: --input-pregap)
-    #[arg(long, visible_alias = "input-pregap", allow_hyphen_values = true)]
-    pub input_offset: Option<isize>,
+    /// Bit offset of unit within raw unit
+    #[arg(long, allow_hyphen_values = true)]
+    pub input_offset: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub input_assert_aligned: bool,
@@ -86,10 +86,10 @@ pub struct Cli {
     pub input_tuples: bool,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub skip: Option<isize>,
+    pub skip: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub count: Option<isize>,
+    pub count: Option<String>,
 
     // Manipulate tuples
     #[arg(long, default_missing_value = "", num_args = 0..=1)]
@@ -152,7 +152,7 @@ pub struct Cli {
 
     // Output unit
     #[arg(long)]
-    pub output_unit: Option<usize>,
+    pub output_unit: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub output_little_endian: bool,
@@ -200,27 +200,27 @@ pub struct Cli {
     pub merge_file: Option<String>,
 
     #[arg(long)]
-    pub merge_unit: Option<usize>,
+    pub merge_unit: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub merge_skip_bits: Option<isize>,
+    pub merge_skip_bits: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub merge_skip_units: Option<isize>,
+    pub merge_skip_units: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub merge_copy_first: Option<isize>,
+    pub merge_copy_first: Option<String>,
 
     /// Size of repeating raw unit / container in bits for merge stream
     #[arg(long)]
-    pub merge_raw_unit: Option<usize>,
+    pub merge_raw_unit: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
-    pub merge_gap: Option<isize>,
+    pub merge_gap: Option<String>,
 
-    /// Bit offset of unit within merge raw unit (alias: --merge-pregap)
-    #[arg(long, visible_alias = "merge-pregap", allow_hyphen_values = true)]
-    pub merge_offset: Option<isize>,
+    /// Bit offset of unit within merge raw unit
+    #[arg(long, allow_hyphen_values = true)]
+    pub merge_offset: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub merge_assert_aligned: bool,
@@ -249,9 +249,9 @@ pub struct ValidatedConfig {
     pub input_file: String,
     pub output_file: String,
     pub input_unit: Option<usize>,
-    pub input_skip_bits: usize,
-    pub input_skip_units: usize,
-    pub input_gap: usize,
+    pub input_skip_bits: u64,
+    pub input_skip_units: u64,
+    pub input_gap: u64,
     pub input_assert_aligned: bool,
     pub input_use_seek: bool,
     pub input_reverse_bytes: bool,
@@ -263,8 +263,8 @@ pub struct ValidatedConfig {
     pub input_integers: bool,
     pub input_pattern: Option<String>,
     pub input_tuples: bool,
-    pub skip: usize,
-    pub count: Option<usize>,
+    pub skip: u64,
+    pub count: Option<u64>,
     pub rearrange: Option<String>,
     pub cut_maxint: Option<String>,
     pub remove_right: Option<String>,
@@ -299,10 +299,10 @@ pub struct ValidatedConfig {
     pub input_repeat: usize,
     pub merge_file: Option<String>,
     pub merge_unit: Option<usize>,
-    pub merge_skip_bits: usize,
-    pub merge_skip_units: usize,
-    pub merge_copy_first: usize,
-    pub merge_gap: usize,
+    pub merge_skip_bits: u64,
+    pub merge_skip_units: u64,
+    pub merge_copy_first: u64,
+    pub merge_gap: u64,
     pub merge_assert_aligned: bool,
     pub merge_use_seek: bool,
     pub merge_reverse_bytes: bool,
@@ -318,28 +318,152 @@ fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
     Ok(())
 }
 
-fn check_number_argument(
-    val: Option<isize>,
+/// Parses a size or count string supporting standard binary and decimal suffixes.
+///
+/// If `is_bit_option` is true (e.g. `--input-skip-bits`), byte suffixes (`B`, `Bytes`, `KiB`, `GiB`, etc.)
+/// are multiplied by 8 to convert bytes to bits.
+pub fn parse_size_with_suffix(
+    s: &str,
     option_name: &str,
-    default: Option<usize>,
-) -> Option<usize> {
+    is_bit_option: bool,
+) -> Result<u64, BddError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(BddError::CliError(format!(
+            "Empty value for {}",
+            option_name
+        )));
+    }
+
+    if s.starts_with('-') {
+        return Err(BddError::CliError(format!(
+            "{} value must be a positive integer",
+            option_name
+        )));
+    }
+
+    let end_of_num = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (num_str, suffix_raw) = s.split_at(end_of_num);
+    let suffix = suffix_raw.trim();
+
+    if num_str.is_empty() {
+        return Err(BddError::CliError(format!(
+            "Invalid numeric value for {}: '{}'",
+            option_name, s
+        )));
+    }
+
+    let lower_suffix = suffix.to_ascii_lowercase();
+    let (scale, is_byte_unit) = match lower_suffix.as_str() {
+        "" => (1u64, false),
+        "b" | "bit" | "bits" => (1u64, false),
+        "byte" | "bytes" => (1u64, true),
+        // Binary multiples (powers of 1024)
+        "k" | "ki" | "kib" => (
+            1024u64,
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        "m" | "mi" | "mib" => (
+            1024u64.pow(2),
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        "g" | "gi" | "gib" => (
+            1024u64.pow(3),
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        "t" | "ti" | "tib" => (
+            1024u64.pow(4),
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        "p" | "pi" | "pib" => (
+            1024u64.pow(5),
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        "e" | "ei" | "eib" => (
+            1024u64.pow(6),
+            lower_suffix.ends_with("ib") || suffix.ends_with('B'),
+        ),
+        // Decimal multiples (powers of 1000)
+        "kb" => (1000u64, suffix.ends_with('B')),
+        "mb" => (1000u64.pow(2), suffix.ends_with('B')),
+        "gb" => (1000u64.pow(3), suffix.ends_with('B')),
+        "tb" => (1000u64.pow(4), suffix.ends_with('B')),
+        "pb" => (1000u64.pow(5), suffix.ends_with('B')),
+        "eb" => (1000u64.pow(6), suffix.ends_with('B')),
+        other => {
+            return Err(BddError::CliError(format!(
+                "Unknown unit suffix '{}' for {}",
+                other, option_name
+            )));
+        }
+    };
+
+    let byte_multiplier = if is_bit_option && is_byte_unit {
+        8u64
+    } else {
+        1u64
+    };
+
+    if num_str.contains('.') {
+        let f: f64 = num_str.parse().map_err(|_| {
+            BddError::CliError(format!("Invalid number for {}: '{}'", option_name, s))
+        })?;
+        if f < 0.0 {
+            return Err(BddError::CliError(format!(
+                "{} value must be a positive integer",
+                option_name
+            )));
+        }
+        let total = f * (scale as f64) * (byte_multiplier as f64);
+        if total > u64::MAX as f64 {
+            return Err(BddError::CliError(format!(
+                "Value for {} exceeds 64-bit integer limit: '{}'",
+                option_name, s
+            )));
+        }
+        Ok(total as u64)
+    } else {
+        let n: u64 = num_str.parse().map_err(|_| {
+            BddError::CliError(format!("Invalid number for {}: '{}'", option_name, s))
+        })?;
+        n.checked_mul(scale)
+            .and_then(|v| v.checked_mul(byte_multiplier))
+            .ok_or_else(|| {
+                BddError::CliError(format!(
+                    "Value for {} exceeds 64-bit integer limit: '{}'",
+                    option_name, s
+                ))
+            })
+    }
+}
+
+fn parse_number_argument(
+    val: Option<&str>,
+    option_name: &str,
+    default: Option<u64>,
+    is_bit_option: bool,
+) -> Result<Option<u64>, BddError> {
     match val {
-        None => default,
-        Some(i) => {
-            if i >= 0 {
-                Some(i as usize)
-            } else {
+        None => Ok(default),
+        Some(s) => {
+            let s_trim = s.trim();
+            if s_trim.starts_with('-') {
                 eprintln!("{} value must be a positive integer", option_name);
                 match default {
                     Some(d) => {
                         eprintln!("Assumed {}={}", option_name, d);
-                        Some(d)
+                        Ok(Some(d))
                     }
                     None => {
                         eprintln!("Assumed {}=None", option_name);
-                        None
+                        Ok(None)
                     }
                 }
+            } else {
+                let parsed = parse_size_with_suffix(s_trim, option_name, is_bit_option)?;
+                Ok(Some(parsed))
             }
         }
     }
@@ -368,8 +492,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         ));
     }
 
-    let skip = check_number_argument(cli.skip, "--skip", Some(0)).unwrap_or(0);
-    let count = check_number_argument(cli.count, "--count", None);
+    let skip = parse_number_argument(cli.skip.as_deref(), "--skip", Some(0), false)?.unwrap_or(0);
+    let count = parse_number_argument(cli.count.as_deref(), "--count", None, false)?;
 
     if has_special_stream && count.is_none() {
         return Err(BddError::CliError(
@@ -425,14 +549,49 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
-    let raw_unit = cli.input_raw_unit;
-    let input_offset =
-        check_number_argument(cli.input_offset, "--input-offset", Some(0)).unwrap_or(0);
-    let input_gap_raw = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
-    let input_skip_bits_raw =
-        check_number_argument(cli.input_skip_bits, "--input-skip-bits", Some(0)).unwrap_or(0);
-    let input_skip_units_raw =
-        check_number_argument(cli.input_skip_units, "--input-skip-units", Some(0)).unwrap_or(0);
+    if cli.input_offset.is_some() && cli.input_raw_unit.is_none() {
+        return Err(BddError::CliError(
+            "--input-offset requires --input-raw-unit to be specified".to_string(),
+        ));
+    }
+    if cli.merge_offset.is_some() && cli.merge_raw_unit.is_none() {
+        return Err(BddError::CliError(
+            "--merge-offset requires --merge-raw-unit to be specified".to_string(),
+        ));
+    }
+
+    let raw_unit = parse_number_argument(
+        cli.input_raw_unit.as_deref(),
+        "--input-raw-unit",
+        None,
+        false,
+    )?;
+    let input_offset = parse_number_argument(
+        cli.input_offset.as_deref(),
+        "--input-offset",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let input_gap_raw =
+        parse_number_argument(cli.input_gap.as_deref(), "--input-gap", Some(0), false)?
+            .unwrap_or(0);
+    let input_skip_bits_raw = parse_number_argument(
+        cli.input_skip_bits.as_deref(),
+        "--input-skip-bits",
+        Some(0),
+        true,
+    )?
+    .unwrap_or(0);
+    let input_skip_units_raw = parse_number_argument(
+        cli.input_skip_units.as_deref(),
+        "--input-skip-units",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let input_unit = parse_number_argument(cli.input_unit.as_deref(), "--input-unit", None, false)?
+        .map(|v| v as usize);
 
     let (input_skip_bits, input_skip_units, input_gap, resolved_input_unit) = if let Some(r) =
         raw_unit
@@ -442,13 +601,13 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 "--input-raw-unit must be greater than 0".to_string(),
             ));
         }
-        let u = if let Some(unit) = cli.input_unit {
+        let u = if let Some(unit) = input_unit {
             if unit == 0 {
                 return Err(BddError::CliError(
                     "--input-unit must be greater than 0".to_string(),
                 ));
             }
-            if input_offset + unit > r {
+            if input_offset + (unit as u64) > r {
                 return Err(BddError::CliError(format!(
                     "--input-offset ({}) + --input-unit ({}) exceeds --input-raw-unit ({})",
                     input_offset, unit, r
@@ -462,28 +621,60 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                     input_offset, r
                 )));
             }
-            r - input_offset
+            (r - input_offset) as usize
         };
         let skip_stride = r + input_gap_raw;
         let skip_bits = input_skip_bits_raw + (input_skip_units_raw * skip_stride) + input_offset;
-        let gap = r - u + input_gap_raw;
+        let gap = r - (u as u64) + input_gap_raw;
         (skip_bits, 0, gap, Some(u))
     } else {
-        let skip_bits = input_skip_bits_raw + input_offset;
-        let gap = input_gap_raw + input_offset;
-        (skip_bits, input_skip_units_raw, gap, cli.input_unit)
+        (
+            input_skip_bits_raw,
+            input_skip_units_raw,
+            input_gap_raw,
+            input_unit,
+        )
     };
 
-    let merge_raw_unit = cli.merge_raw_unit;
-    let merge_offset =
-        check_number_argument(cli.merge_offset, "--merge-offset", Some(0)).unwrap_or(0);
-    let merge_gap_raw = check_number_argument(cli.merge_gap, "--merge-gap", Some(0)).unwrap_or(0);
-    let merge_skip_bits_raw =
-        check_number_argument(cli.merge_skip_bits, "--merge-skip-bits", Some(0)).unwrap_or(0);
-    let merge_skip_units_raw =
-        check_number_argument(cli.merge_skip_units, "--merge-skip-units", Some(0)).unwrap_or(0);
-    let merge_copy_first =
-        check_number_argument(cli.merge_copy_first, "--merge-copy-first", Some(0)).unwrap_or(0);
+    let merge_raw_unit = parse_number_argument(
+        cli.merge_raw_unit.as_deref(),
+        "--merge-raw-unit",
+        None,
+        false,
+    )?;
+    let merge_offset = parse_number_argument(
+        cli.merge_offset.as_deref(),
+        "--merge-offset",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let merge_gap_raw =
+        parse_number_argument(cli.merge_gap.as_deref(), "--merge-gap", Some(0), false)?
+            .unwrap_or(0);
+    let merge_skip_bits_raw = parse_number_argument(
+        cli.merge_skip_bits.as_deref(),
+        "--merge-skip-bits",
+        Some(0),
+        true,
+    )?
+    .unwrap_or(0);
+    let merge_skip_units_raw = parse_number_argument(
+        cli.merge_skip_units.as_deref(),
+        "--merge-skip-units",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let merge_copy_first = parse_number_argument(
+        cli.merge_copy_first.as_deref(),
+        "--merge-copy-first",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let merge_unit = parse_number_argument(cli.merge_unit.as_deref(), "--merge-unit", None, false)?
+        .map(|v| v as usize);
 
     let (merge_skip_bits, merge_skip_units, merge_gap, resolved_merge_unit) = if let Some(r) =
         merge_raw_unit
@@ -493,13 +684,13 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 "--merge-raw-unit must be greater than 0".to_string(),
             ));
         }
-        let u = if let Some(unit) = cli.merge_unit {
+        let u = if let Some(unit) = merge_unit {
             if unit == 0 {
                 return Err(BddError::CliError(
                     "--merge-unit must be greater than 0".to_string(),
                 ));
             }
-            if merge_offset + unit > r {
+            if merge_offset + (unit as u64) > r {
                 return Err(BddError::CliError(format!(
                     "--merge-offset ({}) + --merge-unit ({}) exceeds --merge-raw-unit ({})",
                     merge_offset, unit, r
@@ -513,17 +704,24 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                     merge_offset, r
                 )));
             }
-            r - merge_offset
+            (r - merge_offset) as usize
         };
         let skip_stride = r + merge_gap_raw;
         let skip_bits = merge_skip_bits_raw + (merge_skip_units_raw * skip_stride) + merge_offset;
-        let gap = r - u + merge_gap_raw;
+        let gap = r - (u as u64) + merge_gap_raw;
         (skip_bits, 0, gap, Some(u))
     } else {
-        let skip_bits = merge_skip_bits_raw + merge_offset;
-        let gap = merge_gap_raw + merge_offset;
-        (skip_bits, merge_skip_units_raw, gap, cli.merge_unit)
+        (
+            merge_skip_bits_raw,
+            merge_skip_units_raw,
+            merge_gap_raw,
+            merge_unit,
+        )
     };
+
+    let resolved_output_unit =
+        parse_number_argument(cli.output_unit.as_deref(), "--output-unit", None, false)?
+            .map(|v| v as usize);
 
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {
@@ -601,7 +799,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         filter: cli.filter,
         output_pattern: cli.output_pattern,
         output_tuples: cli.output_tuples,
-        output_unit: cli.output_unit,
+        output_unit: resolved_output_unit,
         output_reverse_bytes: cli.output_reverse_bytes,
         output_reverse_unit: cli.output_reverse_unit,
         output_integers: cli.output_integers,
@@ -760,5 +958,75 @@ mod tests {
             "--input-unit=4",
         ]);
         assert!(validate_and_process(cli_err).is_err());
+    }
+
+    #[test]
+    fn test_offset_without_raw_unit_fails() {
+        let cli = Cli::parse_from(["bdd", "--input-zeros", "--count=1", "--input-offset=2"]);
+        let err = validate_and_process(cli);
+        assert!(err.is_err());
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("--input-offset requires --input-raw-unit"));
+
+        let cli_merge = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--merge-file",
+            "/dev/null",
+            "--merge-offset=2",
+        ]);
+        let err_merge = validate_and_process(cli_merge);
+        assert!(err_merge.is_err());
+        assert!(err_merge
+            .unwrap_err()
+            .to_string()
+            .contains("--merge-offset requires --merge-raw-unit"));
+    }
+
+    #[test]
+    fn test_size_suffixes() {
+        // Test helper function
+        assert_eq!(
+            parse_size_with_suffix("10G", "--input-skip-bits", true).unwrap(),
+            10 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            parse_size_with_suffix("1GiB", "--input-skip-bits", true).unwrap(),
+            1024 * 1024 * 1024 * 8
+        );
+        assert_eq!(
+            parse_size_with_suffix("1GB", "--input-skip-bits", true).unwrap(),
+            1000 * 1000 * 1000 * 8
+        );
+        assert_eq!(
+            parse_size_with_suffix("10M", "--skip", false).unwrap(),
+            10 * 1024 * 1024
+        );
+        assert_eq!(
+            parse_size_with_suffix("500k", "--count", false).unwrap(),
+            500 * 1024
+        );
+        assert_eq!(
+            parse_size_with_suffix("1.5GiB", "--input-skip-bits", true).unwrap(),
+            (1.5 * 1024.0 * 1024.0 * 1024.0 * 8.0) as u64
+        );
+
+        // Integration in CLI validation
+        let cli = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1M",
+            "--input-skip-bits=1GiB",
+            "--skip=10K",
+            "--input-gap=1k",
+        ]);
+        let conf = validate_and_process(cli).unwrap();
+        assert_eq!(conf.count, Some(1024 * 1024));
+        assert_eq!(conf.input_skip_bits, 1024 * 1024 * 1024 * 8);
+        assert_eq!(conf.skip, 10 * 1024);
+        assert_eq!(conf.input_gap, 1024);
     }
 }

@@ -1,12 +1,12 @@
 #[derive(Debug, Clone)]
 pub struct Counter {
-    pub skip: usize,
-    pub count: Option<usize>,
-    pub current: usize,
+    pub skip: u64,
+    pub count: Option<u64>,
+    pub current: u64,
 }
 
 impl Counter {
-    pub fn new(skip: usize, count: Option<usize>) -> Self {
+    pub fn new(skip: u64, count: Option<u64>) -> Self {
         Self {
             skip,
             count,
@@ -21,10 +21,10 @@ impl Counter {
     pub fn included(&self) -> bool {
         if self.current <= self.skip {
             false
-        } else if self.count.is_none() {
-            true
+        } else if let Some(count) = self.count {
+            self.current <= (self.skip + count)
         } else {
-            self.current <= (self.skip + self.count.unwrap())
+            true
         }
     }
 

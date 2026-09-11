@@ -82,31 +82,71 @@ Because the output unit remains at its default of 8 bits, each 3-bit input unit 
 
 ---
 
-### Units, Raw Units, Offsets, and Gaps
+### Units, Skips, and Gaps (The Simple Model)
 
-In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A stream is modeled as a repeating series of structured records or containers called **Raw Units**:
+In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. In the basic stream model, data is processed as a repeating sequence of **Units**:
+
+```
+ Stream Start
+      │
+      ▼
+┌─────────────┬──────────────────┬──────────────┬──────────────────┬──────────────┐
+│  Skip Bits  │   Unit (Size)    │     Gap      │   Unit (Size)    │     Gap      │  ...
+└─────────────┴──────────────────┴──────────────┴──────────────────┴──────────────┘
+```
+
+- **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit (default: `8`).
+- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit (default: `0`).
+- **`--input-skip-units=UNITS`**: Skip initial N units from stream start.
+- **`--input-gap=BITS`**: Number of bits skipped *after* reading each unit (default: `0`).
+- **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
+
+#### Basic Slicing Recipes
+
+- **Extract the Most Significant Bit of every byte** (expands 1 bit to an 8-bit byte `0x00` or `0x01`):
+  ```bash
+  bdd --input-unit=1 --input-gap=7 --output-unit=8 < input.bin
+  ```
+- **Pack the Least Significant Bit of bytes into a dense bitstream** (e.g. 9 bytes with LSB=1 become two bytes `0xFF` and `0x80`):
+  ```bash
+  bdd --input-skip-bits=7 --input-unit=1 --input-gap=7 --output-unit=1 < input.bin
+  ```
+
+#### Fast $O(1)$ Filesystem Seeking vs. Sequential Streaming
+
+When skipping initial data with `--input-skip-bits` or `--input-skip-units`, `bdd` automatically performs an **$O(1)$ filesystem seek** whenever the input is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of reading gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps directly to the target byte offset in microseconds.
+
+If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or socket), `bdd` seamlessly falls back to streaming sequential reads, discarding skipped bytes without failing or requiring separate flags. To explicitly disable seeking and force sequential stream consumption across all inputs, pass **`--no-seek`** (or `--input-no-seek`, `--merge-no-seek`).
+
+---
+
+### Raw Units & Containers (`--input-raw-unit` and `--input-offset`)
+
+In structured binary files, active fields are rarely isolated in a continuous stream; instead, they reside inside fixed-size physical containers: bytes (8 bits), half-words (16 bits), words (32 bits), audio stereo frames (32 bits), or network headers.
+
+#### How Raw Units Differ from Units
+
+- A **Unit** (`--input-unit`) is the *active payload* you extract and process (e.g. 2 bits).
+- A **Raw Unit** (`--input-raw-unit`) is the *outer container, frame, or stride* (e.g. 8 bits or 32 bits) in which the active unit lives.
+
+**The mental arithmetic problem with simple units:** If you want bits 3 and 4 of every byte, simple unit mode requires calculating an initial skip of 2 bits, an active unit of 2 bits, and a trailing gap of 4 bits to reach the next byte. If you subsequently need bit 5, you have to recalculate both the initial skip (4 bits) and the trailing gap (3 bits).
+
+**The solution with raw units:** Declare the container size once with `--input-raw-unit=8`. Then simply state the field's starting position with `--input-offset` and field width with `--input-unit`. `bdd` automatically derives the initial skip and skips the trailing remainder of the container ($R - (O + U)$).
 
 ```
                ◄────────────── Raw Unit N (Container / Stride) ──────────────►
 Stream: ──────┬──────────────────────┬──────────────────────┬─────────────────┬───────────
-...           │   Offset / Pre-Gap   │     Active Unit      │    Post-Gap     │ Inter-Raw 
+...           │        Offset        │     Active Unit      │    Post-Gap     │ Inter-Raw 
               │       (O bits)       │       (U bits)       │(Raw - (O + U))  │ Unit Gap  
 ──────────────┴──────────────────────┴──────────────────────┴─────────────────┴───────────
 ```
 
-- **`--input-raw-unit=BITS`**: The repeating container, frame, or stride size in bits (e.g. `8` for bytes, `16` for half-words, `32` for words). When specified, `bdd` automatically manages trailing post-gaps so you never have to compute them manually.
-- **`--input-offset=BITS`** (alias: `--input-pregap`): Bit offset of the active unit within each raw unit (default: `0`).
-- **`--input-unit=BITS`** (`-u`): The number of bits in each extracted active unit (default: `raw-unit - offset`, or `8`).
-- **`--input-gap=BITS`** (alias: `--input-postgap`):
-  - When `--input-raw-unit` is set: The bit gap *between* successive raw units (default: `0`).
-  - When `--input-raw-unit` is omitted: The gap skipped *after* reading each unit.
-- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first raw unit (default: `0`).
-- **`--input-skip-units=UNITS`**: Skip initial raw units (or active units) from stream start.
-- **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
+- **`--input-raw-unit=BITS`**: The repeating container size in bits.
+- **`--input-offset=BITS`**: Bit offset of the active unit within each raw unit (default: `0`). Requires `--input-raw-unit`.
+- **`--input-unit=BITS`**: Width of the active unit (defaults to `raw-unit - offset`).
+- **`--input-gap=BITS`**: When `--input-raw-unit` is set, defines the gap *between* successive raw units (default: `0`).
 
-#### Clean Slicing with `--input-raw-unit`
-
-Consider extracting specific sub-fields from an 8-bit byte stream:
+#### Clean Slicing Recipes with Raw Units
 
 ```bash
 # Extract bits 3 and 4 of every byte (offset 2, length 2, trailing 4 bits skipped automatically):
@@ -120,32 +160,29 @@ bdd --input-raw-unit=32 --input-offset=0 --input-unit=16 < audio.raw  # Left cha
 bdd --input-raw-unit=32 --input-offset=16 --input-unit=16 < audio.raw # Right channel
 ```
 
-#### Legacy Pre-gap & Gap Slicing
+---
 
-You can also specify pre-gaps and post-gaps manually without `--input-raw-unit`:
+### Large Streams, Gigabyte Skipping & Size Suffixes
 
-```
- Byte 0                                 Byte 1
-┌───────────┬────────────┬─────────────┬────────────┬─────────────┐
-│  Pre-Gap  │    Unit    │     Gap     │    Unit    │     Gap     │  ...
-│  (1 bit)  │  (2 bits)  │  (5 bits)   │  (2 bits)  │  (5 bits)   │
-└───────────┴────────────┴─────────────┴────────────┴─────────────┘
-```
+Can `bdd` skip over gigabytes of data on the command line? **Yes, without limit:**
+
+- **Full 64-Bit Architecture (`u64`)**: All skips, offsets, gaps, units, and record counts are represented internally as 64-bit unsigned integers. `bdd` can represent bit offsets up to $2^{64}-1 \approx 1.84 \times 10^{19}$ bits, which equals **2.3 Exabytes** ($2,305,843,009$ Gigabytes).
+- **Filesystem Seek Limits**: On seekable files, Linux `lseek64` supports offsets up to $2^{63}-1$ bytes = **9.22 Exabytes**, executed in $O(1)$ constant time (microseconds) without memory overhead.
+- **Human-Friendly Size Suffixes**: You do not need to calculate zeroes or bit multiplications manually. All numeric arguments accept standard scale suffixes:
+  - **Binary multiples (powers of 1024)**: `K`, `M`, `G`, `T`, `P`, `E` (or `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, `Ei`).
+  - **Decimal multiples (powers of 1000)**: `KB`, `MB`, `GB`, `TB`, `PB`, `EB`.
+  - **Byte-scaled bit skips**: On bit options (`--input-skip-bits`, `--merge-skip-bits`), specifying `B` (e.g. `10GiB`, `4GB`, `100B`) automatically multiplies bytes by 8 bits:
 
 ```bash
-bdd --input-pregap=1 --input-unit=2 --input-gap=5 --output-hex < input.bin
+# Instantly seek 10 GiB into a file and extract 4 bytes in hex:
+bdd --input-file=large_disk.img --input-skip-bits=10GiB --count=4 --output-hex
+
+# Skip 10 million 8-bit units:
+bdd --input-file=stream.bin --input-unit=8 --input-skip-units=10M < stream.bin
+
+# Process at most 500k records:
+bdd --input-tuples --count=500k < records.csv
 ```
-
-#### Common Slicing Recipes
-
-- **Extract the Most Significant Bit of every byte** (expands 1 bit to an 8-bit byte `0x00` or `0x01`):
-  ```bash
-  bdd --input-unit=1 --input-gap=7 --output-unit=8 < input.bin
-  ```
-- **Pack the Least Significant Bit of bytes into a dense bitstream** (e.g., 9 bytes with LSB=1 become two bytes `0xFF` and `0x80`):
-  ```bash
-  bdd --input-pregap=7 --input-unit=1 --output-unit=1 < input.bin
-  ```
 
 ### Unit Sizing and Alignment Rules
 
@@ -386,12 +423,12 @@ Arguments:
 
 Input Unit & Raw Unit Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
-      --input-raw-unit <BITS>      Size of repeating raw container/frame in bits
-      --input-offset <BITS>        Bit offset of unit inside raw unit (alias: --input-pregap) [default: 0]
   -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
-      --input-gap <BITS>           Bit gap between raw units (alias: --input-postgap) [default: 0]
-      --input-skip-bits <BITS>     Initial bit offset before first raw unit [default: 0]
+      --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
       --input-skip-units <UNITS>   Skip initial N units from input stream [default: 0]
+      --input-gap <BITS>           Bit gap skipped after each unit (or between raw units) [default: 0]
+      --input-raw-unit <BITS>      Size of repeating raw container/frame in bits
+      --input-offset <BITS>        Bit offset of unit inside raw unit [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
       --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
       --input-no-seek              Disable seeking specifically on primary input
@@ -452,11 +489,13 @@ Demuxing & Channel Splitting:
 
 Merge Options:
       --merge-file <PATH>          Interleave stream from secondary file
-      --merge-raw-unit <BITS>      Size of repeating merge container in bits
-      --merge-offset <BITS>        Bit offset of unit inside merge raw unit (alias: --merge-pregap) [default: 0]
       --merge-unit <BITS>          Bit width of each merge unit [default: 8]
-      --merge-gap <BITS>           Bit gap between merge raw units (alias: --merge-postgap) [default: 0]
+      --merge-skip-bits <BITS>     Initial bit offset in merge file [default: 0]
+      --merge-skip-units <UNITS>   Skip initial N units in merge file [default: 0]
+      --merge-gap <BITS>           Bit gap skipped after each merge unit (or between raw units) [default: 0]
       --merge-copy-first <BITS>    Copy initial header bits from merge file first
+      --merge-raw-unit <BITS>      Size of repeating merge container in bits
+      --merge-offset <BITS>        Bit offset of unit inside merge raw unit [default: 0]
       --merge-no-seek              Disable seeking specifically on merge file
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)
 

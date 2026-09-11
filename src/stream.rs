@@ -9,9 +9,9 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 /// Stream configuration parameters for bit extraction.
 #[derive(Debug, Clone)]
 pub struct StreamConfig {
-    pub skip_bits: usize,
-    pub skip_units: usize,
-    pub gap: usize,
+    pub skip_bits: u64,
+    pub skip_units: u64,
+    pub gap: u64,
     pub assert_aligned: bool,
     pub reverse_bytes: bool,
     pub reverse_unit: bool,
@@ -227,33 +227,35 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
     }
 
     pub fn do_skip(&mut self) {
-        let total_skip_bits =
-            self.config.skip_bits + (self.config.unit_size * self.config.skip_units);
+        let total_skip_bits: u64 = self
+            .config
+            .skip_bits
+            .saturating_add((self.config.unit_size as u64).saturating_mul(self.config.skip_units));
         let skip_bytes = total_skip_bits / 8;
         if skip_bytes > 0 {
             let mut remaining = skip_bytes;
             if self.config.seek_allowed {
-                if let Ok(true) = self.reader.try_seek(skip_bytes as u64) {
+                if let Ok(true) = self.reader.try_seek(skip_bytes) {
                     remaining = 0;
                 }
             }
             if remaining > 0 {
-                let mut discard = [0u8; 4096];
+                let mut discard = [0u8; 65536];
                 while remaining > 0 {
-                    let to_read = remaining.min(discard.len());
+                    let to_read = (remaining.min(discard.len() as u64)) as usize;
                     match self.reader.read(&mut discard[..to_read]) {
                         Ok(0) | Err(_) => {
                             self.eof = true;
                             break;
                         }
                         Ok(n) => {
-                            remaining -= n;
+                            remaining -= n as u64;
                         }
                     }
                 }
             }
         }
-        let rem = total_skip_bits % 8;
+        let rem = (total_skip_bits % 8) as usize;
         if rem != 0 {
             self.bits_in_buffer = 8 - rem;
             let b = self.read_byte();
@@ -341,12 +343,12 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 self.bits_in_buffer = 8;
             }
 
-            while self.bits_in_buffer < self.config.gap {
+            while (self.bits_in_buffer as u64) < self.config.gap {
                 let b = self.read_byte();
                 self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
                 self.bits_in_buffer += 8;
             }
-            self.bits_in_buffer -= self.config.gap;
+            self.bits_in_buffer -= self.config.gap as usize;
             let mask = if self.bits_in_buffer > 0 {
                 (BigUint::one() << self.bits_in_buffer) - 1u32
             } else {
@@ -381,7 +383,7 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
 }
 
 pub struct ZeroStream {
-    remaining: usize,
+    remaining: u64,
 }
 
 impl ZeroStream {
@@ -403,7 +405,7 @@ impl UnitStream for ZeroStream {
 }
 
 pub struct OneStream {
-    remaining: usize,
+    remaining: u64,
     pub unit_size: usize,
 }
 
@@ -427,7 +429,7 @@ impl UnitStream for OneStream {
 }
 
 pub struct RandomStream {
-    remaining: usize,
+    remaining: u64,
     pub unit_size: usize,
 }
 
@@ -458,9 +460,9 @@ impl UnitStream for RandomStream {
 }
 
 pub struct CounterStream {
-    remaining: usize,
+    remaining: u64,
     pub unit_size: usize,
-    current_val: usize,
+    current_val: u64,
 }
 
 impl CounterStream {
@@ -481,7 +483,7 @@ impl UnitStream for CounterStream {
         self.remaining -= 1;
         let mask = (BigUint::one() << self.unit_size) - 1u32;
         let val = BigUint::from(self.current_val) & mask;
-        self.current_val += 1;
+        self.current_val = self.current_val.wrapping_add(1);
         Ok(Some(val))
     }
 }

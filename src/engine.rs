@@ -210,9 +210,9 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
 
     if let Some(ref mut ms) = merge_stream {
         if config.merge_copy_first > 0 {
-            let bits = ms.read_bits(config.merge_copy_first);
+            let bits = ms.read_bits(config.merge_copy_first as usize);
             if let Some(ref mut sink) = unit_sink {
-                sink.write_bits(bits, config.merge_copy_first)?;
+                sink.write_bits(bits, config.merge_copy_first as usize)?;
             }
         }
     }
