@@ -1,15 +1,18 @@
+use crate::error::BddError;
 use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use rand::RngCore;
 
-#[derive(Debug, Clone)]
+/// A single token in a bitstream pattern specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternItem {
     pub bits: usize,
     pub char_code: char,
 }
 
-pub fn parse_input_pattern(pattern_str: &str) -> Vec<PatternItem> {
+/// Parse and validate an input pattern string (e.g. "2U3U5U", "32F").
+pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
     let mut items = Vec::new();
     let mut digits = String::new();
     let mut matched_len = 0;
@@ -24,46 +27,39 @@ pub fn parse_input_pattern(pattern_str: &str) -> Vec<PatternItem> {
                 digits.parse::<usize>().unwrap_or(0)
             };
             digits.clear();
-            items.push(PatternItem {
-                bits,
-                char_code: c,
-            });
+            items.push(PatternItem { bits, char_code: c });
             matched_len += 1;
         }
     }
 
     if items.is_empty() || matched_len == 0 || !digits.is_empty() {
-        eprintln!("Missing input pattern");
-        std::process::exit(1);
+        return Err(BddError::MissingInputPattern);
     }
 
     for item in &items {
         let c = item.char_code;
         if !"xUuSsMmFfDdCc".contains(c) {
-            eprintln!("Illegal character {} in input-pattern", c);
-            std::process::exit(1);
+            return Err(BddError::IllegalInputPatternChar(c));
         }
         if item.bits == 0 {
-            eprintln!("Character {} in input pattern requires number of bits", c);
-            std::process::exit(1);
+            return Err(BddError::InputBitLengthRequired(c));
         }
         if "Ff".contains(c) && item.bits != 32 {
-            eprintln!("Number of bits for input pattern {} must be 32", c);
-            std::process::exit(1);
+            return Err(BddError::InvalidInputBitLength(c, 32));
         }
         if "Dd".contains(c) && item.bits != 64 {
-            eprintln!("Number of bits for input pattern {} must be 64", c);
-            std::process::exit(1);
+            return Err(BddError::InvalidInputBitLength(c, 64));
         }
         if "Cc".contains(c) && item.bits % 8 != 0 {
             eprintln!("Number of bits for input pattern {} should be n*8 bits", c);
         }
     }
 
-    items
+    Ok(items)
 }
 
-pub fn parse_output_pattern(pattern_str: &str) -> Vec<PatternItem> {
+/// Parse and validate an output pattern string (e.g. "4z4M", "8u8U8u").
+pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
     let mut items = Vec::new();
     let mut digits = String::new();
 
@@ -77,59 +73,52 @@ pub fn parse_output_pattern(pattern_str: &str) -> Vec<PatternItem> {
                 digits.parse::<usize>().unwrap_or(0)
             };
             digits.clear();
-            items.push(PatternItem {
-                bits,
-                char_code: c,
-            });
+            items.push(PatternItem { bits, char_code: c });
         }
     }
 
     if items.is_empty() || !digits.is_empty() {
-        eprintln!("Missing output pattern");
-        std::process::exit(1);
+        return Err(BddError::MissingOutputPattern);
     }
 
     for item in &items {
         let c = item.char_code;
         if !"UuSsMmFfDdCczor".contains(c) {
-            eprintln!("Illegal character {} in output-pattern", c);
-            std::process::exit(1);
+            return Err(BddError::IllegalOutputPatternChar(c));
         }
         if item.bits == 0 {
-            eprintln!("Character {} in output pattern requires number of bits", c);
-            std::process::exit(1);
+            return Err(BddError::OutputBitLengthRequired(c));
         }
         if "Ff".contains(c) && item.bits != 32 {
-            eprintln!("Number of bits for output pattern {} must be 32", c);
-            std::process::exit(1);
+            return Err(BddError::InvalidOutputBitLength(c, 32));
         }
         if "Dd".contains(c) && item.bits != 64 {
-            eprintln!("Number of bits for output pattern {} must be 64", c);
-            std::process::exit(1);
+            return Err(BddError::InvalidOutputBitLength(c, 64));
         }
         if "Cc".contains(c) && item.bits % 8 != 0 {
             eprintln!("Number of bits for output pattern {} should be n*8 bits", c);
         }
     }
 
-    items
+    Ok(items)
 }
 
+/// Unpacks a bitstream integer unit into individual fields according to an input pattern.
 pub struct TupleUnpacker {
     reversed_pattern: Vec<PatternItem>,
     pub total_bits: usize,
 }
 
 impl TupleUnpacker {
-    pub fn new(pattern_str: &str) -> Self {
-        let pattern = parse_input_pattern(pattern_str);
+    pub fn new(pattern_str: &str) -> Result<Self, BddError> {
+        let pattern = parse_input_pattern(pattern_str)?;
         let total_bits = pattern.iter().map(|p| p.bits).sum();
         let mut reversed_pattern = pattern;
         reversed_pattern.reverse();
-        Self {
+        Ok(Self {
             reversed_pattern,
             total_bits,
-        }
+        })
     }
 
     pub fn unpack(&self, mut unit: BigUint) -> Vec<Field> {
@@ -207,30 +196,30 @@ impl TupleUnpacker {
     }
 }
 
+/// Packs tuple fields into an integer unit according to an output pattern.
 pub struct TuplePacker {
     pattern: Vec<PatternItem>,
     pub total_bits: usize,
 }
 
 impl TuplePacker {
-    pub fn new(pattern_str: &str) -> Self {
-        let pattern = parse_output_pattern(pattern_str);
+    pub fn new(pattern_str: &str) -> Result<Self, BddError> {
+        let pattern = parse_output_pattern(pattern_str)?;
         let total_bits = pattern.iter().map(|p| p.bits).sum();
-        Self {
+        Ok(Self {
             pattern,
             total_bits,
-        }
+        })
     }
 
-    fn pop_field(tuple: &mut Vec<Field>) -> Field {
+    fn pop_field(tuple: &mut Vec<Field>) -> Result<Field, BddError> {
         if tuple.is_empty() {
-            eprintln!("Input has less fields than in output pattern");
-            std::process::exit(1);
+            return Err(BddError::InputHasLessFields);
         }
-        tuple.remove(0)
+        Ok(tuple.remove(0))
     }
 
-    pub fn pack(&self, mut tuple: Vec<Field>) -> BigUint {
+    pub fn pack(&self, mut tuple: Vec<Field>) -> Result<BigUint, BddError> {
         let mut unit = BigUint::zero();
         let mut rng = rand::thread_rng();
 
@@ -239,11 +228,11 @@ impl TuplePacker {
             let c = p.char_code;
             let mut val = match c {
                 'U' | 'u' => {
-                    let f = Self::pop_field(&mut tuple);
+                    let f = Self::pop_field(&mut tuple)?;
                     f.as_biguint()
                 }
                 'S' | 's' => {
-                    let f = Self::pop_field(&mut tuple);
+                    let f = Self::pop_field(&mut tuple)?;
                     let bi = f.as_bigint();
                     if bi < BigInt::zero() {
                         let abs_u = (-bi).to_biguint().unwrap();
@@ -257,8 +246,8 @@ impl TuplePacker {
                     }
                 }
                 'M' | 'm' => {
-                    let sign = Self::pop_field(&mut tuple).as_biguint();
-                    let mut mag = Self::pop_field(&mut tuple).as_biguint();
+                    let sign = Self::pop_field(&mut tuple)?.as_biguint();
+                    let mut mag = Self::pop_field(&mut tuple)?.as_biguint();
                     if sign == BigUint::one() {
                         let mask = (BigUint::one() << bits) - 1u32;
                         mag &= &mask;
@@ -268,7 +257,7 @@ impl TuplePacker {
                     mag
                 }
                 'F' | 'f' => {
-                    let f = Self::pop_field(&mut tuple);
+                    let f = Self::pop_field(&mut tuple)?;
                     let fl = f.as_f64() as f32;
                     let bytes = fl.to_ne_bytes();
                     let mut v = BigUint::zero();
@@ -278,7 +267,7 @@ impl TuplePacker {
                     v
                 }
                 'D' | 'd' => {
-                    let f = Self::pop_field(&mut tuple);
+                    let f = Self::pop_field(&mut tuple)?;
                     let fl = f.as_f64();
                     let bytes = fl.to_ne_bytes();
                     let mut v = BigUint::zero();
@@ -288,7 +277,7 @@ impl TuplePacker {
                     v
                 }
                 'C' | 'c' => {
-                    let f = Self::pop_field(&mut tuple);
+                    let f = Self::pop_field(&mut tuple)?;
                     match f {
                         Field::Bytes(b) => {
                             let mut v = BigUint::zero();
@@ -319,6 +308,56 @@ impl TuplePacker {
             unit = (unit << bits) | val;
         }
 
-        unit
+        Ok(unit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_patterns() {
+        let p = parse_input_pattern("2U3U3U").unwrap();
+        assert_eq!(p.len(), 3);
+        assert_eq!(
+            p[0],
+            PatternItem {
+                bits: 2,
+                char_code: 'U'
+            }
+        );
+
+        let unpacker = TupleUnpacker::new("8U").unwrap();
+        assert_eq!(unpacker.total_bits, 8);
+        let tuple = unpacker.unpack(BigUint::from(42u32));
+        assert_eq!(tuple, vec![Field::UInt(BigUint::from(42u32))]);
+    }
+
+    #[test]
+    fn test_invalid_patterns() {
+        assert!(matches!(
+            parse_input_pattern(""),
+            Err(BddError::MissingInputPattern)
+        ));
+        assert!(matches!(
+            parse_input_pattern("0U"),
+            Err(BddError::InputBitLengthRequired('U'))
+        ));
+        assert!(matches!(
+            parse_input_pattern("32X"),
+            Err(BddError::IllegalInputPatternChar('X'))
+        ));
+        assert!(matches!(
+            parse_input_pattern("16F"),
+            Err(BddError::InvalidInputBitLength('F', 32))
+        ));
+    }
+
+    #[test]
+    fn test_packer_less_fields() {
+        let packer = TuplePacker::new("8U8U").unwrap();
+        let res = packer.pack(vec![Field::UInt(BigUint::from(1u32))]);
+        assert_eq!(res, Err(BddError::InputHasLessFields));
     }
 }

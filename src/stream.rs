@@ -1,55 +1,60 @@
 use crate::counter::Counter;
+use crate::error::BddError;
 use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, Zero};
 use rand::RngCore;
 use std::io::{BufRead, Read};
 
-pub trait UnitStream {
-    fn next_unit(&mut self) -> Option<BigUint>;
+/// Stream configuration parameters for bit extraction.
+#[derive(Debug, Clone)]
+pub struct StreamConfig {
+    pub skip_bits: usize,
+    pub skip_units: usize,
+    pub gap: usize,
+    pub assert_aligned: bool,
+    pub reverse_bytes: bool,
+    pub reverse_unit: bool,
+    pub unit_size: usize,
 }
 
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            skip_bits: 0,
+            skip_units: 0,
+            gap: 0,
+            assert_aligned: false,
+            reverse_bytes: false,
+            reverse_unit: false,
+            unit_size: 8,
+        }
+    }
+}
+
+/// Abstract iterator yielding units from an input source.
+pub trait UnitStream {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError>;
+}
+
+/// Bitstream reader extracting variable-width units from an underlying reader.
 pub struct FileInputStream<R> {
     pub reader: R,
     pub buffer: BigUint,
     pub bits_in_buffer: usize,
     pub eof: bool,
-    pub skip_bits: usize,
-    pub skip_units: usize,
-    pub gap: usize,
-    pub assert_aligned: bool,
-    pub _use_seek: bool,
-    pub reverse_bytes: bool,
-    pub reverse_unit: bool,
-    pub unit_size: usize,
+    pub config: StreamConfig,
     pub counter: Counter,
 }
 
 impl<R: Read> FileInputStream<R> {
-    pub fn new(
-        reader: R,
-        skip_bits: usize,
-        skip_units: usize,
-        gap: usize,
-        assert_aligned: bool,
-        _use_seek: bool,
-        reverse_bytes: bool,
-        reverse_unit: bool,
-        counter: Counter,
-    ) -> Self {
+    pub fn new(reader: R, config: StreamConfig, counter: Counter) -> Self {
         Self {
             reader,
             buffer: BigUint::zero(),
             bits_in_buffer: 0,
             eof: false,
-            skip_bits,
-            skip_units,
-            gap,
-            assert_aligned,
-            _use_seek,
-            reverse_bytes,
-            reverse_unit,
-            unit_size: 8,
+            config,
             counter,
         }
     }
@@ -59,7 +64,7 @@ impl<R: Read> FileInputStream<R> {
         match self.reader.read(&mut buf) {
             Ok(1) => {
                 let mut val = buf[0];
-                if self.reverse_bytes {
+                if self.config.reverse_bytes {
                     val = val.reverse_bits();
                 }
                 val
@@ -72,8 +77,9 @@ impl<R: Read> FileInputStream<R> {
     }
 
     pub fn do_skip(&mut self) {
-        self.skip_bits += self.unit_size * self.skip_units;
-        let skip_bytes = self.skip_bits / 8;
+        let total_skip_bits =
+            self.config.skip_bits + (self.config.unit_size * self.config.skip_units);
+        let skip_bytes = total_skip_bits / 8;
         if skip_bytes > 0 {
             let mut remaining = skip_bytes;
             let mut discard = [0u8; 4096];
@@ -90,8 +96,9 @@ impl<R: Read> FileInputStream<R> {
                 }
             }
         }
-        if self.skip_bits % 8 != 0 {
-            self.bits_in_buffer = 8 - (self.skip_bits % 8);
+        let rem = total_skip_bits % 8;
+        if rem != 0 {
+            self.bits_in_buffer = 8 - rem;
             let b = self.read_byte();
             let mask = (BigUint::one() << self.bits_in_buffer) - 1u32;
             self.buffer = BigUint::from(b) & mask;
@@ -110,8 +117,8 @@ impl<R: Read> FileInputStream<R> {
         }
         let right_edge = self.bits_in_buffer - bits;
         let mut unit = &self.buffer >> right_edge;
-        if self.reverse_unit {
-            unit = reverse_bits(&unit, self.unit_size);
+        if self.config.reverse_unit {
+            unit = reverse_bits(&unit, self.config.unit_size);
         }
         self.bits_in_buffer -= bits;
         let mask = if self.bits_in_buffer > 0 {
@@ -125,27 +132,26 @@ impl<R: Read> FileInputStream<R> {
 }
 
 impl<R: Read> UnitStream for FileInputStream<R> {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.eof {
-            return None;
+            return Ok(None);
         }
 
         loop {
             if self.eof {
-                if self.assert_aligned {
-                    eprintln!("Non-aligned end of file");
-                    std::process::exit(1);
+                if self.config.assert_aligned {
+                    return Err(BddError::NonAlignedEof);
                 }
-                return None;
+                return Ok(None);
             }
 
-            while self.bits_in_buffer < self.unit_size {
+            while self.bits_in_buffer < self.config.unit_size {
                 let b = self.read_byte();
                 self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
                 self.bits_in_buffer += 8;
             }
 
-            let right_edge = self.bits_in_buffer - self.unit_size;
+            let right_edge = self.bits_in_buffer - self.config.unit_size;
             let mut unit = &self.buffer >> right_edge;
 
             self.counter.next();
@@ -154,7 +160,7 @@ impl<R: Read> UnitStream for FileInputStream<R> {
                 self.eof = true;
             }
 
-            self.bits_in_buffer -= self.unit_size;
+            self.bits_in_buffer -= self.config.unit_size;
             let mask = if self.bits_in_buffer > 0 {
                 (BigUint::one() << self.bits_in_buffer) - 1u32
             } else {
@@ -166,24 +172,24 @@ impl<R: Read> UnitStream for FileInputStream<R> {
                 let b = self.read_byte();
                 if self.eof {
                     if included {
-                        if self.reverse_unit {
-                            unit = reverse_bits(&unit, self.unit_size);
+                        if self.config.reverse_unit {
+                            unit = reverse_bits(&unit, self.config.unit_size);
                         }
-                        return Some(unit);
+                        return Ok(Some(unit));
                     } else {
-                        return None;
+                        return Ok(None);
                     }
                 }
                 self.buffer = BigUint::from(b);
                 self.bits_in_buffer = 8;
             }
 
-            while self.bits_in_buffer < self.gap {
+            while self.bits_in_buffer < self.config.gap {
                 let b = self.read_byte();
                 self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
                 self.bits_in_buffer += 8;
             }
-            self.bits_in_buffer -= self.gap;
+            self.bits_in_buffer -= self.config.gap;
             let mask = if self.bits_in_buffer > 0 {
                 (BigUint::one() << self.bits_in_buffer) - 1u32
             } else {
@@ -195,12 +201,12 @@ impl<R: Read> UnitStream for FileInputStream<R> {
                 let b = self.read_byte();
                 if self.eof {
                     if included {
-                        if self.reverse_unit {
-                            unit = reverse_bits(&unit, self.unit_size);
+                        if self.config.reverse_unit {
+                            unit = reverse_bits(&unit, self.config.unit_size);
                         }
-                        return Some(unit);
+                        return Ok(Some(unit));
                     } else {
-                        return None;
+                        return Ok(None);
                     }
                 }
                 self.buffer = BigUint::from(b);
@@ -208,10 +214,10 @@ impl<R: Read> UnitStream for FileInputStream<R> {
             }
 
             if included {
-                if self.reverse_unit {
-                    unit = reverse_bits(&unit, self.unit_size);
+                if self.config.reverse_unit {
+                    unit = reverse_bits(&unit, self.config.unit_size);
                 }
-                return Some(unit);
+                return Ok(Some(unit));
             }
         }
     }
@@ -230,12 +236,12 @@ impl ZeroStream {
 }
 
 impl UnitStream for ZeroStream {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.remaining == 0 {
-            return None;
+            return Ok(None);
         }
         self.remaining -= 1;
-        Some(BigUint::zero())
+        Ok(Some(BigUint::zero()))
     }
 }
 
@@ -254,12 +260,12 @@ impl OneStream {
 }
 
 impl UnitStream for OneStream {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.remaining == 0 {
-            return None;
+            return Ok(None);
         }
         self.remaining -= 1;
-        Some((BigUint::one() << self.unit_size) - 1u32)
+        Ok(Some((BigUint::one() << self.unit_size) - 1u32))
     }
 }
 
@@ -278,9 +284,9 @@ impl RandomStream {
 }
 
 impl UnitStream for RandomStream {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.remaining == 0 {
-            return None;
+            return Ok(None);
         }
         self.remaining -= 1;
         let mut rng = rand::thread_rng();
@@ -290,7 +296,7 @@ impl UnitStream for RandomStream {
         let mut val = BigUint::from_bytes_be(&buf);
         let mask = (BigUint::one() << self.unit_size) - 1u32;
         val &= mask;
-        Some(val)
+        Ok(Some(val))
     }
 }
 
@@ -311,15 +317,15 @@ impl CounterStream {
 }
 
 impl UnitStream for CounterStream {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         if self.remaining == 0 {
-            return None;
+            return Ok(None);
         }
         self.remaining -= 1;
         let mask = (BigUint::one() << self.unit_size) - 1u32;
         let val = BigUint::from(self.current_val) & mask;
         self.current_val += 1;
-        Some(val)
+        Ok(Some(val))
     }
 }
 
@@ -335,12 +341,12 @@ impl<R: BufRead> IntegerInputStream<R> {
 }
 
 impl<R: BufRead> UnitStream for IntegerInputStream<R> {
-    fn next_unit(&mut self) -> Option<BigUint> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         let mut line = String::new();
         loop {
             line.clear();
             match self.reader.read_line(&mut line) {
-                Ok(0) => return None,
+                Ok(0) => return Ok(None),
                 Ok(_) => {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
@@ -348,7 +354,7 @@ impl<R: BufRead> UnitStream for IntegerInputStream<R> {
                     }
                     self.counter.next();
                     if self.counter.finished() {
-                        return None;
+                        return Ok(None);
                     }
                     if !self.counter.included() {
                         continue;
@@ -366,9 +372,9 @@ impl<R: BufRead> UnitStream for IntegerInputStream<R> {
                     } else {
                         bi.to_biguint().unwrap_or_default()
                     };
-                    return Some(val);
+                    return Ok(Some(val));
                 }
-                Err(_) => return None,
+                Err(e) => return Err(BddError::from(e)),
             }
         }
     }
@@ -384,12 +390,12 @@ impl<R: BufRead> TupleDirectInput<R> {
         Self { reader, counter }
     }
 
-    pub fn next_tuple(&mut self) -> Option<Vec<Field>> {
+    pub fn next_tuple(&mut self) -> Result<Option<Vec<Field>>, BddError> {
         let mut line = String::new();
         loop {
             line.clear();
             match self.reader.read_line(&mut line) {
-                Ok(0) => return None,
+                Ok(0) => return Ok(None),
                 Ok(_) => {
                     let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
                     if trimmed.is_empty() {
@@ -397,7 +403,7 @@ impl<R: BufRead> TupleDirectInput<R> {
                     }
                     self.counter.next();
                     if self.counter.finished() {
-                        return None;
+                        return Ok(None);
                     }
                     if !self.counter.included() {
                         continue;
@@ -409,28 +415,55 @@ impl<R: BufRead> TupleDirectInput<R> {
                         .from_reader(trimmed.as_bytes());
 
                     let mut tuple = Vec::new();
-                    if let Some(result) = rdr.records().next() {
-                        if let Ok(record) = result {
-                            for field_str in record.iter() {
-                                let f_trim = field_str.trim();
-                                if let Ok(bi) = f_trim.parse::<BigInt>() {
-                                    if bi.is_negative() {
-                                        tuple.push(Field::Int(bi));
-                                    } else {
-                                        tuple.push(Field::UInt(bi.to_biguint().unwrap()));
-                                    }
-                                } else if let Ok(fl) = f_trim.parse::<f64>() {
-                                    tuple.push(Field::Float(fl));
+                    if let Some(Ok(record)) = rdr.records().next() {
+                        for field_str in record.iter() {
+                            let f_trim = field_str.trim();
+                            if let Ok(bi) = f_trim.parse::<BigInt>() {
+                                if bi.is_negative() {
+                                    tuple.push(Field::Int(bi));
                                 } else {
-                                    tuple.push(Field::Bytes(field_str.as_bytes().to_vec()));
+                                    tuple.push(Field::UInt(bi.to_biguint().unwrap()));
                                 }
+                            } else if let Ok(fl) = f_trim.parse::<f64>() {
+                                tuple.push(Field::Float(fl));
+                            } else {
+                                tuple.push(Field::Bytes(field_str.as_bytes().to_vec()));
                             }
                         }
                     }
-                    return Some(tuple);
+                    return Ok(Some(tuple));
                 }
-                Err(_) => return None,
+                Err(e) => return Err(BddError::from(e)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_counter_stream() {
+        let counter = Counter::new(2, Some(3));
+        let mut stream = CounterStream::new(counter, 8);
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(2u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(3u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(4u32)));
+        assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_file_stream_bytes() {
+        let data = [0x12, 0x34];
+        let config = StreamConfig {
+            unit_size: 8,
+            ..Default::default()
+        };
+        let mut stream = FileInputStream::new(&data[..], config, Counter::new(0, None));
+        stream.do_skip();
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x12u32)));
+        assert_eq!(stream.next_unit().unwrap(), Some(BigUint::from(0x34u32)));
+        assert_eq!(stream.next_unit().unwrap(), None);
     }
 }

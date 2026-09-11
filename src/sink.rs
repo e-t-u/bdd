@@ -3,11 +3,13 @@ use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive, Zero};
 use std::io::Write;
 
+/// Sink interface for writing units of a given bit width.
 pub trait UnitSink {
     fn write_bits(&mut self, unit: BigUint, bits: usize) -> std::io::Result<()>;
     fn flush_stream(&mut self) -> std::io::Result<()>;
 }
 
+/// Bit-packing sink that outputs packed bytes into an underlying writer.
 pub struct FileOutputStream<W> {
     writer: W,
     buffer: BigUint,
@@ -63,7 +65,9 @@ impl<W: Write> UnitSink for FileOutputStream<W> {
     fn flush_stream(&mut self) -> std::io::Result<()> {
         if self.bits_in_buffer > 0 {
             let shift = 8 - self.bits_in_buffer;
-            let mut val = (std::mem::take(&mut self.buffer) << shift).to_u8().unwrap_or(0);
+            let mut val = (std::mem::take(&mut self.buffer) << shift)
+                .to_u8()
+                .unwrap_or(0);
             if self.reverse_bytes {
                 val = val.reverse_bits();
             }
@@ -74,6 +78,7 @@ impl<W: Write> UnitSink for FileOutputStream<W> {
     }
 }
 
+/// Sink formatting units as zero-padded hexadecimal words.
 pub struct HexOutputStream<W> {
     writer: W,
     output_column: usize,
@@ -126,6 +131,7 @@ impl<W: Write> UnitSink for HexOutputStream<W> {
     }
 }
 
+/// Sink formatting units as binary strings.
 pub struct BitOutputStream<W> {
     writer: W,
     output_column: usize,
@@ -177,6 +183,7 @@ impl<W: Write> UnitSink for BitOutputStream<W> {
     }
 }
 
+/// Sink formatting units as decimal integers, one per line.
 pub struct IntegerOutputStream<W> {
     writer: W,
 }
@@ -204,6 +211,7 @@ impl<W: Write> UnitSink for IntegerOutputStream<W> {
     }
 }
 
+/// Direct tuple sink printing CSV-delimited lines.
 pub struct TupleDirectOutput<W> {
     writer: W,
 }
@@ -221,5 +229,33 @@ impl<W: Write> TupleDirectOutput<W> {
 
     pub fn flush_stream(&mut self) -> std::io::Result<()> {
         self.writer.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_output_sink() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = FileOutputStream::new(&mut buf, false, false);
+            sink.write_bits(BigUint::from(0x12u32), 8).unwrap();
+            sink.write_bits(BigUint::from(0x34u32), 8).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(buf, vec![0x12, 0x34]);
+    }
+
+    #[test]
+    fn test_hex_output_sink() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = HexOutputStream::new(&mut buf);
+            sink.write_bits(BigUint::from(5u32), 8).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(buf).unwrap(), "05 \n");
     }
 }

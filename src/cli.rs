@@ -1,5 +1,7 @@
+use crate::error::BddError;
 use clap::Parser;
 
+/// Command line arguments for the bdd bitstream utility.
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "bdd",
@@ -97,7 +99,7 @@ pub struct Cli {
     #[arg(long)]
     pub output_pattern: Option<String>,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "output-tuple", default_value_t = false)]
     pub output_tuples: bool,
 
     // Output unit
@@ -120,7 +122,7 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output_hex: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "output-bit", default_value_t = false)]
     pub output_bits: bool,
 
     // Merge options
@@ -161,6 +163,7 @@ pub struct Cli {
     pub merge_reverse_unit: bool,
 }
 
+/// Fully validated execution plan derived from CLI arguments.
 #[derive(Debug, Clone)]
 pub struct ValidatedConfig {
     pub input_file: String,
@@ -208,16 +211,12 @@ pub struct ValidatedConfig {
     pub merge_reverse_unit: bool,
 }
 
-fn error_exit(msg: &str) -> ! {
-    eprintln!("Usage: bdd [options]\n\nbdd: error: {}", msg);
-    std::process::exit(2);
-}
-
-fn check_exclusive(msg: &str, flags: &[bool]) {
+fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
     let count = flags.iter().filter(|&&b| b).count();
     if count > 1 {
-        error_exit(msg);
+        return Err(BddError::CliError(msg.to_string()));
     }
+    Ok(())
 }
 
 fn check_number_argument(
@@ -247,7 +246,8 @@ fn check_number_argument(
     }
 }
 
-pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
+/// Validate CLI flags against legacy exclusivity rules and calculate effective options.
+pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     check_exclusive(
         "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter,--input-integers, --input-tuples",
         &[
@@ -258,24 +258,25 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
             cli.input_integers,
             cli.input_tuples,
         ],
-    );
+    )?;
 
     let has_special_stream =
         cli.input_zeros || cli.input_ones || cli.input_random || cli.input_counter;
 
     if cli.input_file != "-" && has_special_stream {
-        error_exit(
-            "--input-file can not be used with --input-zeros, --input-ones, --input-random or --input-counter",
-        );
+        return Err(BddError::CliError(
+            "--input-file can not be used with --input-zeros, --input-ones, --input-random or --input-counter".to_string(),
+        ));
     }
 
     let skip = check_number_argument(cli.skip, "--skip", Some(0)).unwrap_or(0);
     let count = check_number_argument(cli.count, "--count", None);
 
     if has_special_stream && count.is_none() {
-        error_exit(
-            "--input-zeros, --input-ones, --input-random and --input-counter require --count",
-        );
+        return Err(BddError::CliError(
+            "--input-zeros, --input-ones, --input-random and --input-counter require --count"
+                .to_string(),
+        ));
     }
 
     check_exclusive(
@@ -286,13 +287,17 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
             cli.output_hex,
             cli.output_bits,
         ],
-    );
+    )?;
 
     if cli.input_pattern.is_some() && cli.input_unit.is_some() {
-        error_exit("--in/output-pattern overwrites --in/output-unit, use either one");
+        return Err(BddError::CliError(
+            "--in/output-pattern overwrites --in/output-unit, use either one".to_string(),
+        ));
     }
     if cli.output_pattern.is_some() && cli.output_unit.is_some() {
-        error_exit("--in/output-pattern overwrites --in/output-unit, use either one");
+        return Err(BddError::CliError(
+            "--in/output-pattern overwrites --in/output-unit, use either one".to_string(),
+        ));
     }
 
     let merge_specified = cli.merge_file.is_some();
@@ -309,7 +314,9 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
             || cli.merge_reverse_bytes
             || cli.merge_reverse_unit;
         if has_merge_opt {
-            error_exit("Merge options can be used only if --merge-file option is set");
+            return Err(BddError::CliError(
+                "Merge options can be used only if --merge-file option is set".to_string(),
+            ));
         }
     }
 
@@ -317,8 +324,7 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
         check_number_argument(cli.input_skip_bits, "--input-skip-bits", Some(0)).unwrap_or(0);
     let input_skip_units =
         check_number_argument(cli.input_skip_units, "--input-skip-units", Some(0)).unwrap_or(0);
-    let mut input_gap =
-        check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
+    let mut input_gap = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
     let input_pregap =
         check_number_argument(cli.input_pregap, "--input-pregap", Some(0)).unwrap_or(0);
 
@@ -331,8 +337,7 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
         check_number_argument(cli.merge_skip_units, "--merge-skip-units", Some(0)).unwrap_or(0);
     let merge_copy_first =
         check_number_argument(cli.merge_copy_first, "--merge-copy-first", Some(0)).unwrap_or(0);
-    let mut merge_gap =
-        check_number_argument(cli.merge_gap, "--merge-gap", Some(0)).unwrap_or(0);
+    let mut merge_gap = check_number_argument(cli.merge_gap, "--merge-gap", Some(0)).unwrap_or(0);
     let merge_pregap =
         check_number_argument(cli.merge_pregap, "--merge-pregap", Some(0)).unwrap_or(0);
 
@@ -341,7 +346,9 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
 
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {
-            eprintln!("--input-little-endian overwrites --input-reverse-bytes and --input-reverse-unit");
+            eprintln!(
+                "--input-little-endian overwrites --input-reverse-bytes and --input-reverse-unit"
+            );
         }
         cli.input_reverse_bytes = true;
         cli.input_reverse_unit = true;
@@ -357,7 +364,9 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
 
     if cli.merge_little_endian {
         if cli.merge_reverse_bytes || cli.merge_reverse_unit {
-            eprintln!("--merge-little-endian overwrites --merge-reverse-bytes and --merge-reverse-unit");
+            eprintln!(
+                "--merge-little-endian overwrites --merge-reverse-bytes and --merge-reverse-unit"
+            );
         }
         cli.merge_reverse_bytes = true;
         cli.merge_reverse_unit = true;
@@ -368,7 +377,7 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
         cli.input_use_seek = false;
     }
 
-    ValidatedConfig {
+    Ok(ValidatedConfig {
         input_file: cli.input_file,
         output_file: cli.output_file,
         input_unit: cli.input_unit,
@@ -412,5 +421,34 @@ pub fn validate_and_process(mut cli: Cli) -> ValidatedConfig {
         merge_use_seek: cli.merge_use_seek,
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exclusive_validation() {
+        let mut cli = Cli::parse_from(["bdd", "--input-zeros", "--input-ones"]);
+        assert!(matches!(
+            validate_and_process(cli),
+            Err(BddError::CliError(_))
+        ));
+
+        cli = Cli::parse_from(["bdd", "--merge-unit=8"]);
+        assert!(matches!(
+            validate_and_process(cli),
+            Err(BddError::CliError(_))
+        ));
+    }
+
+    #[test]
+    fn test_valid_cli() {
+        let cli = Cli::parse_from(["bdd", "--input-counter", "--count=10", "--output-integers"]);
+        let config = validate_and_process(cli).unwrap();
+        assert!(config.input_counter);
+        assert_eq!(config.count, Some(10));
+        assert!(config.output_integers);
     }
 }

@@ -1,3 +1,4 @@
+use crate::error::BddError;
 use crate::field::Field;
 use num_bigint::BigInt;
 use num_traits::{One, Signed};
@@ -20,38 +21,37 @@ fn resolve_index(len: usize, idx: isize) -> Option<usize> {
     }
 }
 
+/// Interface for manipulators transforming tuples.
 pub trait TupleManipulator {
     fn manipulate(&self, tuple: Vec<Field>) -> Vec<Field>;
 }
 
+/// Reorders tuple fields according to a comma-separated list of indices.
 pub struct RearrangeManipulator {
     fieldlist: Vec<isize>,
     empty: bool,
 }
 
 impl RearrangeManipulator {
-    pub fn new(arg: &str) -> Self {
+    pub fn new(arg: &str) -> Result<Self, BddError> {
         if arg.is_empty() {
-            return Self {
+            return Ok(Self {
                 fieldlist: Vec::new(),
                 empty: true,
-            };
+            });
         }
         let parts = arg.split(',');
         let mut fieldlist = Vec::new();
         for p in parts {
             match p.parse::<isize>() {
                 Ok(n) => fieldlist.push(n),
-                Err(_) => {
-                    eprintln!("Fields in --rearrange must be numbers");
-                    std::process::exit(1);
-                }
+                Err(_) => return Err(BddError::RearrangeNonNumber),
             }
         }
-        Self {
+        Ok(Self {
             fieldlist,
             empty: false,
-        }
+        })
     }
 }
 
@@ -72,38 +72,33 @@ impl TupleManipulator for RearrangeManipulator {
     }
 }
 
-fn parse_fp(arg: &str, opt_name: &str) -> (isize, BigInt) {
+fn parse_fp(arg: &str, opt_name: &str) -> Result<(isize, BigInt), BddError> {
     let parts: Vec<&str> = arg.splitn(2, ',').collect();
     if parts.len() < 2 {
-        eprintln!("Argument for {} must be a list of two numbers", opt_name);
-        std::process::exit(1);
+        return Err(BddError::ManipulatorArgumentError(format!(
+            "Argument for {} must be a list of two numbers",
+            opt_name
+        )));
     }
-    let field = match parts[0].parse::<isize>() {
-        Ok(f) => f,
-        Err(_) => {
-            eprintln!("Field in {} must be a number", opt_name);
-            std::process::exit(1);
-        }
-    };
-    let parameter = match parts[1].parse::<BigInt>() {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("Parameter in {} must be a number", opt_name);
-            std::process::exit(1);
-        }
-    };
-    (field, parameter)
+    let field = parts[0].parse::<isize>().map_err(|_| {
+        BddError::ManipulatorArgumentError(format!("Field in {} must be a number", opt_name))
+    })?;
+    let parameter = parts[1].parse::<BigInt>().map_err(|_| {
+        BddError::ManipulatorArgumentError(format!("Parameter in {} must be a number", opt_name))
+    })?;
+    Ok((field, parameter))
 }
 
+/// Clamps field value within `[-maxint, maxint]`.
 pub struct CutMaxintManipulator {
     field: isize,
     parameter: BigInt,
 }
 
 impl CutMaxintManipulator {
-    pub fn new(arg: &str) -> Self {
-        let (field, parameter) = parse_fp(arg, "--cut-maxint");
-        Self { field, parameter }
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        let (field, parameter) = parse_fp(arg, "--cut-maxint")?;
+        Ok(Self { field, parameter })
     }
 }
 
@@ -129,17 +124,21 @@ impl TupleManipulator for CutMaxintManipulator {
     }
 }
 
+/// Bitwise right shifts field by `bits`.
 pub struct RemoveRightManipulator {
     field: isize,
     parameter: usize,
 }
 
 impl RemoveRightManipulator {
-    pub fn new(arg: &str) -> Self {
-        let (field, parameter) = parse_fp(arg, "--remove-right");
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        let (field, parameter) = parse_fp(arg, "--remove-right")?;
         use num_traits::ToPrimitive;
         let p = parameter.to_usize().unwrap_or(0);
-        Self { field, parameter: p }
+        Ok(Self {
+            field,
+            parameter: p,
+        })
     }
 }
 
@@ -160,18 +159,19 @@ impl TupleManipulator for RemoveRightManipulator {
     }
 }
 
+/// Bitwise XORs field with a mask of `bits` ones.
 pub struct XorManipulator {
     field: isize,
     mask: BigInt,
 }
 
 impl XorManipulator {
-    pub fn new(arg: &str) -> Self {
-        let (field, parameter) = parse_fp(arg, "--xor");
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        let (field, parameter) = parse_fp(arg, "--xor")?;
         use num_traits::ToPrimitive;
         let bits = parameter.to_usize().unwrap_or(0);
         let mask = (BigInt::one() << bits) - BigInt::one();
-        Self { field, mask }
+        Ok(Self { field, mask })
     }
 }
 
@@ -192,14 +192,15 @@ impl TupleManipulator for XorManipulator {
     }
 }
 
+/// Replaces field with its absolute value.
 pub struct AbsManipulator {
     field: isize,
 }
 
 impl AbsManipulator {
-    pub fn new(arg: &str) -> Self {
-        let (field, _) = parse_fp(arg, "--abs");
-        Self { field }
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        let (field, _) = parse_fp(arg, "--abs")?;
+        Ok(Self { field })
     }
 }
 
@@ -216,14 +217,15 @@ impl TupleManipulator for AbsManipulator {
     }
 }
 
+/// Replaces field with 1 if negative, 0 otherwise.
 pub struct SignManipulator {
     field: isize,
 }
 
 impl SignManipulator {
-    pub fn new(arg: &str) -> Self {
-        let (field, _) = parse_fp(arg, "--sign");
-        Self { field }
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        let (field, _) = parse_fp(arg, "--sign")?;
+        Ok(Self { field })
     }
 }
 
@@ -237,5 +239,66 @@ impl TupleManipulator for SignManipulator {
             eprintln!("Field {} mentioned in --sign missing", self.field);
         }
         tuple
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use num_bigint::BigUint;
+
+    #[test]
+    fn test_rearrange() {
+        let manip = RearrangeManipulator::new("1,0").unwrap();
+        let input = vec![
+            Field::UInt(BigUint::from(10u32)),
+            Field::UInt(BigUint::from(20u32)),
+        ];
+        let output = manip.manipulate(input);
+        assert_eq!(
+            output,
+            vec![
+                Field::UInt(BigUint::from(20u32)),
+                Field::UInt(BigUint::from(10u32))
+            ]
+        );
+
+        let manip_neg = RearrangeManipulator::new("-1,0").unwrap();
+        let input3 = vec![
+            Field::UInt(BigUint::from(1u32)),
+            Field::UInt(BigUint::from(9u32)),
+            Field::UInt(BigUint::from(2u32)),
+        ];
+        let output3 = manip_neg.manipulate(input3);
+        assert_eq!(
+            output3,
+            vec![
+                Field::UInt(BigUint::from(2u32)),
+                Field::UInt(BigUint::from(1u32))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cut_maxint() {
+        let manip = CutMaxintManipulator::new("0,50").unwrap();
+        let input = vec![Field::Int(BigInt::from(100))];
+        let output = manip.manipulate(input);
+        assert_eq!(output, vec![Field::UInt(BigUint::from(50u32))]);
+
+        let input_neg = vec![Field::Int(BigInt::from(-100))];
+        let output_neg = manip.manipulate(input_neg);
+        assert_eq!(output_neg, vec![Field::Int(BigInt::from(-50))]);
+    }
+
+    #[test]
+    fn test_abs_and_sign() {
+        let abs_m = AbsManipulator::new("0,0").unwrap();
+        let out = abs_m.manipulate(vec![Field::Int(BigInt::from(-99))]);
+        assert_eq!(out, vec![Field::UInt(BigUint::from(99u32))]);
+
+        let sign_m = SignManipulator::new("0,0").unwrap();
+        let out_sign = sign_m.manipulate(vec![Field::Int(BigInt::from(-99))]);
+        assert_eq!(out_sign, vec![Field::UInt(BigUint::from(1u32))]);
     }
 }
