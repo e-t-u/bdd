@@ -82,37 +82,47 @@ Because the output unit remains at its default of 8 bits, each 3-bit input unit 
 
 ---
 
-### Units, Skips, and Gaps
+### Units, Raw Units, Offsets, and Gaps
 
-In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A stream is modeled as a repeating series of **units**:
+In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. A stream is modeled as a repeating series of structured records or containers called **Raw Units**:
 
 ```
- Stream Start
-      │
-      ▼
-┌─────────────┬──────────────────┬──────────────┬──────────────────┬──────────────┐
-│  Skip Bits  │   Unit (Size)    │     Gap      │   Unit (Size)    │     Gap      │  ...
-└─────────────┴──────────────────┴──────────────┴──────────────────┴──────────────┘
+               ◄────────────── Raw Unit N (Container / Stride) ──────────────►
+Stream: ──────┬──────────────────────┬──────────────────────┬─────────────────┬───────────
+...           │   Offset / Pre-Gap   │     Active Unit      │    Post-Gap     │ Inter-Raw 
+              │       (O bits)       │       (U bits)       │(Raw - (O + U))  │ Unit Gap  
+──────────────┴──────────────────────┴──────────────────────┴─────────────────┴───────────
 ```
 
-- **`--input-unit=BITS`** (`-u`): The number of bits in each repeating processing unit (default: `8`).
-- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first unit (default: `0`).
-- **`--input-skip-units=UNITS`**: Skip initial units from stream start.
-- **`--input-gap=BITS`**: Number of bits skipped *between* successive units (default: `0`).
-- **`--input-pregap=BITS`**: Initial gap before the first unit. A convenient shorthand identical to setting `--input-skip-bits` and `--input-gap` together.
+- **`--input-raw-unit=BITS`**: The repeating container, frame, or stride size in bits (e.g. `8` for bytes, `16` for half-words, `32` for words). When specified, `bdd` automatically manages trailing post-gaps so you never have to compute them manually.
+- **`--input-offset=BITS`** (alias: `--input-pregap`): Bit offset of the active unit within each raw unit (default: `0`).
+- **`--input-unit=BITS`** (`-u`): The number of bits in each extracted active unit (default: `raw-unit - offset`, or `8`).
+- **`--input-gap=BITS`** (alias: `--input-postgap`):
+  - When `--input-raw-unit` is set: The bit gap *between* successive raw units (default: `0`).
+  - When `--input-raw-unit` is omitted: The gap skipped *after* reading each unit.
+- **`--input-skip-bits=BITS`**: Initial offset in bits skipped before processing the first raw unit (default: `0`).
+- **`--input-skip-units=UNITS`**: Skip initial raw units (or active units) from stream start.
 - **`--input-assert-aligned`**: Aborts with an error if the input stream terminates unaligned to a byte boundary.
 
-#### Automatic Fast Seeking vs. Streaming Fallback
+#### Clean Slicing with `--input-raw-unit`
 
-When extracting fields with `--input-skip-bits` or `--input-skip-units`, `bdd` automatically uses **$O(1)$ filesystem seeking** by default whenever the input source is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of transferring gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps straight to the initial offset instantly.
+Consider extracting specific sub-fields from an 8-bit byte stream:
 
-If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or socket), `bdd` seamlessly falls back to streaming sequential reads, discarding skipped bytes without failing or requiring separate flags.
+```bash
+# Extract bits 3 and 4 of every byte (offset 2, length 2, trailing 4 bits skipped automatically):
+bdd --input-raw-unit=8 --input-offset=2 --input-unit=2 --output-integers < input.bin
 
-To explicitly disable seeking and force sequential stream consumption across all inputs, pass **`--no-seek`** (or `--do-not-seek`, `--input-no-seek`, `--merge-no-seek`).
+# Extract bit 5 of every byte (offset 4, length 1, trailing 3 bits skipped automatically):
+bdd --input-raw-unit=8 --input-offset=4 --input-unit=1 --output-integers < input.bin
 
-### Slicing Bits from Byte Streams
+# Extract 16-bit audio channel from interleaved 32-bit stereo (L=0..15, R=16..31):
+bdd --input-raw-unit=32 --input-offset=0 --input-unit=16 < audio.raw  # Left channel
+bdd --input-raw-unit=32 --input-offset=16 --input-unit=16 < audio.raw # Right channel
+```
 
-Consider extracting specific sub-fields from a continuous byte stream:
+#### Legacy Pre-gap & Gap Slicing
+
+You can also specify pre-gaps and post-gaps manually without `--input-raw-unit`:
 
 ```
  Byte 0                                 Byte 1
@@ -374,13 +384,14 @@ Usage: bdd [OPTIONS] [FILE]
 Arguments:
   [FILE]  Input file (defaults to standard input '-')
 
-Input Unit & Pattern Options:
+Input Unit & Raw Unit Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
+      --input-raw-unit <BITS>      Size of repeating raw container/frame in bits
+      --input-offset <BITS>        Bit offset of unit inside raw unit (alias: --input-pregap) [default: 0]
   -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
-      --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
+      --input-gap <BITS>           Bit gap between raw units (alias: --input-postgap) [default: 0]
+      --input-skip-bits <BITS>     Initial bit offset before first raw unit [default: 0]
       --input-skip-units <UNITS>   Skip initial N units from input stream [default: 0]
-      --input-gap <BITS>           Bit gap skipped between units [default: 0]
-      --input-pregap <BITS>        Shorthand for initial skip & gap [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
       --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
       --input-no-seek              Disable seeking specifically on primary input
@@ -441,7 +452,10 @@ Demuxing & Channel Splitting:
 
 Merge Options:
       --merge-file <PATH>          Interleave stream from secondary file
+      --merge-raw-unit <BITS>      Size of repeating merge container in bits
+      --merge-offset <BITS>        Bit offset of unit inside merge raw unit (alias: --merge-pregap) [default: 0]
       --merge-unit <BITS>          Bit width of each merge unit [default: 8]
+      --merge-gap <BITS>           Bit gap between merge raw units (alias: --merge-postgap) [default: 0]
       --merge-copy-first <BITS>    Copy initial header bits from merge file first
       --merge-no-seek              Disable seeking specifically on merge file
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)

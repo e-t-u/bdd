@@ -191,3 +191,52 @@ fn test_cli_auto_seek_and_no_seek() {
 
     let _ = std::fs::remove_file(test_path);
 }
+
+#[test]
+fn test_cli_raw_unit_and_offset() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let test_path = "/tmp/bdd_raw_unit_test.bin";
+    {
+        let mut f = File::create(test_path).expect("failed to create test file");
+        // Byte 0: 0b00110000 = 0x30 (bits 3,4 are '11' = 3; bit 5 is '0')
+        // Byte 1: 0b00111000 = 0x38 (bits 3,4 are '11' = 3; bit 5 is '1')
+        f.write_all(&[0x30, 0x38])
+            .expect("failed to write test bytes");
+    }
+
+    // Extraction A: bits 3 and 4 of every 8-bit byte (offset 2, unit 2)
+    let out_a = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-raw-unit=8",
+            "--input-offset=2",
+            "--input-unit=2",
+            "--output-integers",
+        ])
+        .output()
+        .expect("failed to run bdd raw unit A");
+    assert!(out_a.status.success());
+    let stdout_a = String::from_utf8(out_a.stdout).unwrap();
+    let lines_a: Vec<&str> = stdout_a.lines().collect();
+    assert_eq!(lines_a, vec!["3", "3"]);
+
+    // Extraction B: bit 5 of every 8-bit byte (offset 4, unit 1)
+    let out_b = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-raw-unit=8",
+            "--input-offset=4",
+            "--input-unit=1",
+            "--output-integers",
+        ])
+        .output()
+        .expect("failed to run bdd raw unit B");
+    assert!(out_b.status.success());
+    let stdout_b = String::from_utf8(out_b.stdout).unwrap();
+    let lines_b: Vec<&str> = stdout_b.lines().collect();
+    assert_eq!(lines_b, vec!["0", "1"]);
+
+    let _ = std::fs::remove_file(test_path);
+}

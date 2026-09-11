@@ -16,9 +16,13 @@ pub struct Cli {
     #[arg(long, default_value = "-")]
     pub output_file: String,
 
-    // Input unit selection
+    // Input unit and raw unit container selection
     #[arg(long)]
     pub input_unit: Option<usize>,
+
+    /// Size of repeating raw unit / container in bits
+    #[arg(long)]
+    pub input_raw_unit: Option<usize>,
 
     #[arg(long, allow_hyphen_values = true)]
     pub input_skip_bits: Option<isize>,
@@ -26,11 +30,13 @@ pub struct Cli {
     #[arg(long, allow_hyphen_values = true)]
     pub input_skip_units: Option<isize>,
 
-    #[arg(long, allow_hyphen_values = true)]
+    /// Bit gap between raw units (alias: --input-postgap)
+    #[arg(long, visible_alias = "input-postgap", allow_hyphen_values = true)]
     pub input_gap: Option<isize>,
 
-    #[arg(long, allow_hyphen_values = true)]
-    pub input_pregap: Option<isize>,
+    /// Bit offset of unit within raw unit (alias: --input-pregap)
+    #[arg(long, visible_alias = "input-pregap", allow_hyphen_values = true)]
+    pub input_offset: Option<isize>,
 
     #[arg(long, default_value_t = false)]
     pub input_assert_aligned: bool,
@@ -205,11 +211,16 @@ pub struct Cli {
     #[arg(long, allow_hyphen_values = true)]
     pub merge_copy_first: Option<isize>,
 
+    /// Size of repeating raw unit / container in bits for merge stream
+    #[arg(long)]
+    pub merge_raw_unit: Option<usize>,
+
     #[arg(long, allow_hyphen_values = true)]
     pub merge_gap: Option<isize>,
 
-    #[arg(long, allow_hyphen_values = true)]
-    pub merge_pregap: Option<isize>,
+    /// Bit offset of unit within merge raw unit (alias: --merge-pregap)
+    #[arg(long, visible_alias = "merge-pregap", allow_hyphen_values = true)]
+    pub merge_offset: Option<isize>,
 
     #[arg(long, default_value_t = false)]
     pub merge_assert_aligned: bool,
@@ -380,9 +391,10 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         ],
     )?;
 
-    if cli.input_pattern.is_some() && cli.input_unit.is_some() {
+    if cli.input_pattern.is_some() && (cli.input_unit.is_some() || cli.input_raw_unit.is_some()) {
         return Err(BddError::CliError(
-            "--in/output-pattern overwrites --in/output-unit, use either one".to_string(),
+            "--in/output-pattern overwrites --in/output-unit and --input-raw-unit, use either one"
+                .to_string(),
         ));
     }
     if cli.output_pattern.is_some() && cli.output_unit.is_some() {
@@ -394,11 +406,12 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     let merge_specified = cli.merge_file.is_some();
     if !merge_specified {
         let has_merge_opt = cli.merge_unit.is_some()
+            || cli.merge_raw_unit.is_some()
             || cli.merge_skip_bits.is_some()
             || cli.merge_skip_units.is_some()
             || cli.merge_copy_first.is_some()
             || cli.merge_gap.is_some()
-            || cli.merge_pregap.is_some()
+            || cli.merge_offset.is_some()
             || cli.merge_assert_aligned
             || cli.merge_use_seek
             || cli.merge_no_seek
@@ -412,29 +425,105 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
-    let input_skip_bits =
+    let raw_unit = cli.input_raw_unit;
+    let input_offset =
+        check_number_argument(cli.input_offset, "--input-offset", Some(0)).unwrap_or(0);
+    let input_gap_raw = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
+    let input_skip_bits_raw =
         check_number_argument(cli.input_skip_bits, "--input-skip-bits", Some(0)).unwrap_or(0);
-    let input_skip_units =
+    let input_skip_units_raw =
         check_number_argument(cli.input_skip_units, "--input-skip-units", Some(0)).unwrap_or(0);
-    let input_gap = check_number_argument(cli.input_gap, "--input-gap", Some(0)).unwrap_or(0);
-    let input_pregap =
-        check_number_argument(cli.input_pregap, "--input-pregap", Some(0)).unwrap_or(0);
 
-    let input_skip_bits = input_skip_bits + input_pregap;
-    let input_gap = input_gap + input_pregap;
+    let (input_skip_bits, input_skip_units, input_gap, resolved_input_unit) = if let Some(r) =
+        raw_unit
+    {
+        if r == 0 {
+            return Err(BddError::CliError(
+                "--input-raw-unit must be greater than 0".to_string(),
+            ));
+        }
+        let u = if let Some(unit) = cli.input_unit {
+            if unit == 0 {
+                return Err(BddError::CliError(
+                    "--input-unit must be greater than 0".to_string(),
+                ));
+            }
+            if input_offset + unit > r {
+                return Err(BddError::CliError(format!(
+                    "--input-offset ({}) + --input-unit ({}) exceeds --input-raw-unit ({})",
+                    input_offset, unit, r
+                )));
+            }
+            unit
+        } else {
+            if input_offset >= r {
+                return Err(BddError::CliError(format!(
+                    "--input-offset ({}) must be less than --input-raw-unit ({})",
+                    input_offset, r
+                )));
+            }
+            r - input_offset
+        };
+        let skip_stride = r + input_gap_raw;
+        let skip_bits = input_skip_bits_raw + (input_skip_units_raw * skip_stride) + input_offset;
+        let gap = r - u + input_gap_raw;
+        (skip_bits, 0, gap, Some(u))
+    } else {
+        let skip_bits = input_skip_bits_raw + input_offset;
+        let gap = input_gap_raw + input_offset;
+        (skip_bits, input_skip_units_raw, gap, cli.input_unit)
+    };
 
-    let mut merge_skip_bits =
+    let merge_raw_unit = cli.merge_raw_unit;
+    let merge_offset =
+        check_number_argument(cli.merge_offset, "--merge-offset", Some(0)).unwrap_or(0);
+    let merge_gap_raw = check_number_argument(cli.merge_gap, "--merge-gap", Some(0)).unwrap_or(0);
+    let merge_skip_bits_raw =
         check_number_argument(cli.merge_skip_bits, "--merge-skip-bits", Some(0)).unwrap_or(0);
-    let merge_skip_units =
+    let merge_skip_units_raw =
         check_number_argument(cli.merge_skip_units, "--merge-skip-units", Some(0)).unwrap_or(0);
     let merge_copy_first =
         check_number_argument(cli.merge_copy_first, "--merge-copy-first", Some(0)).unwrap_or(0);
-    let mut merge_gap = check_number_argument(cli.merge_gap, "--merge-gap", Some(0)).unwrap_or(0);
-    let merge_pregap =
-        check_number_argument(cli.merge_pregap, "--merge-pregap", Some(0)).unwrap_or(0);
 
-    merge_skip_bits += merge_pregap;
-    merge_gap += merge_pregap;
+    let (merge_skip_bits, merge_skip_units, merge_gap, resolved_merge_unit) = if let Some(r) =
+        merge_raw_unit
+    {
+        if r == 0 {
+            return Err(BddError::CliError(
+                "--merge-raw-unit must be greater than 0".to_string(),
+            ));
+        }
+        let u = if let Some(unit) = cli.merge_unit {
+            if unit == 0 {
+                return Err(BddError::CliError(
+                    "--merge-unit must be greater than 0".to_string(),
+                ));
+            }
+            if merge_offset + unit > r {
+                return Err(BddError::CliError(format!(
+                    "--merge-offset ({}) + --merge-unit ({}) exceeds --merge-raw-unit ({})",
+                    merge_offset, unit, r
+                )));
+            }
+            unit
+        } else {
+            if merge_offset >= r {
+                return Err(BddError::CliError(format!(
+                    "--merge-offset ({}) must be less than --merge-raw-unit ({})",
+                    merge_offset, r
+                )));
+            }
+            r - merge_offset
+        };
+        let skip_stride = r + merge_gap_raw;
+        let skip_bits = merge_skip_bits_raw + (merge_skip_units_raw * skip_stride) + merge_offset;
+        let gap = r - u + merge_gap_raw;
+        (skip_bits, 0, gap, Some(u))
+    } else {
+        let skip_bits = merge_skip_bits_raw + merge_offset;
+        let gap = merge_gap_raw + merge_offset;
+        (skip_bits, merge_skip_units_raw, gap, cli.merge_unit)
+    };
 
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {
@@ -476,7 +565,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     Ok(ValidatedConfig {
         input_file: cli.input_file,
         output_file: cli.output_file,
-        input_unit: cli.input_unit,
+        input_unit: resolved_input_unit,
         input_skip_bits,
         input_skip_units,
         input_gap,
@@ -526,7 +615,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         demux_files: cli.demux_files,
         input_repeat: cli.input_repeat,
         merge_file: cli.merge_file,
-        merge_unit: cli.merge_unit,
+        merge_unit: resolved_merge_unit,
         merge_skip_bits,
         merge_skip_units,
         merge_copy_first,
@@ -601,5 +690,75 @@ mod tests {
         let cli_merge_err =
             Cli::parse_from(["bdd", "--input-zeros", "--count=1", "--merge-no-seek"]);
         assert!(validate_and_process(cli_merge_err).is_err());
+    }
+
+    #[test]
+    fn test_raw_unit_and_offset() {
+        // Extraction A: Bits 3 and 4 of every 8-bit byte (offset 2, unit 2)
+        let cli_a = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--input-raw-unit=8",
+            "--input-offset=2",
+            "--input-unit=2",
+        ]);
+        let conf_a = validate_and_process(cli_a).unwrap();
+        assert_eq!(conf_a.input_unit, Some(2));
+        assert_eq!(conf_a.input_skip_bits, 2);
+        assert_eq!(conf_a.input_gap, 6); // 8 - 2 + 0 = 6
+
+        // Extraction B: Bit 5 of every 8-bit byte (offset 4, unit 1)
+        let cli_b = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--input-raw-unit=8",
+            "--input-offset=4",
+            "--input-unit=1",
+        ]);
+        let conf_b = validate_and_process(cli_b).unwrap();
+        assert_eq!(conf_b.input_unit, Some(1));
+        assert_eq!(conf_b.input_skip_bits, 4);
+        assert_eq!(conf_b.input_gap, 7); // 8 - 1 + 0 = 7
+
+        // Raw unit with inter-raw-unit gap: 16-bit packet, 8-bit inter-packet gap
+        let cli_c = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--input-raw-unit=16",
+            "--input-offset=2",
+            "--input-unit=4",
+            "--input-gap=8",
+        ]);
+        let conf_c = validate_and_process(cli_c).unwrap();
+        assert_eq!(conf_c.input_unit, Some(4));
+        assert_eq!(conf_c.input_skip_bits, 2);
+        assert_eq!(conf_c.input_gap, 20); // 16 - 4 + 8 = 20
+
+        // Unit omitted: defaults to remaining bits in raw unit (8 - 2 = 6)
+        let cli_d = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--input-raw-unit=8",
+            "--input-offset=2",
+        ]);
+        let conf_d = validate_and_process(cli_d).unwrap();
+        assert_eq!(conf_d.input_unit, Some(6));
+        assert_eq!(conf_d.input_skip_bits, 2);
+        assert_eq!(conf_d.input_gap, 2); // 8 - 6 + 0 = 2
+
+        // Error when offset + unit exceeds raw-unit
+        let cli_err = Cli::parse_from([
+            "bdd",
+            "--input-zeros",
+            "--count=1",
+            "--input-raw-unit=8",
+            "--input-offset=6",
+            "--input-unit=4",
+        ]);
+        assert!(validate_and_process(cli_err).is_err());
     }
 }
