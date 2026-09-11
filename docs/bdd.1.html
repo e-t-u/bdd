@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 02:53:43 2026 -->
+<!-- CreationDate: Sat Sep 12 03:50:52 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -210,16 +210,16 @@ information.</p>
 assumed to be in network byte order or in big-endian byte
 order. However, the natural byte order for most processors
 is little-endian byte order. 16-bit big-endian integer 1 in
-byte stream is 0x00 0x01 and low-endian 0x01 0x00. In some
-systems, even if integers are low-endian, floating point
-numbers and strings are in big-endian order.</p>
+byte stream is 0x00 0x01 and little-endian 0x01 0x00. In
+some systems, even if integers are little-endian, floating
+point numbers and strings are in big-endian order.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Unit is
 translated as an integer assuming that the least significant
 bit is the first one. To implement this as generic as
 possible, this is actually a synonym for combination
 --input-reverse-bytes and --input-reverse-unit. If we read
-16-bit integer 1, in low-endian input stream it is 0x01
+16-bit integer 1, in little-endian input stream it is 0x01
 0x00. With --input-reverse-bytes it turns to 0x80 0x00 and
 with --input-reverse-unit it turns to 0x00 0x01. By these
 two steps, the operation has a meaningful interpretation
@@ -376,15 +376,15 @@ interpretation for the field.</p>
 <p style="margin-left:18%; margin-top: 1em">Most likely,
 you want to use upper case variants of the patterns (bitwise
 big-endian representation). If you want to interpret
-bytewise low-endian numbers, you likely want to use
---input-low-endian and still use uppercase patterns.
+bytewise little-endian numbers, you likely want to use
+--input-little-endian and still use uppercase patterns.
 Lowercase patterns are for the (rare) case that the value in
 bit stream is exactly in the bitwise (not bytewise) opposite
 order, least significant bit first.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Rule to
 remember: uppercase letters are big-endian, lowercase
-letters are low-endian.</p>
+letters are little-endian.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Floating point
 number length must match the bit length. D must be always
