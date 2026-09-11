@@ -380,3 +380,53 @@ fn test_cli_round_and_float_transcoding() {
     let hex_fp8 = String::from_utf8(out_fp8.stdout).unwrap();
     assert_eq!(hex_fp8.trim(), "38");
 }
+
+#[test]
+fn test_cli_multiplication_sizes() {
+    use std::fs::File;
+    use std::io::{Seek, Write};
+    let test_path = "/tmp/bdd_mul_test.bin";
+    {
+        let mut f = File::create(test_path).expect("failed to create mul test file");
+        // 1,000,000 * 24 bits = 24,000,000 bits = 3,000,000 bytes
+        let target_byte_offset = 1_000_000 * 3; // 3,000,000 bytes
+        f.set_len(target_byte_offset + 8)
+            .expect("failed to set len");
+        f.seek(std::io::SeekFrom::Start(target_byte_offset))
+            .expect("failed to seek");
+        f.write_all(&[0x11, 0x22, 0x33, 0x44])
+            .expect("failed to write magic bytes");
+    }
+
+    // Skip 1,000,000 24-bit units using 1000000*24
+    let out = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-bits=1000000*24",
+            "--count=4",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd multiplication skip");
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "11 22 33 44");
+
+    // Also test chained multiplication and count
+    let out_chained = Command::new("./bdd")
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-bits=1000*1000*24",
+            "--count=2*2",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd chained multiplication");
+
+    assert!(out_chained.status.success());
+    let stdout_chained = String::from_utf8(out_chained.stdout).unwrap();
+    assert_eq!(stdout_chained.trim(), "11 22 33 44");
+
+    let _ = std::fs::remove_file(test_path);
+}

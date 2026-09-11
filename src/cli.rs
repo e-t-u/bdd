@@ -193,8 +193,8 @@ pub struct Cli {
     #[arg(long)]
     pub demux_files: Option<String>,
 
-    #[arg(long, default_value_t = 1)]
-    pub input_repeat: usize,
+    #[arg(long)]
+    pub input_repeat: Option<String>,
 
     // Merge options
     #[arg(long)]
@@ -322,17 +322,11 @@ fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
 
 /// Parses a size or count string supporting standard binary and decimal suffixes.
 ///
-/// If `is_bit_option` is true (e.g. `--input-skip-bits`), byte suffixes (`B`, `Bytes`, `KiB`, `GiB`, etc.)
-/// are multiplied by 8 to convert bytes to bits.
-pub fn parse_size_with_suffix(
-    s: &str,
-    option_name: &str,
-    is_bit_option: bool,
-) -> Result<u64, BddError> {
+fn parse_single_factor(s: &str, option_name: &str) -> Result<(u64, bool), BddError> {
     let s = s.trim();
     if s.is_empty() {
         return Err(BddError::CliError(format!(
-            "Empty value for {}",
+            "Empty factor in value for {}",
             option_name
         )));
     }
@@ -344,6 +338,16 @@ pub fn parse_size_with_suffix(
         )));
     }
 
+    // Support hex literal if starts with 0x / 0X
+    if s.starts_with("0x") || s.starts_with("0X") {
+        let hex_str = &s[2..];
+        let val = u64::from_str_radix(hex_str, 16).map_err(|_| {
+            BddError::CliError(format!("Invalid hex number for {}: '{}'", option_name, s))
+        })?;
+        return Ok((val, false));
+    }
+
+    // Otherwise split into number part and suffix
     let end_of_num = s
         .find(|c: char| !c.is_ascii_digit() && c != '.')
         .unwrap_or(s.len());
@@ -360,6 +364,7 @@ pub fn parse_size_with_suffix(
     let lower_suffix = suffix.to_ascii_lowercase();
     let (scale, is_byte_unit) = match lower_suffix.as_str() {
         "" => (1u64, false),
+        "b" if suffix == "B" => (1u64, true),
         "b" | "bit" | "bits" => (1u64, false),
         "byte" | "bytes" => (1u64, true),
         // Binary multiples (powers of 1024)
@@ -402,12 +407,6 @@ pub fn parse_size_with_suffix(
         }
     };
 
-    let byte_multiplier = if is_bit_option && is_byte_unit {
-        8u64
-    } else {
-        1u64
-    };
-
     if num_str.contains('.') {
         let f: f64 = num_str.parse().map_err(|_| {
             BddError::CliError(format!("Invalid number for {}: '{}'", option_name, s))
@@ -418,27 +417,107 @@ pub fn parse_size_with_suffix(
                 option_name
             )));
         }
-        let total = f * (scale as f64) * (byte_multiplier as f64);
+        let total = f * (scale as f64);
         if total > u64::MAX as f64 {
             return Err(BddError::CliError(format!(
                 "Value for {} exceeds 64-bit integer limit: '{}'",
                 option_name, s
             )));
         }
-        Ok(total as u64)
+        Ok((total as u64, is_byte_unit))
     } else {
         let n: u64 = num_str.parse().map_err(|_| {
             BddError::CliError(format!("Invalid number for {}: '{}'", option_name, s))
         })?;
-        n.checked_mul(scale)
-            .and_then(|v| v.checked_mul(byte_multiplier))
-            .ok_or_else(|| {
-                BddError::CliError(format!(
-                    "Value for {} exceeds 64-bit integer limit: '{}'",
-                    option_name, s
-                ))
-            })
+        let total = n.checked_mul(scale).ok_or_else(|| {
+            BddError::CliError(format!(
+                "Value for {} exceeds 64-bit integer limit: '{}'",
+                option_name, s
+            ))
+        })?;
+        Ok((total, is_byte_unit))
     }
+}
+
+/// Parses a size or count string supporting standard binary and decimal suffixes
+/// as well as multiplication expressions (e.g. `1000000*24` or `1920x1080*3`).
+///
+/// If `is_bit_option` is true (e.g. `--input-skip-bits`), byte suffixes (`B`, `Bytes`, `KiB`, `GiB`, etc.)
+/// are multiplied by 8 to convert bytes to bits.
+pub fn parse_size_with_suffix(
+    s: &str,
+    option_name: &str,
+    is_bit_option: bool,
+) -> Result<u64, BddError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(BddError::CliError(format!(
+            "Empty value for {}",
+            option_name
+        )));
+    }
+
+    if s.starts_with('-') {
+        return Err(BddError::CliError(format!(
+            "{} value must be a positive integer",
+            option_name
+        )));
+    }
+
+    // Split by '*' first
+    let mut factors = Vec::new();
+    for star_part in s.split('*') {
+        let trimmed = star_part.trim();
+        // If not a hex literal and contains 'x' or 'X', split by 'x' / 'X'
+        if !trimmed.starts_with("0x")
+            && !trimmed.starts_with("0X")
+            && (trimmed.contains('x') || trimmed.contains('X'))
+        {
+            for x_part in trimmed.split(['x', 'X']) {
+                factors.push(x_part.trim());
+            }
+        } else {
+            factors.push(trimmed);
+        }
+    }
+
+    if factors.is_empty() {
+        return Err(BddError::CliError(format!(
+            "Empty value for {}",
+            option_name
+        )));
+    }
+
+    let mut total = 1u64;
+    let mut any_byte_unit = false;
+
+    for factor in factors {
+        if factor.is_empty() {
+            return Err(BddError::CliError(format!(
+                "Empty factor in multiplication expression for {}: '{}'",
+                option_name, s
+            )));
+        }
+        let (val, is_byte) = parse_single_factor(factor, option_name)?;
+        any_byte_unit |= is_byte;
+        total = total.checked_mul(val).ok_or_else(|| {
+            BddError::CliError(format!(
+                "Value for {} exceeds 64-bit integer limit: '{}'",
+                option_name, s
+            ))
+        })?;
+    }
+
+    if is_bit_option && any_byte_unit {
+        total = total.checked_mul(8).ok_or_else(|| {
+            BddError::CliError(format!(
+                "Value for {} in bits exceeds 64-bit integer limit: '{}'",
+                option_name, s
+            ))
+        })?;
+    }
+
+    Ok(total)
 }
 
 fn parse_number_argument(
@@ -762,6 +841,14 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     let input_use_seek = !cli.input_no_seek && !cli.no_seek;
     let merge_use_seek = !cli.merge_no_seek && !cli.no_seek;
 
+    let input_repeat = parse_number_argument(
+        cli.input_repeat.as_deref(),
+        "--input-repeat",
+        Some(1),
+        false,
+    )?
+    .unwrap_or(1) as usize;
+
     Ok(ValidatedConfig {
         input_file: cli.input_file,
         output_file: cli.output_file,
@@ -814,7 +901,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         output_visual: cli.output_visual,
         demux: cli.demux,
         demux_files: cli.demux_files,
-        input_repeat: cli.input_repeat,
+        input_repeat,
         merge_file: cli.merge_file,
         merge_unit: resolved_merge_unit,
         merge_skip_bits,
@@ -1017,19 +1104,47 @@ mod tests {
             (1.5 * 1024.0 * 1024.0 * 1024.0 * 8.0) as u64
         );
 
+        // Multiplication expressions
+        assert_eq!(
+            parse_size_with_suffix("1000000*24", "--input-skip-bits", true).unwrap(),
+            24_000_000
+        );
+        assert_eq!(
+            parse_size_with_suffix("1000*1000*24", "--input-skip-bits", true).unwrap(),
+            24_000_000
+        );
+        assert_eq!(
+            parse_size_with_suffix("1M*24", "--input-skip-bits", true).unwrap(),
+            1024 * 1024 * 24
+        );
+        assert_eq!(
+            parse_size_with_suffix("1920x1080*24", "--input-skip-bits", true).unwrap(),
+            1920 * 1080 * 24
+        );
+        assert_eq!(
+            parse_size_with_suffix("100 * 8B", "--input-skip-bits", true).unwrap(),
+            100 * 64
+        );
+        assert_eq!(
+            parse_size_with_suffix("3*8", "--input-unit", false).unwrap(),
+            24
+        );
+
         // Integration in CLI validation
         let cli = Cli::parse_from([
             "bdd",
             "--input-zeros",
             "--count=1M",
-            "--input-skip-bits=1GiB",
+            "--input-skip-bits=1000000*24",
             "--skip=10K",
-            "--input-gap=1k",
+            "--input-gap=4*8",
+            "--input-repeat=10*2",
         ]);
         let conf = validate_and_process(cli).unwrap();
         assert_eq!(conf.count, Some(1024 * 1024));
-        assert_eq!(conf.input_skip_bits, 1024 * 1024 * 1024 * 8);
+        assert_eq!(conf.input_skip_bits, 24_000_000);
         assert_eq!(conf.skip, 10 * 1024);
-        assert_eq!(conf.input_gap, 1024);
+        assert_eq!(conf.input_gap, 32);
+        assert_eq!(conf.input_repeat, 20);
     }
 }

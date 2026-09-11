@@ -44,6 +44,26 @@ double bdd_decode_fp8_e4m3(uint8_t bits);
 uint8_t bdd_encode_fp8_e4m3(double val);
 
 /**
+ * Decodes an OCP FP8 E5M2 float to double.
+ */
+double bdd_decode_fp8_e5m2(uint8_t bits);
+
+/**
+ * Encodes a double to OCP FP8 E5M2.
+ */
+uint8_t bdd_encode_fp8_e5m2(double val);
+
+/**
+ * Decodes an OCP FP6 E3M2 float to double.
+ */
+double bdd_decode_fp6_e3m2(uint8_t bits);
+
+/**
+ * Encodes a double to OCP FP6 E3M2.
+ */
+uint8_t bdd_encode_fp6_e3m2(double val);
+
+/**
  * Decodes an NVIDIA Blackwell / OCP FP4 E2M1 float to double.
  */
 double bdd_decode_fp4_e2m1(uint8_t bits);

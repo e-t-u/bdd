@@ -47,6 +47,18 @@ class Bdd:
         self.lib.bdd_encode_fp8_e4m3.argtypes = [ctypes.c_double]
         self.lib.bdd_encode_fp8_e4m3.restype = ctypes.c_uint8
 
+        self.lib.bdd_decode_fp8_e5m2.argtypes = [ctypes.c_uint8]
+        self.lib.bdd_decode_fp8_e5m2.restype = ctypes.c_double
+
+        self.lib.bdd_encode_fp8_e5m2.argtypes = [ctypes.c_double]
+        self.lib.bdd_encode_fp8_e5m2.restype = ctypes.c_uint8
+
+        self.lib.bdd_decode_fp6_e3m2.argtypes = [ctypes.c_uint8]
+        self.lib.bdd_decode_fp6_e3m2.restype = ctypes.c_double
+
+        self.lib.bdd_encode_fp6_e3m2.argtypes = [ctypes.c_double]
+        self.lib.bdd_encode_fp6_e3m2.restype = ctypes.c_uint8
+
         self.lib.bdd_decode_fp4_e2m1.argtypes = [ctypes.c_uint8]
         self.lib.bdd_decode_fp4_e2m1.restype = ctypes.c_double
 
@@ -89,6 +101,18 @@ class Bdd:
 
     def encode_fp8(self, val: float) -> int:
         return self.lib.bdd_encode_fp8_e4m3(val)
+
+    def decode_fp8_e5m2(self, bits: int) -> float:
+        return self.lib.bdd_decode_fp8_e5m2(bits)
+
+    def encode_fp8_e5m2(self, val: float) -> int:
+        return self.lib.bdd_encode_fp8_e5m2(val)
+
+    def decode_fp6(self, bits: int) -> float:
+        return self.lib.bdd_decode_fp6_e3m2(bits)
+
+    def encode_fp6(self, val: float) -> int:
+        return self.lib.bdd_encode_fp6_e3m2(val)
 
     def decode_fp4(self, bits: int) -> float:
         return self.lib.bdd_decode_fp4_e2m1(bits)

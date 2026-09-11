@@ -69,10 +69,10 @@ You must not define both --input-unit and --input-pattern.
 .TP
 --input-skip-bits=BITS
 Skip BITS bits from the beginning of the input before reading the first unit.
-Supports 64-bit integer values (up to 18.4 Exabits / 2.3 Exabytes) and human-friendly size suffixes:
+Supports 64-bit integer values (up to 18.4 Exabits / 2.3 Exabytes), human-friendly size suffixes, and arbitrary multiplication expressions using * or x (e.g. \f(CR1000000*24\fR to skip one million 24-bit units, \f(CR1000*1000*24\fR, or \f(CR1920x1080*24\fR):
 binary multiples (K, M, G, T, P, E or Ki, Mi, Gi, Ti, Pi, Ei, e.g. 10G = 10*1024^3 bits),
 decimal multiples (KB, MB, GB, TB, PB, EB),
-and byte-scaled multiples (e.g. 10GiB = 10*1024^3*8 bits, 100B = 800 bits).
+and byte-scaled multiples (e.g. 10GiB = 10*1024^3*8 bits, 100B = 800 bits). All numeric arguments (skips, counts, offsets, units) accept multiplication expressions.
 
 .TP
 --input-skip-units=UNITS

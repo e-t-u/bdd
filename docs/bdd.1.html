@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 05:47:32 2026 -->
+<!-- CreationDate: Sat Sep 12 05:53:16 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -160,11 +160,15 @@ both --input-unit and --input-pattern.</p>
 <p style="margin-left:18%;">Skip BITS bits from the
 beginning of the input before reading the first unit.
 Supports 64-bit integer values (up to 18.4 Exabits / 2.3
-Exabytes) and human-friendly size suffixes: binary multiples
-(K, M, G, T, P, E or Ki, Mi, Gi, Ti, Pi, Ei, e.g. 10G =
-10*1024&#710;3 bits), decimal multiples (KB, MB, GB, TB, PB,
-EB), and byte-scaled multiples (e.g. 10GiB =
-10*1024&#710;3*8 bits, 100B = 800 bits).</p>
+Exabytes), human-friendly size suffixes, and arbitrary
+multiplication expressions using * or x (e.g. 1000000*24 to
+skip one million 24-bit units, 1000*1000*24, or
+1920x1080*24): binary multiples (K, M, G, T, P, E or Ki, Mi,
+Gi, Ti, Pi, Ei, e.g. 10G = 10*1024&#710;3 bits), decimal
+multiples (KB, MB, GB, TB, PB, EB), and byte-scaled
+multiples (e.g. 10GiB = 10*1024&#710;3*8 bits, 100B = 800
+bits). All numeric arguments (skips, counts, offsets, units)
+accept multiplication expressions.</p>
 
 <p style="margin-left:9%;">--input-skip-units=UNITS</p>
 

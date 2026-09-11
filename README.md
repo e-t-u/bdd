@@ -171,9 +171,20 @@ Can `bdd` skip over gigabytes of data on the command line? **Yes, without limit:
 - **Human-Friendly Size Suffixes**: You do not need to calculate zeroes or bit multiplications manually. All numeric arguments accept standard scale suffixes:
   - **Binary multiples (powers of 1024)**: `K`, `M`, `G`, `T`, `P`, `E` (or `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, `Ei`).
   - **Decimal multiples (powers of 1000)**: `KB`, `MB`, `GB`, `TB`, `PB`, `EB`.
-  - **Byte-scaled bit skips**: On bit options (`--input-skip-bits`, `--merge-skip-bits`), specifying `B` (e.g. `10GiB`, `4GB`, `100B`) automatically multiplies bytes by 8 bits:
+  - **Byte-scaled bit skips**: On bit options (`--input-skip-bits`, `--merge-skip-bits`), specifying `B` (e.g. `10GiB`, `4GB`, `100B`) automatically multiplies bytes by 8 bits.
+- **Multiplication Expressions**: Numbers on the command line never run out or require manual mental calculations. All size and count options support multiplication expressions using `*` or `x`:
+  - **Unit-stride skipping**: Skip 1,000,000 24-bit units directly: `--input-skip-bits=1000000*24` (or `--input-skip-bits=1000*1000*24` or `--input-skip-bits=1M*24`).
+  - **2D/3D dimensions and frame strides**: Easily express multi-dimensional buffers: `--input-skip-bits=1920x1080*24` or `--input-skip-bits="1920 * 1080 * 3B"`.
+  - **Sizing units and offsets**: Express byte multiples: `--input-unit=3*8` (24-bit unit) or `--input-offset=2*8` (16-bit offset).
+  - **Scaled counts and repeats**: `--count=1000*10`, `--input-repeat=10*5`.
 
 ```bash
+# Skip 1,000,000 24-bit units directly in bits:
+bdd --input-file=samples.bin --input-skip-bits=1000000*24 --output-hex
+
+# Skip a 1080p 24-bit uncompressed RGB frame buffer:
+bdd --input-file=video.raw --input-skip-bits=1920x1080*24 --count=100 --output-hex
+
 # Instantly seek 10 GiB into a file and extract 4 bytes in hex:
 bdd --input-file=large_disk.img --input-skip-bits=10GiB --count=4 --output-hex
 

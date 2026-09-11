@@ -48,6 +48,30 @@ pub extern "C" fn bdd_encode_fp8_e4m3(val: f64) -> u8 {
     crate::float_types::encode_fp8_e4m3(val)
 }
 
+/// Decodes an OCP FP8 E5M2 float to double float.
+#[no_mangle]
+pub extern "C" fn bdd_decode_fp8_e5m2(bits: u8) -> f64 {
+    crate::float_types::decode_fp8_e5m2(bits)
+}
+
+/// Encodes a double float to OCP FP8 E5M2.
+#[no_mangle]
+pub extern "C" fn bdd_encode_fp8_e5m2(val: f64) -> u8 {
+    crate::float_types::encode_fp8_e5m2(val)
+}
+
+/// Decodes an OCP FP6 E3M2 float to double float.
+#[no_mangle]
+pub extern "C" fn bdd_decode_fp6_e3m2(bits: u8) -> f64 {
+    crate::float_types::decode_fp6_e3m2(bits)
+}
+
+/// Encodes a double float to OCP FP6 E3M2.
+#[no_mangle]
+pub extern "C" fn bdd_encode_fp6_e3m2(val: f64) -> u8 {
+    crate::float_types::encode_fp6_e3m2(val)
+}
+
 /// Decodes an NVIDIA Blackwell / OCP FP4 E2M1 float to double float.
 #[no_mangle]
 pub extern "C" fn bdd_decode_fp4_e2m1(bits: u8) -> f64 {
