@@ -6,7 +6,8 @@ use clap::Parser;
 #[command(
     name = "bdd",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Unix command line program to handle bit streams"
+    about = "Unix command line program to handle bit streams. For AI model prompt rules run: bdd --llms",
+    after_help = "AI & LLM Integration:\n  Run 'bdd --llms' (or 'bdd --ai-guide') to print the concise agent cheatsheet.\n  Run 'bdd --mcp' to launch the Model Context Protocol stdio server.\n  Documentation file: /usr/share/doc/bdd/llms.txt"
 )]
 pub struct Cli {
     // File options
