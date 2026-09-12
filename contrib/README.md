@@ -16,7 +16,11 @@ contrib/
 │   ├── sample.jpg              # JPEG JFIF with SOF0 (640x480, 4:2:0 subsampling)
 │   ├── sample.safetensors      # Safetensors file with FP8, BF16, and FP16 tensors
 │   ├── sample_nvfp4.bin        # NVIDIA Blackwell NVFP4 (E2M1) 4-bit packed weights
-│   └── sample_fp6.bin          # OCP Microscaling FP6 (E3M2) 6-bit unaligned weights
+│   ├── sample_fp6.bin          # OCP Microscaling FP6 (E3M2) 6-bit unaligned weights
+│   ├── sample_ipv4.bin         # RFC 791 IPv4 20-byte base packet header
+│   ├── sample_udp.bin          # RFC 768 UDP 8-byte datagram header
+│   ├── sample_tcp.bin          # RFC 793 TCP 20-byte base segment header (SYN)
+│   └── sample_packets.bin      # Multi-packet capture stream (DNS/UDP, TCP SYN, HTTP GET)
 ├── shell/                      # Standalone shell scripts using the bdd CLI
 │   ├── decode_mp3.sh           # Unaligned 32-bit MP3 frame header parsing & frame seeking
 │   ├── decode_mpeg_ts.sh       # MPEG-TS 13-bit PID inspection & container striding
@@ -24,14 +28,17 @@ contrib/
 │   ├── decode_mp4.sh           # MP4 box traversal & H.264 NAL bitfield extraction (1U2U5U)
 │   ├── decode_jpeg.sh          # JPEG SOF0 geometry & 4-bit chroma nibble extraction (4U4U)
 │   ├── decode_ai_weights.sh    # Safetensors O(1) seeking & NVFP4/FP6/FP8/BF16 decoding
+│   ├── decode_network.sh       # IPv4, UDP, and TCP header dissection with sub-byte flags
 │   └── run_all_shell_examples.sh # Master script running all shell demonstrations
 ├── python/                     # Python scripts using libbdd ctypes bindings
 │   ├── generate_samples.py     # Deterministic generator for all data/ sample files
 │   ├── decode_media.py         # MP3, MPEG-TS, JPEG, and H.264 NAL parsing
-│   └── decode_ai_weights.py    # Safetensors inspection, NVFP4, and FP6 decoding
+│   ├── decode_ai_weights.py    # Safetensors inspection, NVFP4, and FP6 decoding
+│   └── decode_network.py       # IPv4, UDP, and TCP packet dissection and IP formatting
 └── c/                          # Native C programs linking against libbdd.so
     ├── decode_media.c          # bdd_unpack_u64, bdd_pack_u64, and bit reversal
-    └── decode_ai_weights.c     # Native FP4, FP6, FP8, BF16, and FP16 float decoders
+    ├── decode_ai_weights.c     # Native FP4, FP6, FP8, BF16, and FP16 float decoders
+    └── decode_network.c        # High-performance IPv4/UDP/TCP unpacking with discrete flags
 ```
 
 ---
@@ -154,17 +161,69 @@ In baseline JPEG (`0xFFC0`), the horizontal and vertical chroma subsampling fact
 
 ---
 
+### 7. Network Protocol Headers (IPv4, UDP, TCP)
+Network headers are strictly big-endian (network byte order) with MSB-first bit numbering. `bdd` parses these bitfields with natural-order `U` and `B` specifiers, cleanly extracting sub-byte flags without manual bit shifting:
+
+- **RFC 791 IPv4 Base Packet Header (160 bits = 20 bytes)**:
+  - **Preset**: `--preset=ipv4-header`
+  - **Bitfield**: `version:4U,ihl:4U,dscp:6U,ecn:2U,total_length:16U,id:16U,flags:3U,frag_offset:13U,ttl:8U,protocol:8U,checksum:16U,src_ip:32U,dst_ip:32U`
+  - **CLI Command**:
+    ```bash
+    bdd --input-file=sample_ipv4.bin --preset=ipv4-header --output-json --json-object
+    ```
+
+- **RFC 768 UDP Datagram Header (64 bits = 8 bytes)**:
+  - **Preset**: `--preset=udp-header`
+  - **Bitfield**: `src_port:16U,dst_port:16U,length:16U,checksum:16U`
+  - **CLI Command**:
+    ```bash
+    bdd --input-file=sample_udp.bin --preset=udp-header --output-json --json-object
+    ```
+
+- **RFC 793 TCP Base Segment Header (160 bits = 20 bytes)**:
+  - **Preset**: `--preset=tcp-header`
+  - **Bitfield**: `src_port:16U,dst_port:16U,seq_num:32U,ack_num:32U,data_offset:4U,reserved:3U,ns:1B,cwr:1B,ece:1B,urg:1B,ack:1B,psh:1B,rst:1B,syn:1B,fin:1B,window_size:16U,checksum:16U,urg_ptr:16U`
+  - **Sub-byte Flags**: Every control flag (`ns`, `cwr`, `ece`, `urg`, `ack`, `psh`, `rst`, `syn`, `fin`) is isolated into an individual boolean/integer field.
+  - **CLI Command**:
+    ```bash
+    bdd --input-file=sample_tcp.bin --preset=tcp-header --output-json --json-object
+    ```
+
+- **Multi-Packet Capture Stream Dissection**:
+  Combine container offsets (`--input-skip-bits`) with presets to dissect sequential protocols within captures:
+  ```bash
+  # Packet 1 (DNS over UDP at offset 0):
+  bdd --input-file=sample_packets.bin --input-skip-bits=0B --count=1 --preset=ipv4-header --output-json
+  bdd --input-file=sample_packets.bin --input-skip-bits=20B --count=1 --preset=udp-header --output-json
+
+  # Packet 2 (TCP SYN at offset 32B):
+  bdd --input-file=sample_packets.bin --input-skip-bits=32B --count=1 --preset=ipv4-header --output-json
+  bdd --input-file=sample_packets.bin --input-skip-bits=52B --count=1 --preset=tcp-header --output-json
+  ```
+
+---
+
 ## Native C & Python APIs
 
 ### C API (`include/bdd.h` & `libbdd.so`)
 ```c
 #include "bdd.h"
 
-// Unpack unaligned bitfields
-uint64_t fields[4];
-bdd_unpack_u64("8U4U4U8U", comp_u24, fields, 4);
+// 1. Unpack unaligned bitfields (e.g. UDP 64-bit header)
+uint64_t udp_fields[4];
+bdd_unpack_u64("16U16U16U16U", udp_u64, udp_fields, 4);
+// fields: [src_port, dst_port, length, checksum]
 
-// Convert AI floating point numbers
+// 2. Unpack TCP Word 3 flags and window size in one step
+uint64_t tcp_word3[12];
+bdd_unpack_u64("4U3U1B1B1B1B1B1B1B1B1B16U", w3, tcp_word3, 12);
+uint64_t syn_flag = tcp_word3[9]; // Isolated SYN bit!
+
+// 3. Bit-exact repacking
+uint64_t repacked = 0;
+bdd_pack_u64("16U16U16U16U", udp_fields, 4, &repacked);
+
+// 4. Convert AI floating point numbers
 double w0 = bdd_decode_fp4_e2m1(0x03); // 1.50
 double fp8 = bdd_decode_fp8_e4m3(0x38); // 1.00
 double bf16 = bdd_decode_bf16(0x3F80);  // 1.00
@@ -175,10 +234,18 @@ double bf16 = bdd_decode_bf16(0x3F80);  // 1.00
 from bdd import Bdd
 
 b = Bdd()
-# Unpack bitfields
-fields = b.unpack("11U2U2U1U4U2U1U1U2U2U1U1U2U", mp3_header_u32)
+# 1. Unpack network datagram headers
+src_port, dst_port, length, checksum = b.unpack("16U16U16U16U", udp_u64)
 
-# AI float codecs
+# 2. Extract TCP 32-bit word 3 with discrete control flags
+offset, res, ns, cwr, ece, urg, ack, psh, rst, syn, fin, win = b.unpack(
+    "4U3U1B1B1B1B1B1B1B1B1B16U", tcp_w3
+)
+
+# 3. Bitfield roundtrip pack
+packed_u64 = b.pack("16U16U16U16U", (5353, 53, 12, 0x8899))
+
+# 4. AI float codecs
 val_fp4 = b.decode_fp4(0x03)
 val_fp8 = b.decode_fp8(0x38)
 val_fp6 = b.decode_fp6(0x10)

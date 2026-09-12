@@ -489,6 +489,53 @@ fn test_named_patterns_and_presets() {
     assert!(lines[0].contains("\"w0\":0.0") && lines[0].contains("\"w1\":0.5"));
     assert!(lines[1].contains("\"w0\":1.0") && lines[1].contains("\"w1\":1.5"));
 
+    // Test preset ipv4-header on sample_ipv4.bin
+    let out_ipv4 = Command::new(BDD_BIN)
+        .args([
+            "--preset=ipv4-header",
+            "--input-file=contrib/data/sample_ipv4.bin",
+            "--count=1",
+        ])
+        .output()
+        .expect("failed to run bdd preset ipv4-header");
+    assert!(out_ipv4.status.success());
+    let stdout_ipv4 = String::from_utf8(out_ipv4.stdout).unwrap();
+    assert!(stdout_ipv4.contains("\"version\":4"));
+    assert!(stdout_ipv4.contains("\"total_length\":32"));
+    assert!(stdout_ipv4.contains("\"protocol\":17"));
+    assert!(stdout_ipv4.contains("\"src_ip\":3232235876"));
+
+    // Test preset udp-header on sample_udp.bin
+    let out_udp = Command::new(BDD_BIN)
+        .args([
+            "--preset=udp-header",
+            "--input-file=contrib/data/sample_udp.bin",
+            "--count=1",
+        ])
+        .output()
+        .expect("failed to run bdd preset udp-header");
+    assert!(out_udp.status.success());
+    let stdout_udp = String::from_utf8(out_udp.stdout).unwrap();
+    assert!(stdout_udp.contains("\"src_port\":5353"));
+    assert!(stdout_udp.contains("\"dst_port\":53"));
+    assert!(stdout_udp.contains("\"length\":12"));
+
+    // Test preset tcp-header on sample_tcp.bin
+    let out_tcp = Command::new(BDD_BIN)
+        .args([
+            "--preset=tcp-header",
+            "--input-file=contrib/data/sample_tcp.bin",
+            "--count=1",
+        ])
+        .output()
+        .expect("failed to run bdd preset tcp-header");
+    assert!(out_tcp.status.success());
+    let stdout_tcp = String::from_utf8(out_tcp.stdout).unwrap();
+    assert!(stdout_tcp.contains("\"src_port\":51820"));
+    assert!(stdout_tcp.contains("\"dst_port\":443"));
+    assert!(stdout_tcp.contains("\"syn\":1"));
+    assert!(stdout_tcp.contains("\"ack\":0"));
+
     // Test custom pattern with names and --json-fields
     let out_custom = Command::new(BDD_BIN)
         .args([

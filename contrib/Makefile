@@ -3,7 +3,7 @@ CFLAGS ?= -Wall -Wextra -O2 -I../include
 LDFLAGS ?= -L../target/release -Wl,-rpath,'$$ORIGIN/../../target/release'
 LDLIBS ?= -lbdd -lm
 
-C_BINS = c/decode_media c/decode_ai_weights
+C_BINS = c/decode_media c/decode_ai_weights c/decode_network
 
 .PHONY: all samples c-bins test pdf clean clean-data
 
@@ -21,6 +21,9 @@ c/decode_media: c/decode_media.c ../include/bdd.h
 c/decode_ai_weights: c/decode_ai_weights.c ../include/bdd.h
 	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
 
+c/decode_network: c/decode_network.c ../include/bdd.h
+	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
+
 pdf:
 	node ../scripts/render_pdf.js README.md README.pdf
 
@@ -30,9 +33,11 @@ test: all
 	@echo "==> Testing Python Programs..."
 	python3 python/decode_media.py
 	python3 python/decode_ai_weights.py
+	python3 python/decode_network.py
 	@echo "==> Testing C Programs..."
 	./c/decode_media
 	./c/decode_ai_weights
+	./c/decode_network
 	@echo "==> All contrib demonstrations passed successfully!"
 
 clean:

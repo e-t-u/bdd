@@ -278,6 +278,85 @@ def main():
         f.write(fp6_bytes)
     print(f"Generated {fp6_path} ({len(fp6_bytes)} bytes, 8 FP6 weights)")
 
+    # -------------------------------------------------------------
+    # 10. IPv4, UDP, and TCP Network Packets
+    # -------------------------------------------------------------
+    def calc_ip_checksum(header_bytes):
+        s = 0
+        for i in range(0, len(header_bytes), 2):
+            w = (header_bytes[i] << 8) + header_bytes[i + 1]
+            s += w
+        while (s >> 16) > 0:
+            s = (s & 0xFFFF) + (s >> 16)
+        return (~s) & 0xFFFF
+
+    # --- Packet 1: IPv4 + UDP (DNS query to 1.1.1.1) ---
+    # IPv4 Header (20 bytes): ver=4, ihl=5, dscp=0, ecn=0, len=32, id=0x1A2B, flags=2(DF), frag=0, ttl=64, proto=17(UDP)
+    # Src IP: 192.168.1.100 (0xC0A80164), Dst IP: 1.1.1.1 (0x01010101)
+    ip_raw1 = bytearray(struct.pack(">BBHHHBBHII",
+        0x45, 0x00, 32, 0x1A2B, 0x4000, 64, 17, 0, 0xC0A80164, 0x01010101
+    ))
+    csum1 = calc_ip_checksum(ip_raw1)
+    struct.pack_into(">H", ip_raw1, 10, csum1)
+
+    # UDP Header (8 bytes): src_port=5353, dst_port=53, length=12, checksum=0x8899
+    udp_hdr = struct.pack(">HHHH", 5353, 53, 12, 0x8899)
+    dns_payload = b"ping"
+    pkt1 = bytes(ip_raw1) + udp_hdr + dns_payload
+
+    # --- Packet 2: IPv4 + TCP SYN (HTTPS connect to 142.250.190.46) ---
+    # IPv4 Header (20 bytes): len=40, id=0x3C4D, ttl=128, proto=6(TCP)
+    # Src IP: 10.0.0.15 (0x0A00000F), Dst IP: 142.250.190.46 (0x8EFABE2E)
+    ip_raw2 = bytearray(struct.pack(">BBHHHBBHII",
+        0x45, 0x00, 40, 0x3C4D, 0x4000, 128, 6, 0, 0x0A00000F, 0x8EFABE2E
+    ))
+    csum2 = calc_ip_checksum(ip_raw2)
+    struct.pack_into(">H", ip_raw2, 10, csum2)
+
+    # TCP SYN Header (20 bytes): src_port=51820, dst_port=443, seq=0x10000001, ack=0
+    # data_offset=5 (0x50), flags=SYN (0x02), window=65535, csum=0x4455, urg_ptr=0
+    tcp_syn_hdr = struct.pack(">HHIIBBHHH",
+        51820, 443, 0x10000001, 0, 0x50, 0x02, 65535, 0x4455, 0
+    )
+    pkt2 = bytes(ip_raw2) + tcp_syn_hdr
+
+    # --- Packet 3: IPv4 + TCP ACK+PSH (HTTP GET) ---
+    http_payload = b"GET / HTTP/1.1\r\n\r\n"
+    total_len3 = 20 + 20 + len(http_payload)
+    ip_raw3 = bytearray(struct.pack(">BBHHHBBHII",
+        0x45, 0x00, total_len3, 0x5E6F, 0x4000, 64, 6, 0, 0x0A00000F, 0x8EFABE2E
+    ))
+    csum3 = calc_ip_checksum(ip_raw3)
+    struct.pack_into(">H", ip_raw3, 10, csum3)
+
+    # TCP ACK+PSH Header (20 bytes): src_port=51820, dst_port=80, seq=0x10000002, ack=0x20000001
+    # data_offset=5 (0x50), flags=ACK|PSH (0x18), window=32768, csum=0x6677, urg_ptr=0
+    tcp_ack_hdr = struct.pack(">HHIIBBHHH",
+        51820, 80, 0x10000002, 0x20000001, 0x50, 0x18, 32768, 0x6677, 0
+    )
+    pkt3 = bytes(ip_raw3) + tcp_ack_hdr + http_payload
+
+    # Save combined packets stream and standalone individual headers
+    packets_path = os.path.join(data_dir, "sample_packets.bin")
+    with open(packets_path, "wb") as f:
+        f.write(pkt1 + pkt2 + pkt3)
+    print(f"Generated {packets_path} ({len(pkt1) + len(pkt2) + len(pkt3)} bytes, 3 packets: UDP, TCP SYN, TCP ACK)")
+
+    ipv4_path = os.path.join(data_dir, "sample_ipv4.bin")
+    with open(ipv4_path, "wb") as f:
+        f.write(ip_raw1)
+    print(f"Generated {ipv4_path} ({len(ip_raw1)} bytes, IPv4 20-byte header)")
+
+    udp_path = os.path.join(data_dir, "sample_udp.bin")
+    with open(udp_path, "wb") as f:
+        f.write(udp_hdr)
+    print(f"Generated {udp_path} ({len(udp_hdr)} bytes, UDP 8-byte header)")
+
+    tcp_path = os.path.join(data_dir, "sample_tcp.bin")
+    with open(tcp_path, "wb") as f:
+        f.write(tcp_syn_hdr)
+    print(f"Generated {tcp_path} ({len(tcp_syn_hdr)} bytes, TCP 20-byte SYN header)")
+
     print("\nAll sample test files successfully generated in contrib/data/!")
 
 if __name__ == "__main__":

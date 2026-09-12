@@ -639,6 +639,8 @@ Standard presets include:
 - `bf16` (Bfloat16 Brain Floating Point, 16 bits)
 - `fp16` (IEEE 754 Half-Precision Float, 16 bits)
 - `ipv4-header` (IPv4 Packet Header, 160 bits / 20 bytes)
+- `udp-header` (UDP Datagram Header, 64 bits / 8 bytes)
+- `tcp-header` (TCP Segment Header with discrete sub-byte flags, 160 bits / 20 bytes)
 - `riscv-r-type` (RISC-V 32-bit R-type Instruction, 32 bits)
 
 ### Keyed JSON Objects (`--json-object`, `--json-fields`)

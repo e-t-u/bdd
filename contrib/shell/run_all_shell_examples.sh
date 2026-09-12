@@ -19,5 +19,7 @@ echo ""
 "${SCRIPT_DIR}/decode_jpeg.sh"
 echo ""
 "${SCRIPT_DIR}/decode_ai_weights.sh"
+echo ""
+"${SCRIPT_DIR}/decode_network.sh"
 
 echo -e "\nAll shell script demonstrations completed successfully!"

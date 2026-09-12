@@ -44,3 +44,4 @@ nosetests.xml
 # Contrib test binaries
 /contrib/c/decode_media
 /contrib/c/decode_ai_weights
+/contrib/c/decode_network

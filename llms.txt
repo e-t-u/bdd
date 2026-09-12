@@ -72,14 +72,16 @@ Use `--preset <NAME>` to instantly configure pattern, units, and named fields:
 | `mpeg-ts` | `sync:8u,tei:1b,pusi:1b,priority:1b,pid:13u,scrambling:2u,afc:2u,cc:4u` | 32 | MPEG Transport Stream Header (first 4 bytes of 188B packet) |
 | `wav-header` | `chunk_id:4B,chunk_size:32U,format:4B` | 96 | RIFF WAV Header Identifier |
 | `jpeg-sof0` | `marker:16u,len:16u,precision:8u,height:16u,width:16u,components:8u` | 80 | JPEG Start of Frame 0 |
-| `h264-nal` | `forbidden_zero:1b,nal_ref_idc:2u,nal_unit_type:5u` | 8 | H.264 / AVC NAL Unit Header |
-| `nvfp4` | `w:2*4m` | 8 | Dual packed NVFP4 E2M1 AI weights |
-| `fp6-e3m2` | `w:4*6E` | 24 | Quad packed FP6 E3M2 AI weights |
-| `fp8-e4m3` | `w:8e` | 8 | Single OCP FP8 E4M3 AI weight |
-| `fp8-e5m2` | `w:8E` | 8 | Single OCP FP8 E5M2 AI weight |
-| `bf16` | `val:16b` | 16 | Bfloat16 Brain Floating Point |
-| `fp16` | `val:16f` | 16 | IEEE 754 Half-Precision Float |
-| `ipv4-header` | `ver:4u,ihl:4u,dscp:6u,ecn:2u,len:16u,id:16u,flags:3u,frag:13u,ttl:8u,proto:8u,csum:16u,src:32u,dst:32u` | 160 | IPv4 Header (20 bytes) |
+| `h264-nal` | `forbidden_zero:1u,nal_ref_idc:2u,nal_unit_type:5u` | 8 | H.264 / AVC NAL Unit Header |
+| `nvfp4` | `w0:4E,w1:4E` | 8 | Dual packed NVFP4 E2M1 AI weights |
+| `fp6-e3m2` | `w0:6E,w1:6E,w2:6E,w3:6E` | 24 | Quad packed FP6 E3M2 AI weights |
+| `fp8-e4m3` | `w0:8E` | 8 | Single OCP FP8 E4M3 AI weight |
+| `fp8-e5m2` | `w0:8Q` | 8 | Single OCP FP8 E5M2 AI weight |
+| `bf16` | `w0:16Y` | 16 | Bfloat16 Brain Floating Point |
+| `fp16` | `w0:16H` | 16 | IEEE 754 Half-Precision Float |
+| `ipv4-header` | `version:4U,ihl:4U,dscp:6U,ecn:2U,total_length:16U,id:16U,flags:3U,frag_offset:13U,ttl:8U,protocol:8U,checksum:16U,src_ip:32U,dst_ip:32U` | 160 | IPv4 Header (20 bytes) |
+| `udp-header` | `src_port:16U,dst_port:16U,length:16U,checksum:16U` | 64 | UDP Datagram Header (8 bytes) |
+| `tcp-header` | `src_port:16U,dst_port:16U,seq_num:32U,ack_num:32U,data_offset:4U,reserved:3U,ns:1B,cwr:1B,ece:1B,urg:1B,ack:1B,psh:1B,rst:1B,syn:1B,fin:1B,window_size:16U,checksum:16U,urg_ptr:16U` | 160 | TCP Base Segment Header with discrete sub-byte flags (20 bytes) |
 | `riscv-r-type` | `funct7:7u,rs2:5u,rs1:5u,funct3:3u,rd:5u,opcode:7u` | 32 | RISC-V 32-bit R-type Instruction |
 
 List all presets via CLI: `bdd --list-presets`
