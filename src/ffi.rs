@@ -13,72 +13,84 @@ pub extern "C" fn bdd_reverse_bits_u64(val: u64, bits: usize) -> u64 {
 }
 
 /// Decodes an IEEE 754 half-precision float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_f16(bits: u16) -> f64 {
     crate::float_types::decode_f16(bits)
 }
 
 /// Encodes a double float to an IEEE 754 half-precision float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_f16(val: f64) -> u16 {
     crate::float_types::encode_f16(val)
 }
 
 /// Decodes a Bfloat16 float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_bf16(bits: u16) -> f64 {
     crate::float_types::decode_bf16(bits)
 }
 
 /// Encodes a double float to Bfloat16.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_bf16(val: f64) -> u16 {
     crate::float_types::encode_bf16(val)
 }
 
 /// Decodes an OCP FP8 E4M3FN float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_fp8_e4m3(bits: u8) -> f64 {
     crate::float_types::decode_fp8_e4m3(bits)
 }
 
 /// Encodes a double float to OCP FP8 E4M3FN.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_fp8_e4m3(val: f64) -> u8 {
     crate::float_types::encode_fp8_e4m3(val)
 }
 
 /// Decodes an OCP FP8 E5M2 float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_fp8_e5m2(bits: u8) -> f64 {
     crate::float_types::decode_fp8_e5m2(bits)
 }
 
 /// Encodes a double float to OCP FP8 E5M2.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_fp8_e5m2(val: f64) -> u8 {
     crate::float_types::encode_fp8_e5m2(val)
 }
 
 /// Decodes an OCP FP6 E3M2 float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_fp6_e3m2(bits: u8) -> f64 {
     crate::float_types::decode_fp6_e3m2(bits)
 }
 
 /// Encodes a double float to OCP FP6 E3M2.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_fp6_e3m2(val: f64) -> u8 {
     crate::float_types::encode_fp6_e3m2(val)
 }
 
 /// Decodes an NVIDIA Blackwell / OCP FP4 E2M1 float to double float.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_decode_fp4_e2m1(bits: u8) -> f64 {
     crate::float_types::decode_fp4_e2m1(bits)
 }
 
 /// Encodes a double float to NVIDIA Blackwell / OCP FP4 E2M1.
+#[cfg(feature = "small-floats")]
 #[no_mangle]
 pub extern "C" fn bdd_encode_fp4_e2m1(val: f64) -> u8 {
     crate::float_types::encode_fp4_e2m1(val)

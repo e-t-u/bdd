@@ -193,3 +193,11 @@ bdd --input-file weights.fp8 --input-pattern "8e" --output-pattern "32f" --outpu
 ```bash
 bdd --input-file in.bin --input-unit 8 --reverse-bits --output-file out.bin
 ```
+
+---
+
+## 10. Cargo Features
+
+- `server` (aliases: `web`, `serve`): Embedded HTTP/1.1 Web UI (`bdd --serve [port]`).
+- `small-floats` (alias: `small-float`): FP16, BF16, FP8 E4M3/E5M2, FP6, FP4 codecs.
+- Both enabled by default. Use `cargo build --release --no-default-features` for minimal footprint build.

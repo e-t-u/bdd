@@ -29,41 +29,42 @@ class Bdd:
         self.lib.bdd_reverse_bits_u64.argtypes = [ctypes.c_uint64, ctypes.c_size_t]
         self.lib.bdd_reverse_bits_u64.restype = ctypes.c_uint64
 
-        self.lib.bdd_decode_f16.argtypes = [ctypes.c_uint16]
-        self.lib.bdd_decode_f16.restype = ctypes.c_double
+        if hasattr(self.lib, "bdd_decode_f16"):
+            self.lib.bdd_decode_f16.argtypes = [ctypes.c_uint16]
+            self.lib.bdd_decode_f16.restype = ctypes.c_double
 
-        self.lib.bdd_encode_f16.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_f16.restype = ctypes.c_uint16
+            self.lib.bdd_encode_f16.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_f16.restype = ctypes.c_uint16
 
-        self.lib.bdd_decode_bf16.argtypes = [ctypes.c_uint16]
-        self.lib.bdd_decode_bf16.restype = ctypes.c_double
+            self.lib.bdd_decode_bf16.argtypes = [ctypes.c_uint16]
+            self.lib.bdd_decode_bf16.restype = ctypes.c_double
 
-        self.lib.bdd_encode_bf16.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_bf16.restype = ctypes.c_uint16
+            self.lib.bdd_encode_bf16.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_bf16.restype = ctypes.c_uint16
 
-        self.lib.bdd_decode_fp8_e4m3.argtypes = [ctypes.c_uint8]
-        self.lib.bdd_decode_fp8_e4m3.restype = ctypes.c_double
+            self.lib.bdd_decode_fp8_e4m3.argtypes = [ctypes.c_uint8]
+            self.lib.bdd_decode_fp8_e4m3.restype = ctypes.c_double
 
-        self.lib.bdd_encode_fp8_e4m3.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_fp8_e4m3.restype = ctypes.c_uint8
+            self.lib.bdd_encode_fp8_e4m3.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_fp8_e4m3.restype = ctypes.c_uint8
 
-        self.lib.bdd_decode_fp8_e5m2.argtypes = [ctypes.c_uint8]
-        self.lib.bdd_decode_fp8_e5m2.restype = ctypes.c_double
+            self.lib.bdd_decode_fp8_e5m2.argtypes = [ctypes.c_uint8]
+            self.lib.bdd_decode_fp8_e5m2.restype = ctypes.c_double
 
-        self.lib.bdd_encode_fp8_e5m2.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_fp8_e5m2.restype = ctypes.c_uint8
+            self.lib.bdd_encode_fp8_e5m2.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_fp8_e5m2.restype = ctypes.c_uint8
 
-        self.lib.bdd_decode_fp6_e3m2.argtypes = [ctypes.c_uint8]
-        self.lib.bdd_decode_fp6_e3m2.restype = ctypes.c_double
+            self.lib.bdd_decode_fp6_e3m2.argtypes = [ctypes.c_uint8]
+            self.lib.bdd_decode_fp6_e3m2.restype = ctypes.c_double
 
-        self.lib.bdd_encode_fp6_e3m2.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_fp6_e3m2.restype = ctypes.c_uint8
+            self.lib.bdd_encode_fp6_e3m2.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_fp6_e3m2.restype = ctypes.c_uint8
 
-        self.lib.bdd_decode_fp4_e2m1.argtypes = [ctypes.c_uint8]
-        self.lib.bdd_decode_fp4_e2m1.restype = ctypes.c_double
+            self.lib.bdd_decode_fp4_e2m1.argtypes = [ctypes.c_uint8]
+            self.lib.bdd_decode_fp4_e2m1.restype = ctypes.c_double
 
-        self.lib.bdd_encode_fp4_e2m1.argtypes = [ctypes.c_double]
-        self.lib.bdd_encode_fp4_e2m1.restype = ctypes.c_uint8
+            self.lib.bdd_encode_fp4_e2m1.argtypes = [ctypes.c_double]
+            self.lib.bdd_encode_fp4_e2m1.restype = ctypes.c_uint8
 
         self.lib.bdd_unpack_u64.argtypes = [
             ctypes.c_char_p,

@@ -637,6 +637,18 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 cli.output_json = true;
             }
         } else {
+            #[cfg(not(feature = "small-floats"))]
+            {
+                let normalized = preset_name.to_lowercase().replace('_', "-");
+                if ["nvfp4", "fp6-e3m2", "fp8-e4m3", "fp8-e5m2", "bf16", "fp16"]
+                    .contains(&normalized.as_str())
+                {
+                    return Err(BddError::CliError(format!(
+                        "Preset '{}' requires the 'small-floats' feature to be enabled. Recompile with --features small-floats.",
+                        preset_name
+                    )));
+                }
+            }
             return Err(BddError::CliError(format!(
                 "Unknown preset '{}'. Use --list-presets to see available presets.",
                 preset_name

@@ -14,12 +14,19 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "server")]
     if let Some(port) = cli.serve {
         if let Err(e) = bdd::server::run_server(port) {
             eprintln!("[bdd web] Error: {}", e);
             std::process::exit(1);
         }
         return;
+    }
+
+    #[cfg(not(feature = "server"))]
+    if cli.serve.is_some() {
+        eprintln!("Error: The --serve web UI feature was not enabled at compile time. Recompile with --features server.");
+        std::process::exit(1);
     }
 
     if cli.list_presets {

@@ -327,53 +327,56 @@ fn test_cli_round_and_float_transcoding() {
     let stdout_cut = String::from_utf8(out_cut.stdout).unwrap();
     assert_eq!(stdout_cut.trim(), "10");
 
-    // 3. Test cross-precision transcoding: FP32 (32F) -> FP16 (16H)
-    // 1.0f32 big-endian is 0x3F800000; 1.0 in FP16 is 0x3C00
-    let out_transcode = Command::new(BDD_BIN)
-        .args([
-            "--input-pattern=32F",
-            "--output-pattern=16H",
-            "--output-hex",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            child
-                .stdin
-                .as_mut()
-                .unwrap()
-                .write_all(&[0x3F, 0x80, 0x00, 0x00])
-                .unwrap();
-            child.wait_with_output()
-        })
-        .expect("failed to run bdd transcode 32F -> 16H");
+    #[cfg(feature = "small-floats")]
+    {
+        // 3. Test cross-precision transcoding: FP32 (32F) -> FP16 (16H)
+        // 1.0f32 big-endian is 0x3F800000; 1.0 in FP16 is 0x3C00
+        let out_transcode = Command::new(BDD_BIN)
+            .args([
+                "--input-pattern=32F",
+                "--output-pattern=16H",
+                "--output-hex",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(&[0x3F, 0x80, 0x00, 0x00])
+                    .unwrap();
+                child.wait_with_output()
+            })
+            .expect("failed to run bdd transcode 32F -> 16H");
 
-    assert!(out_transcode.status.success());
-    let hex_transcode = String::from_utf8(out_transcode.stdout).unwrap();
-    assert_eq!(hex_transcode.trim(), "3c00");
+        assert!(out_transcode.status.success());
+        let hex_transcode = String::from_utf8(out_transcode.stdout).unwrap();
+        assert_eq!(hex_transcode.trim(), "3c00");
 
-    // 4. Test cross-precision transcoding: FP16 (16H) -> FP8 E4M3 (8E)
-    // 1.0 in FP16 is 0x3C00; 1.0 in FP8 E4M3 is 0x38
-    let out_fp8 = Command::new(BDD_BIN)
-        .args(["--input-pattern=16H", "--output-pattern=8E", "--output-hex"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            child
-                .stdin
-                .as_mut()
-                .unwrap()
-                .write_all(&[0x3C, 0x00])
-                .unwrap();
-            child.wait_with_output()
-        })
-        .expect("failed to run bdd transcode 16H -> 8E");
+        // 4. Test cross-precision transcoding: FP16 (16H) -> FP8 E4M3 (8E)
+        // 1.0 in FP16 is 0x3C00; 1.0 in FP8 E4M3 is 0x38
+        let out_fp8 = Command::new(BDD_BIN)
+            .args(["--input-pattern=16H", "--output-pattern=8E", "--output-hex"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(&[0x3C, 0x00])
+                    .unwrap();
+                child.wait_with_output()
+            })
+            .expect("failed to run bdd transcode 16H -> 8E");
 
-    assert!(out_fp8.status.success());
-    let hex_fp8 = String::from_utf8(out_fp8.stdout).unwrap();
-    assert_eq!(hex_fp8.trim(), "38");
+        assert!(out_fp8.status.success());
+        let hex_fp8 = String::from_utf8(out_fp8.stdout).unwrap();
+        assert_eq!(hex_fp8.trim(), "38");
+    }
 }
 
 #[test]
@@ -474,20 +477,23 @@ fn test_named_patterns_and_presets() {
     assert!(stdout_mp3.contains("\"layer\":2"));
 
     // Test preset nvfp4 on sample_nvfp4.bin
-    let out_nvfp4 = Command::new(BDD_BIN)
-        .args([
-            "--preset=nvfp4",
-            "--input-file=contrib/data/sample_nvfp4.bin",
-            "--count=2",
-        ])
-        .output()
-        .expect("failed to run bdd preset nvfp4");
-    assert!(out_nvfp4.status.success());
-    let stdout_nvfp4 = String::from_utf8(out_nvfp4.stdout).unwrap();
-    let lines: Vec<&str> = stdout_nvfp4.trim().lines().collect();
-    assert_eq!(lines.len(), 2);
-    assert!(lines[0].contains("\"w0\":0.0") && lines[0].contains("\"w1\":0.5"));
-    assert!(lines[1].contains("\"w0\":1.0") && lines[1].contains("\"w1\":1.5"));
+    #[cfg(feature = "small-floats")]
+    {
+        let out_nvfp4 = Command::new(BDD_BIN)
+            .args([
+                "--preset=nvfp4",
+                "--input-file=contrib/data/sample_nvfp4.bin",
+                "--count=2",
+            ])
+            .output()
+            .expect("failed to run bdd preset nvfp4");
+        assert!(out_nvfp4.status.success());
+        let stdout_nvfp4 = String::from_utf8(out_nvfp4.stdout).unwrap();
+        let lines: Vec<&str> = stdout_nvfp4.trim().lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"w0\":0.0") && lines[0].contains("\"w1\":0.5"));
+        assert!(lines[1].contains("\"w0\":1.0") && lines[1].contains("\"w1\":1.5"));
+    }
 
     // Test preset ipv4-header on sample_ipv4.bin
     let out_ipv4 = Command::new(BDD_BIN)
@@ -642,6 +648,7 @@ fn test_mcp_server_protocol() {
     assert!(lines[1].contains("\"name\":\"bdd_probe\""));
     // Line 3: bdd_list_presets
     assert!(lines[2].contains("mp3-header"));
+    #[cfg(feature = "small-floats")]
     assert!(lines[2].contains("nvfp4"));
     // Line 4: bdd_slice output
     assert!(lines[3].contains("sync") && lines[3].contains("2047"));
@@ -958,6 +965,7 @@ fn test_terminal_hex_and_bits_no_trailing_whitespace() {
     }
 }
 
+#[cfg(feature = "server")]
 #[test]
 fn test_web_server_embedded() {
     use std::io::{Read, Write};
@@ -1042,4 +1050,36 @@ fn test_web_server_embedded() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(not(feature = "server"))]
+#[test]
+fn test_web_server_disabled_error() {
+    let out = Command::new(BDD_BIN)
+        .arg("--serve")
+        .output()
+        .expect("failed to run bdd --serve");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("The --serve web UI feature was not enabled at compile time"));
+}
+
+#[cfg(not(feature = "small-floats"))]
+#[test]
+fn test_small_floats_disabled_error() {
+    let out_pat = Command::new(BDD_BIN)
+        .args(["--input-pattern=16H", "--output-hex"])
+        .output()
+        .expect("failed to run bdd with 16H");
+    assert!(!out_pat.status.success());
+    let stderr_pat = String::from_utf8(out_pat.stderr).unwrap();
+    assert!(stderr_pat.contains("small-floats"));
+
+    let out_preset = Command::new(BDD_BIN)
+        .args(["--preset=nvfp4"])
+        .output()
+        .expect("failed to run bdd with nvfp4");
+    assert!(!out_preset.status.success());
+    let stderr_preset = String::from_utf8(out_preset.stderr).unwrap();
+    assert!(stderr_preset.contains("small-floats"));
 }

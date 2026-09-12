@@ -54,6 +54,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "nvfp4",
         description: "NVIDIA Blackwell / OCP FP4 (E2M1) packed sub-byte float pair (two 4-bit floats per byte)",
@@ -62,6 +63,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "fp6-e3m2",
         description: "OCP Microscaling FP6 (E3M2) 4 unaligned 6-bit floats across 24 bits (3 bytes)",
@@ -70,6 +72,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "fp8-e4m3",
         description: "OCP FP8 (E4M3FN) 8-bit floating-point weight",
@@ -78,6 +81,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "fp8-e5m2",
         description: "OCP FP8 (E5M2) 8-bit floating-point weight",
@@ -86,6 +90,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "bf16",
         description: "Brain Floating Point 16-bit (Bfloat16) weight",
@@ -94,6 +99,7 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    #[cfg(feature = "small-floats")]
     Preset {
         name: "fp16",
         description: "IEEE 754 Half-Precision 16-bit float",

@@ -228,6 +228,13 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
 
     for item in &items {
         let c = item.char_code;
+        #[cfg(not(feature = "small-floats"))]
+        if "HhYyQqEe".contains(c) {
+            return Err(BddError::CliError(format!(
+                "Small floating-point format '{}' requires the 'small-floats' feature to be enabled. Recompile with --features small-floats.",
+                c
+            )));
+        }
         if !"xXUuBbSsMmFfDdHhYyEeQqCcKk".contains(c) {
             return Err(BddError::IllegalInputPatternChar(c));
         }
@@ -311,6 +318,13 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
 
     for item in &items {
         let c = item.char_code;
+        #[cfg(not(feature = "small-floats"))]
+        if "HhYyQqEe".contains(c) {
+            return Err(BddError::CliError(format!(
+                "Small floating-point format '{}' requires the 'small-floats' feature to be enabled. Recompile with --features small-floats.",
+                c
+            )));
+        }
         if !"UuBbSsMmFfDdHhYyEeQqCczorXxKk".contains(c) {
             return Err(BddError::IllegalOutputPatternChar(c));
         }
@@ -440,38 +454,66 @@ impl TupleUnpacker {
                 tuple.push(Field::Float(fl));
                 unit >>= 64;
             } else if c == 'H' || c == 'h' {
-                let mask = (BigUint::one() << 16) - 1u32;
-                let val = &unit & &mask;
-                let u = val.to_u16().unwrap_or(0);
-                let fl = crate::float_types::decode_f16(u);
-                tuple.push(Field::Float(fl));
-                unit >>= 16;
+                #[cfg(feature = "small-floats")]
+                {
+                    let mask = (BigUint::one() << 16) - 1u32;
+                    let val = &unit & &mask;
+                    let u = val.to_u16().unwrap_or(0);
+                    let fl = crate::float_types::decode_f16(u);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 16;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 16;
+                }
             } else if c == 'Y' || c == 'y' {
-                let mask = (BigUint::one() << 16) - 1u32;
-                let val = &unit & &mask;
-                let u = val.to_u16().unwrap_or(0);
-                let fl = crate::float_types::decode_bf16(u);
-                tuple.push(Field::Float(fl));
-                unit >>= 16;
+                #[cfg(feature = "small-floats")]
+                {
+                    let mask = (BigUint::one() << 16) - 1u32;
+                    let val = &unit & &mask;
+                    let u = val.to_u16().unwrap_or(0);
+                    let fl = crate::float_types::decode_bf16(u);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 16;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 16;
+                }
             } else if c == 'Q' || c == 'q' {
-                let mask = (BigUint::one() << 8) - 1u32;
-                let val = &unit & &mask;
-                let u = val.to_u8().unwrap_or(0);
-                let fl = crate::float_types::decode_fp8_e5m2(u);
-                tuple.push(Field::Float(fl));
-                unit >>= 8;
+                #[cfg(feature = "small-floats")]
+                {
+                    let mask = (BigUint::one() << 8) - 1u32;
+                    let val = &unit & &mask;
+                    let u = val.to_u8().unwrap_or(0);
+                    let fl = crate::float_types::decode_fp8_e5m2(u);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 8;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 8;
+                }
             } else if c == 'E' || c == 'e' {
-                let mask = (BigUint::one() << bits) - 1u32;
-                let val = &unit & &mask;
-                let u = val.to_u8().unwrap_or(0);
-                let fl = match bits {
-                    8 => crate::float_types::decode_fp8_e4m3(u),
-                    6 => crate::float_types::decode_fp6_e3m2(u),
-                    4 => crate::float_types::decode_fp4_e2m1(u),
-                    _ => 0.0,
-                };
-                tuple.push(Field::Float(fl));
-                unit >>= bits;
+                #[cfg(feature = "small-floats")]
+                {
+                    let mask = (BigUint::one() << bits) - 1u32;
+                    let val = &unit & &mask;
+                    let u = val.to_u8().unwrap_or(0);
+                    let fl = match bits {
+                        8 => crate::float_types::decode_fp8_e4m3(u),
+                        6 => crate::float_types::decode_fp6_e3m2(u),
+                        4 => crate::float_types::decode_fp4_e2m1(u),
+                        _ => 0.0,
+                    };
+                    tuple.push(Field::Float(fl));
+                    unit >>= bits;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= bits;
+                }
             } else if c == 'C' || c == 'c' {
                 let mut bytes = Vec::new();
                 let mask = BigUint::from(0xFFu32);
@@ -569,21 +611,25 @@ impl TuplePacker {
                     let fl = f.as_f64();
                     BigUint::from(fl.to_bits())
                 }
+                #[cfg(feature = "small-floats")]
                 'H' | 'h' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let u = crate::float_types::encode_f16(f.as_f64());
                     BigUint::from(u)
                 }
+                #[cfg(feature = "small-floats")]
                 'Y' | 'y' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let u = crate::float_types::encode_bf16(f.as_f64());
                     BigUint::from(u)
                 }
+                #[cfg(feature = "small-floats")]
                 'Q' | 'q' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let u = crate::float_types::encode_fp8_e5m2(f.as_f64());
                     BigUint::from(u)
                 }
+                #[cfg(feature = "small-floats")]
                 'E' | 'e' => {
                     let f = Self::pop_field(&mut tuple)?;
                     let fl = f.as_f64();
@@ -594,6 +640,13 @@ impl TuplePacker {
                         _ => 0,
                     };
                     BigUint::from(u)
+                }
+                #[cfg(not(feature = "small-floats"))]
+                'H' | 'h' | 'Y' | 'y' | 'Q' | 'q' | 'E' | 'e' => {
+                    return Err(BddError::CliError(format!(
+                        "Small floating-point format '{}' requires the 'small-floats' feature to be enabled. Recompile with --features small-floats.",
+                        c
+                    )));
                 }
                 'C' | 'c' => {
                     let f = Self::pop_field(&mut tuple)?;
@@ -668,7 +721,10 @@ mod tests {
             Some(vec!["sync".to_string(), "version".to_string()])
         );
 
+        #[cfg(feature = "small-floats")]
         let mult_named = parse_input_pattern("w:4*6E").unwrap();
+        #[cfg(not(feature = "small-floats"))]
+        let mult_named = parse_input_pattern("w:4*6U").unwrap();
         assert_eq!(mult_named.len(), 4);
         assert_eq!(mult_named[0].name.as_deref(), Some("w_0"));
         assert_eq!(mult_named[3].name.as_deref(), Some("w_3"));
@@ -771,6 +827,7 @@ mod tests {
         assert_eq!(p.iter().map(|item| item.bits).sum::<usize>(), 32);
     }
 
+    #[cfg(feature = "small-floats")]
     #[test]
     fn test_ai_floats_roundtrip() {
         // FP16 (16H), BF16 (16Y), FP8 E4M3 (8E), FP8 E5M2 (8Q), FP4 E2M1 (4E)

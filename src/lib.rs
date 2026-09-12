@@ -10,12 +10,14 @@ pub mod error;
 pub mod explain;
 pub mod ffi;
 pub mod field;
+#[cfg(feature = "small-floats")]
 pub mod float_types;
 pub mod manipulator;
 pub mod mcp;
 pub mod pattern;
 pub mod preset;
 pub mod probe;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod sink;
 pub mod stream;

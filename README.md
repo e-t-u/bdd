@@ -824,6 +824,11 @@ web/
 ├── style.css       # Dark-slate styling & color-coded bit pattern layouts
 ├── app.js          # Interactive JavaScript client & preset engine
 └── server.py       # Standalone Python HTTP server
+package/
+├── build_deb.sh    # Builds Debian / Ubuntu (.deb) packages with dpkg-deb
+├── build_rpm.sh    # Builds Fedora / RHEL (.rpm) packages for DNF with rpmbuild
+├── build_all.sh    # Builds all distribution packages and generates SHA256SUMS
+└── README.md       # Packaging documentation and install instructions
 pyproject.toml      # Standard Python package configuration
 llms.txt            # High-density agent & LLM reference card
 ```
@@ -860,6 +865,28 @@ make lint
 make check-fmt
 ```
 
+### Cargo Features & Minimal Footprint Builds
+
+`bdd` supports modular compile-time features in `Cargo.toml`. Both features are enabled by default for maximum out-of-the-box functionality:
+
+| Feature | Aliases | Description | Default |
+|:--------|:--------|:------------|:-------:|
+| `server` | `web`, `serve` | Embedded zero-dependency HTTP/1.1 web application server (`bdd --serve`) and embedded browser assets | **Yes** |
+| `small-floats` | `small-float` | Sub-32-bit floating-point codecs (FP16, BF16, FP8 E4M3/E5M2, FP6, FP4) and float presets | **Yes** |
+
+To compile a lean, minimal-footprint binary without web UI assets or floating-point conversion tables (ideal for embedded environments, containerized microservices, or minimal CI pipelines):
+
+```bash
+# Minimal footprint build (integers, bit manipulation, and stream pipelines only):
+cargo build --release --no-default-features
+
+# Build with only small floating-point codecs:
+cargo build --release --no-default-features --features small-floats
+
+# Build with only embedded web application server:
+cargo build --release --no-default-features --features server
+```
+
 ### Documentation & PDF Generation
 
 All project documentation compiles into clean, print-ready vector PDF and HTML files:
@@ -874,6 +901,27 @@ To regenerate all documentation artifacts in one command:
 ```bash
 make docs
 ```
+
+### Linux Distribution Packages (DEB & RPM / DNF)
+
+Native packages can be built directly using the included packaging suite:
+
+- **Debian / Ubuntu / Linux Mint (`.deb`)**:
+  ```bash
+  make deb
+  # Install: sudo apt install ./dist/bdd_0.3.0_amd64.deb
+  ```
+- **Fedora / RHEL / CentOS / Rocky (`.rpm` for DNF)**:
+  ```bash
+  make rpm
+  # Install: sudo dnf install ./dist/bdd-0.3.0-1.*.rpm
+  ```
+- **Build All Packages with Checksums**:
+  ```bash
+  make packages
+  ```
+
+All generated packages (`.deb` and `.rpm`) install the executable `/usr/bin/bdd`, shared C library `/usr/lib/libbdd.so` (or `/usr/lib64/libbdd.so`), C header `/usr/include/bdd.h`, manual pages, and documentation, triggering `ldconfig` automatically upon installation.
 
 ---
 

@@ -1,4 +1,4 @@
-.PHONY: all build release test lint fmt install clean bench docs pdf contrib-pdf man-pdf pres-pdf contrib web web-py
+.PHONY: all build release test lint fmt install clean bench docs pdf contrib-pdf man-pdf pres-pdf contrib web web-py deb rpm packages pkgs
 
 all: release
 
@@ -55,7 +55,19 @@ pres-pdf:
 
 docs: pdf man-pdf pres-pdf
 
+deb: release
+	./package/build_deb.sh
+
+rpm: release
+	./package/build_rpm.sh
+
+packages: release
+	./package/build_all.sh
+
+pkgs: packages
+
 clean:
 	cargo clean
 	rm -f bdd
+	rm -rf dist
 	$(MAKE) -C contrib clean
