@@ -336,6 +336,16 @@ Patterns support multiplier syntax for repetitive fields, arrays, and tensor wei
 2. **Intermediate Manipulation & Rounding**: Inside the tuple pipeline, floating-point values can be rearranged, filtered, or rounded using `--round` (e.g. `--round 0,round_ties_even`, `--round 0,floor`, `--round 0,ceil`, `--round 0,trunc`).
 3. **Universal Encoding / Downcasting from `f64`**: When packing tuples into an output bitstream through `--output-pattern`, each target float token encodes the internal `f64` into its target bit layout using round-to-nearest-even (or round-to-nearest).
 
+> [!TIP]
+> **Bit-Exact Copying Without `f64` Conversion**
+> If you want to verify or guarantee that floating-point numbers copy bit-for-bit verbatim *as is* without any possible rounding errors to/from `f64` (preserving exact signaling/quiet NaN payloads and denormals), **handle them as unsigned integers** of the corresponding bit width:
+> - **`32U`** instead of `32F` (for 32-bit single-precision floats)
+> - **`64U`** instead of `64D` (for 64-bit double-precision floats)
+> - **`16U`** instead of `16H` or `16Y` (for 16-bit FP16 or BF16)
+> - **`8U`** instead of `8E` or `8Q` (for 8-bit FP8)
+>
+> Unsigned integer fields (`U`) transfer raw bits directly with zero arithmetic translation or floating-point rounding.
+
 #### Zero-Dependency Pure-Rust AI Codecs
 Standard Rust (`std`) only supports `f32` and `f64` natively. Experimental features (`f16`/`f128`) are unstable, and standard Rust provides no primitives for OCP FP8, FP6, or Blackwell FP4. `bdd` avoids heavy or unstable external dependencies by implementing custom, bit-exact codecs directly in `src/float_types.rs`, ensuring maximum performance and portability.
 

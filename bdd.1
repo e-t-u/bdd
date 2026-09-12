@@ -308,8 +308,9 @@ way to use negative values correctly is --output-pattern=nS,
 --abs or --output-tuples.
 
 Floating-point numbers can be read and written using any of the supported float patterns: 64D/64d (FP64), 32F/32f (FP32), 16H/16h (IEEE FP16), 16Y/16y (Google Brain BF16), 8E/8e (OCP FP8 E4M3FN), 8Q/8q (OCP FP8 E5M2), 6E/6e (OCP FP6 E3M2), and 4E/4e (NVIDIA Blackwell / OCP FP4 E2M1).
-.PP
 Internally, all input floats are decoded into IEEE 754 64-bit doubles (\fIf64\fR) in the tuple field pipeline. When written out through an output pattern, \fIbdd\fR encodes the internal \fIf64\fR value directly into the requested output float format using standard round-to-nearest-even rules (or round-to-nearest). This provides native, loss-free upcasting and bit-exact downcasting/quantization between arbitrary floating-point representations (e.g. \f(CR--input-pattern=32F --output-pattern=16H\fR or \f(CR--input-pattern=16H --output-pattern=4E\fR). The \f(CR--round\fR manipulator can additionally be used to apply explicit rounding modes (such as \fBfloor\fR, \fBceil\fR, \fBtrunc\fR, or \fBround_ties_even\fR) prior to packing.
+.PP
+To verify or guarantee that floating-point numbers copy bit-for-bit verbatim as-is without any possible intermediate rounding to/from \fIf64\fR (preserving exact NaN payloads and subnormals), handle them as unsigned integers of the equivalent bit width: \fB32U\fR for 32-bit floats, \fB64U\fR for 64-bit doubles, \fB16U\fR for FP16/BF16, or \fB8U\fR for FP8. Unsigned integer fields copy raw bit patterns verbatim without float interpretation.
 
 Most likely, you want to use upper case variants of
 the patterns (bitwise big-endian representation). If

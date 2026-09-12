@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 01:15:25 2026 -->
+<!-- CreationDate: Sun Sep 13 02:09:07 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -567,9 +567,7 @@ numbers can be read and written using any of the supported
 float patterns: 64D/64d (FP64), 32F/32f (FP32), 16H/16h
 (IEEE FP16), 16Y/16y (Google Brain BF16), 8E/8e (OCP FP8
 E4M3FN), 8Q/8q (OCP FP8 E5M2), 6E/6e (OCP FP6 E3M2), and
-4E/4e (NVIDIA Blackwell / OCP FP4 E2M1).</p>
-
-<p style="margin-left:9%; margin-top: 1em">Internally, all
+4E/4e (NVIDIA Blackwell / OCP FP4 E2M1). Internally, all
 input floats are decoded into IEEE 754 64-bit doubles
 (<i>f64</i>) in the tuple field pipeline. When written out
 through an output pattern, <i>bdd</i> encodes the internal
@@ -583,6 +581,16 @@ floating-point representations (e.g. --input-pattern=32F
 additionally be used to apply explicit rounding modes (such
 as <b>floor</b>, <b>ceil</b>, <b>trunc</b>, or
 <b>round_ties_even</b>) prior to packing.</p>
+
+<p style="margin-left:9%; margin-top: 1em">To verify or
+guarantee that floating-point numbers copy bit-for-bit
+verbatim as-is without any possible intermediate rounding
+to/from <i>f64</i> (preserving exact NaN payloads and
+subnormals), handle them as unsigned integers of the
+equivalent bit width: <b>32U</b> for 32-bit floats,
+<b>64U</b> for 64-bit doubles, <b>16U</b> for FP16/BF16, or
+<b>8U</b> for FP8. Unsigned integer fields copy raw bit
+patterns verbatim without float interpretation.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Most likely, you
 want to use upper case variants of the patterns (bitwise
