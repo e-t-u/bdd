@@ -45,7 +45,7 @@ man-pdf:
 
 pres-pdf:
 	mkdir -p docs
-	libreoffice --headless --convert-to pdf legacy/old_src/Presentation.odp --outdir docs/
+	libreoffice --headless --convert-to pdf docs/Presentation.odp --outdir docs/
 
 docs: pdf man-pdf pres-pdf
 
