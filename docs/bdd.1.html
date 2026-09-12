@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 09:09:04 2026 -->
+<!-- CreationDate: Sat Sep 12 09:23:08 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -46,6 +46,7 @@
 <a href="#echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1">echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1</a><br>
 <a href="#bdd --input-counter --count=16 --output-hex">bdd --input-counter --count=16 --output-hex</a><br>
 <a href="#bdd --input-counter --count=16 --input-unit=12 --output-unit=12--merge-file=/etc/passwd --output-hex">bdd --input-counter --count=16 --input-unit=12 --output-unit=12--merge-file=/etc/passwd --output-hex</a><br>
+<a href="#FILES">FILES</a><br>
 <a href="#SEE ALSO">SEE ALSO</a><br>
 <a href="#BUGS">BUGS</a><br>
 <a href="#AUTHOR">AUTHOR</a><br>
@@ -1187,6 +1188,13 @@ schema bit layouts), and <b>bdd_list_presets</b> (cataloging
 built-in protocols).</p></td></tr>
 </table>
 
+<p style="margin-left:9%;">--llms, --ai-guide, --ai</p>
+
+<p style="margin-left:18%;">Print the embedded concise AI
+model and agent guide (llms.txt) to standard output.
+Contains bitstream syntax rules, pattern grammar, and
+pipeline recipes for language models.</p>
+
 <p style="margin-left:9%;">--serve[=PORT], --web, --gui</p>
 
 <p style="margin-left:18%;">Launch the interactive Web UI
@@ -1275,6 +1283,29 @@ hex address of the byte:</p>
 <p style="margin-left:9%; margin-top: 1em">000 72 001 6f
 002 6f 003 74 004 3a 005 78 006 3a 007 30 <br>
 008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a</p>
+
+<h2>FILES
+<a name="FILES"></a>
+</h2>
+
+
+
+<p style="margin-left:9%; margin-top: 1em"><i>/usr/share/doc/bdd/llms.txt</i></p>
+
+<p style="margin-left:18%;">Concise AI model and agent
+guide containing bitstream syntax rules, pattern grammar,
+and pipeline recipes.</p>
+
+
+<p style="margin-left:9%;"><i>/usr/share/doc/bdd/README.md</i></p>
+
+<p style="margin-left:18%;">Comprehensive project
+documentation and architecture guide.</p>
+
+<p style="margin-left:9%;"><i>/usr/include/bdd.h</i></p>
+
+<p style="margin-left:18%;">C-ABI shared library header
+file.</p>
 
 <h2>SEE ALSO
 <a name="SEE ALSO"></a>

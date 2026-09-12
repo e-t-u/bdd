@@ -730,6 +730,10 @@ Deeply inspect the input file (or standard input if omitted). Computes Shannon e
 Run native JSON-RPC 2.0 Model Context Protocol (MCP) server over standard input and standard output. Exposes four tools for AI agent pair programming, binary reverse engineering, and pipeline automation: \fBbdd_slice\fR (extract, transcode, and slice bitstreams into text or JSON), \fBbdd_probe\fR (probing binary blobs for entropy and periodicity), \fBbdd_explain_pattern\fR (inspecting schema bit layouts), and \fBbdd_list_presets\fR (cataloging built-in protocols).
 
 .TP
+--llms, --ai-guide, --ai
+Print the embedded concise AI model and agent guide (llms.txt) to standard output. Contains bitstream syntax rules, pattern grammar, and pipeline recipes for language models.
+
+.TP
 --serve[=PORT], --web, --gui
 Launch the interactive Web UI application server (default port 7788). Allows exploring bit layouts, running slicing pipelines, visualizing hex dumps, and testing presets directly in any modern web browser.
 
@@ -774,6 +778,17 @@ Quiet mode. Suppress non-fatal diagnostic warnings (such as missing tuple fields
 
     000 72 001 6f 002 6f 003 74 004 3a 005 78 006 3a 007 30 
     008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a 
+
+.SH FILES
+.TP
+.I /usr/share/doc/bdd/llms.txt
+Concise AI model and agent guide containing bitstream syntax rules, pattern grammar, and pipeline recipes.
+.TP
+.I /usr/share/doc/bdd/README.md
+Comprehensive project documentation and architecture guide.
+.TP
+.I /usr/include/bdd.h
+C-ABI shared library header file.
 
 .SH SEE ALSO
 dd(1)

@@ -222,6 +222,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub mcp: bool,
 
+    /// Print concise AI model and agent guide (llms.txt) to stdout
+    #[arg(long, default_value_t = false, visible_aliases = ["ai-guide", "ai"])]
+    pub llms: bool,
+
     /// Start embedded interactive web browser GUI application
     #[arg(long, num_args = 0..=1, default_missing_value = "7788", visible_aliases = ["web", "gui"])]
     pub serve: Option<u16>,

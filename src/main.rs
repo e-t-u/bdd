@@ -6,6 +6,11 @@ fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
     let cli = Cli::parse();
 
+    if cli.llms {
+        print!("{}", include_str!("../llms.txt"));
+        return;
+    }
+
     if cli.mcp {
         if let Err(e) = bdd::mcp::run_mcp_server() {
             eprintln!("{}", e);

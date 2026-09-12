@@ -1175,3 +1175,23 @@ fn test_small_floats_disabled_error() {
     let stderr_preset = String::from_utf8(out_preset.stderr).unwrap();
     assert!(stderr_preset.contains("small-floats"));
 }
+
+#[test]
+fn test_llms_flag() {
+    let out = Command::new(BDD_BIN)
+        .arg("--llms")
+        .output()
+        .expect("failed to run bdd --llms");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("# Bit Dump & Dissect (bdd) - LLM & Agent Reference"));
+    assert!(stdout.contains("--mcp"));
+
+    let out_alias = Command::new(BDD_BIN)
+        .arg("--ai-guide")
+        .output()
+        .expect("failed to run bdd --ai-guide");
+    assert!(out_alias.status.success());
+    let stdout_alias = String::from_utf8(out_alias.stdout).unwrap();
+    assert_eq!(stdout, stdout_alias);
+}
