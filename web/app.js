@@ -223,7 +223,12 @@ function loadPreset(preset) {
   
   // Form fields
   el.inputPattern.value = preset.pattern || "";
-  el.inputUnit.value = preset.unit || "";
+  el.inputUnit.value = preset.pattern ? "" : (preset.unit || "");
+  if (preset.pattern && preset.unit) {
+    el.inputUnit.placeholder = `${preset.unit} (from pattern)`;
+  } else {
+    el.inputUnit.placeholder = "8";
+  }
   el.outputUnit.value = "";
   el.outputPattern.value = "";
   el.inputRawUnit.value = preset.rawUnit || "";
@@ -393,18 +398,18 @@ function buildCliArgs() {
   }
   
   const inUnit = el.inputUnit.value.trim();
-  if (inUnit) {
+  if (inUnit && !pat) {
     args.push(`--input-unit=${inUnit}`);
-  }
-  
-  const outUnit = el.outputUnit.value.trim();
-  if (outUnit) {
-    args.push(`--output-unit=${outUnit}`);
   }
   
   const outPat = el.outputPattern.value.trim();
   if (outPat) {
     args.push(`--output-pattern=${outPat}`);
+  }
+
+  const outUnit = el.outputUnit.value.trim();
+  if (outUnit && !outPat) {
+    args.push(`--output-unit=${outUnit}`);
   }
   
   // Container & seeking

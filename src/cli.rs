@@ -705,16 +705,27 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         ],
     )?;
 
-    if cli.input_pattern.is_some() && (cli.input_unit.is_some() || cli.input_raw_unit.is_some()) {
-        return Err(BddError::CliError(
-            "--in/output-pattern overwrites --in/output-unit and --input-raw-unit, use either one"
-                .to_string(),
-        ));
+    let pattern_input_unit = if let Some(ref p) = cli.input_pattern {
+        let items = crate::pattern::parse_input_pattern(p)?;
+        Some(items.iter().map(|it| it.bits).sum::<usize>())
+    } else {
+        None
+    };
+
+    let pattern_output_unit = if let Some(ref p) = cli.output_pattern {
+        let items = crate::pattern::parse_output_pattern(p)?;
+        Some(items.iter().map(|it| it.bits).sum::<usize>())
+    } else {
+        None
+    };
+
+    if cli.input_pattern.is_some() && cli.input_unit.is_some() {
+        crate::diag::warn("--input-pattern overwrites --input-unit");
+        cli.input_unit = None;
     }
     if cli.output_pattern.is_some() && cli.output_unit.is_some() {
-        return Err(BddError::CliError(
-            "--in/output-pattern overwrites --in/output-unit, use either one".to_string(),
-        ));
+        crate::diag::warn("--output-pattern overwrites --output-unit");
+        cli.output_unit = None;
     }
 
     let mut all_merge_files: Vec<String> = Vec::new();
@@ -800,7 +811,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     )?
     .unwrap_or(0);
     let input_unit = parse_number_argument(cli.input_unit.as_deref(), "--input-unit", None, false)?
-        .map(|v| v as usize);
+        .map(|v| v as usize)
+        .or(pattern_input_unit);
 
     let (input_skip_bits, input_skip_units, input_gap, resolved_input_unit) = if let Some(r) =
         raw_unit
@@ -818,7 +830,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             }
             if input_offset + (unit as u64) > r {
                 return Err(BddError::CliError(format!(
-                    "--input-offset ({}) + --input-unit ({}) exceeds --input-raw-unit ({})",
+                    "--input-offset ({}) + input unit/pattern ({}) exceeds --input-raw-unit ({})",
                     input_offset, unit, r
                 )));
             }
@@ -930,7 +942,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
 
     let resolved_output_unit =
         parse_number_argument(cli.output_unit.as_deref(), "--output-unit", None, false)?
-            .map(|v| v as usize);
+            .map(|v| v as usize)
+            .or(pattern_output_unit);
 
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {

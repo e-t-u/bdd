@@ -1144,6 +1144,41 @@ fn test_stream_warning_deduplication() {
     );
 }
 
+#[test]
+fn test_pattern_with_raw_unit_and_unit_overwrite() {
+    // 1. Pattern with raw-unit: extract 8-bit pattern from 16-bit container
+    let out_raw = Command::new(BDD_BIN)
+        .args([
+            "--input-zeros",
+            "--count=2",
+            "--input-raw-unit=16",
+            "--input-pattern=8U",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd with pattern and raw unit");
+    assert!(out_raw.status.success());
+    let stdout_raw = String::from_utf8(out_raw.stdout).unwrap();
+    assert_eq!(stdout_raw.trim(), "00 00");
+
+    // 2. Pattern with unit: emits warning and pattern overwrites unit
+    let out_overwrite = Command::new(BDD_BIN)
+        .args([
+            "--input-zeros",
+            "--count=2",
+            "--input-pattern=8U",
+            "--input-unit=8",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd with pattern and unit");
+    assert!(out_overwrite.status.success());
+    let stderr_overwrite = String::from_utf8(out_overwrite.stderr).unwrap();
+    assert!(stderr_overwrite.contains("--input-pattern overwrites --input-unit"));
+    let stdout_overwrite = String::from_utf8(out_overwrite.stdout).unwrap();
+    assert_eq!(stdout_overwrite.trim(), "00 00");
+}
+
 #[cfg(not(feature = "server"))]
 #[test]
 fn test_web_server_disabled_error() {
