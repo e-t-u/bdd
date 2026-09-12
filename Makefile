@@ -1,4 +1,4 @@
-.PHONY: all build release test lint fmt install clean bench docs pdf contrib-pdf man-pdf pres-pdf contrib
+.PHONY: all build release test lint fmt install clean bench docs pdf contrib-pdf man-pdf pres-pdf contrib web web-py
 
 all: release
 
@@ -30,6 +30,12 @@ check-fmt:
 install:
 	cargo install --path .
 	ln -sf ~/.cargo/bin/bdd ~/.local/bin/bdd
+
+web: release
+	./bdd --serve
+
+web-py: release
+	python3 web/server.py
 
 pdf:
 	node scripts/render_pdf.js README.md README.pdf

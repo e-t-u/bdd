@@ -585,10 +585,11 @@ Output Unit & Pattern Options:
       --csv-header <HEADER>        Optional CSV column header row
       --output-visual              Colorized ANSI terminal dump of unaligned fields
 
-Inspection & Model Context Protocol (MCP):
+Inspection, Web UI & Model Context Protocol (MCP):
       --explain-pattern [PATTERN]  Analyze bit layout, byte alignment, and field breakdown
       --probe [FILE]               Inspect binary entropy, byte classes, periodic strides, and strings
       --mcp                        Launch native JSON-RPC 2.0 Model Context Protocol (MCP) server
+      --serve [PORT]               Launch interactive Web UI browser app (aliases: --web, --gui) [default: 7788]
 
 Demuxing & Channel Splitting:
       --demux <FIELD:PATH>         Route individual tuple field to a dedicated output file
@@ -681,6 +682,24 @@ Registered MCP tools:
 - `bdd_probe`: Analyzes entropy, periodic strides, and format heuristics.
 - `bdd_explain_pattern`: Explains schema bit offsets and field types.
 - `bdd_list_presets`: Returns available protocol presets.
+
+### Interactive Web Application (`--serve`)
+`bdd` embeds a complete, zero-dependency browser application directly into the binary:
+```bash
+bdd --serve            # Launches web UI at http://localhost:7788
+bdd --serve 8080       # Custom port (aliases: --web, --gui)
+# Or via make targets:
+make web               # Compiles and runs ./bdd --serve
+make web-py            # Standalone Python backend (python3 web/server.py)
+```
+
+**Key Features:**
+- **File Upload & Drag-and-Drop**: Upload binary blobs, capture files, or sample datasets.
+- **Protocol Presets**: 1-click loading for MPEG-TS, MP3 Header, NVFP4, FP8, WAV, RGB565, and more.
+- **Live Visual Bit Breakdown**: Color-coded field layout (uint, int, float, char, discard, counter) with exact bit offsets and byte boundaries.
+- **Real-Time Command Generator**: Generates equivalent copy-pasteable `bdd` CLI commands as you tune options.
+- **Multi-Sink Results Inspector**: Switch seamlessly between Formatted JSON, Hex Dump, Color Matrix, CSV, Raw Bits, and Binary Download.
+- **Binary Prober in Browser**: Run entropy, byte class, and periodic stride autocorrelation with one click.
 
 ### Agent Documentation (`llms.txt` & Agent Skill)
 - **[`llms.txt`](llms.txt)**: High-density reference tailored for LLM context windows.
@@ -792,6 +811,7 @@ src/
 ├── explain.rs      # Pattern bit layout, alignment & schema analysis
 ├── probe.rs        # Shannon entropy, periodic stride autocorrelation & byte classes
 ├── mcp.rs          # Native JSON-RPC 2.0 Model Context Protocol (MCP) server
+├── server.rs       # Embedded zero-dependency HTTP server & web app dispatcher
 ├── cli.rs          # Clap CLI definition & validation rules
 └── engine.rs       # End-to-end pipeline execution orchestrator
 include/
@@ -799,6 +819,11 @@ include/
 python/
 ├── __init__.py     # Python package root
 └── bdd.py          # Zero-dependency Python ctypes wrapper
+web/
+├── index.html      # Responsive browser single-page application UI
+├── style.css       # Dark-slate styling & color-coded bit pattern layouts
+├── app.js          # Interactive JavaScript client & preset engine
+└── server.py       # Standalone Python HTTP server
 pyproject.toml      # Standard Python package configuration
 llms.txt            # High-density agent & LLM reference card
 ```

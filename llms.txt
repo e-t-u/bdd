@@ -106,6 +106,13 @@ bdd --probe firmware.bin
 bdd --probe payload.dat --output-json
 ```
 
+### Interactive Web UI (`--serve`)
+Zero-dependency browser application embedded in binary:
+```bash
+bdd --serve          # Launches web UI at http://localhost:7788 (aliases: --web, --gui)
+bdd --serve 8080     # Custom port
+```
+
 ---
 
 ## 5. Output Formats & Keyed JSON

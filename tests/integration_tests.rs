@@ -575,6 +575,16 @@ fn test_explain_pattern() {
     let stdout_json = String::from_utf8(out_json.stdout).unwrap();
     assert!(stdout_json.contains("\"field_count\": 2"));
     assert!(stdout_json.contains("\"total_bits\": 13"));
+
+    // Direct preset name lookup in explain-pattern
+    let out_preset = Command::new(BDD_BIN)
+        .args(["--explain-pattern=mp3-header"])
+        .output()
+        .expect("failed to run explain-pattern with preset");
+    assert!(out_preset.status.success());
+    let stdout_preset = String::from_utf8(out_preset.stdout).unwrap();
+    assert!(stdout_preset.contains("32 bits"));
+    assert!(stdout_preset.contains("bitrate"));
 }
 
 #[test]
@@ -946,4 +956,90 @@ fn test_terminal_hex_and_bits_no_trailing_whitespace() {
             line
         );
     }
+}
+
+#[test]
+fn test_web_server_embedded() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::thread;
+    use std::time::Duration;
+
+    let port = 17892;
+    let mut child = Command::new(BDD_BIN)
+        .arg(format!("--serve={}", port))
+        .spawn()
+        .expect("failed to spawn bdd --serve");
+
+    // Wait for server to start
+    let mut connected = false;
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(50));
+        if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
+            connected = true;
+            break;
+        }
+    }
+    assert!(connected, "Failed to connect to bdd web server");
+
+    // 1. Test GET /api/status
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(b"GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("\"status\":\"ok\""));
+    }
+
+    // 2. Test GET / (HTML index)
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("bdd"));
+        assert!(resp.contains("Interactive Bitstream Slicer"));
+    }
+
+    // 3. Test POST /api/explain
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let body = r#"{"pattern":"sync:11u,ver:2u"}"#;
+        let req = format!(
+            "POST /api/explain HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("sync"));
+        assert!(resp.contains("ver"));
+    }
+
+    // 4. Test POST /api/process
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let body = r#"{"args":["--input-zeros","--count=2","--output-hex"]}"#;
+        let req = format!(
+            "POST /api/process HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("00 00"));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
 }

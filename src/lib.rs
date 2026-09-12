@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod pattern;
 pub mod preset;
 pub mod probe;
+pub mod server;
 pub mod sink;
 pub mod stream;
 

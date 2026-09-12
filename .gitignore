@@ -1,47 +1,37 @@
-*.py[cod]
-
-# C extensions
-*.so
-
-# Packages
-*.egg
-*.egg-info
-dist
-build
-eggs
-parts
-bin
-var
-sdist
-develop-eggs
-.installed.cfg
-lib
-lib64
-
-# Installer logs
-pip-log.txt
-
-# Unit test / coverage reports
-.coverage
-.tox
-nosetests.xml
-
-# Translations
-*.mo
-
-# Mr Developer
-.mr.developer.cfg
-.project
-.pydevproject
-
-# PyCharm
-.idea
-
 # Rust
 /target/
 /bdd
+*.rs.bk
+
+# Python bytecode & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+/build/
+/dist/
+*.egg-info/
+*.egg
+pip-log.txt
+.coverage
+.tox/
 
 # Contrib test binaries
-/contrib/c/decode_media
-/contrib/c/decode_ai_weights
-/contrib/c/decode_network
+/contrib/c/*
+!/contrib/c/*.c
+!/contrib/c/*.h
+!/contrib/c/Makefile
+!/contrib/c/README*
+
+# IDEs, editors & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+

@@ -222,6 +222,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub mcp: bool,
 
+    /// Start embedded interactive web browser GUI application
+    #[arg(long, num_args = 0..=1, default_missing_value = "7788", visible_aliases = ["web", "gui"])]
+    pub serve: Option<u16>,
+
     // Demux and looping options
     #[arg(long)]
     pub demux: Vec<String>,

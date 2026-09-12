@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bdd — Interactive Bitstream Slicer & Binary Inspector</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <div class="logo-badge">01</div>
+      <div class="brand-text">
+        <h1>bdd <span class="version-tag">v0.3.0</span></h1>
+        <p class="subtitle">Sub-Byte Bitstream Slicer & Binary Inspector</p>
+      </div>
+    </div>
+    <div class="nav-actions">
+      <span class="status-indicator" id="server-status">
+        <span class="status-dot online"></span>
+        <span class="status-label">Engine Ready</span>
+      </span>
+      <a href="https://github.com/e-t-u/bdd" target="_blank" rel="noopener" class="btn btn-ghost github-link">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </header>
+
+  <!-- Quick Presets Bar -->
+  <section class="presets-shelf">
+    <div class="shelf-label">QUICK PRESETS</div>
+    <div class="preset-chips" id="preset-chips">
+      <!-- Generated dynamically by app.js -->
+    </div>
+  </section>
+
+  <!-- Main Workspace Grid -->
+  <main class="workspace-grid">
+    <!-- Left Column: Input & Slicing Controls -->
+    <aside class="controls-panel">
+      <!-- Source Selection Tabs -->
+      <div class="card">
+        <div class="card-header">
+          <h2>1. Input Source</h2>
+          <div class="tab-group" id="source-tabs" role="tablist">
+            <button class="tab-btn active" data-tab="file" role="tab" aria-selected="true">File Upload</button>
+            <button class="tab-btn" data-tab="samples" role="tab" aria-selected="false">Sample Datasets</button>
+            <button class="tab-btn" data-tab="generator" role="tab" aria-selected="false">Generator</button>
+            <button class="tab-btn" data-tab="tuples" role="tab" aria-selected="false">Direct Tuples</button>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- File Upload Tab -->
+          <div class="tab-content active" id="tab-file">
+            <div class="dropzone" id="file-dropzone">
+              <input type="file" id="file-input" class="hidden-input">
+              <div class="dropzone-content">
+                <svg class="upload-icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <div class="drop-text">
+                  <strong>Drag & drop binary file here</strong> or <span class="browse-link">browse</span>
+                </div>
+                <div class="drop-subtext">MP3, MPEG-TS, WAV, Safetensors, JPEG, Raw weights (up to 50MB)</div>
+              </div>
+            </div>
+            <div class="file-info-badge hidden" id="file-info">
+              <div class="file-details">
+                <span class="file-icon">📄</span>
+                <div class="file-meta">
+                  <span class="file-name" id="info-file-name">filename.bin</span>
+                  <span class="file-size" id="info-file-size">0 bytes</span>
+                </div>
+              </div>
+              <button class="btn btn-xs btn-outline" id="btn-probe-file" title="Run fast binary structure probe">
+                🔍 Auto-Probe
+              </button>
+            </div>
+          </div>
+
+          <!-- Sample Datasets Tab -->
+          <div class="tab-content" id="tab-samples">
+            <label for="sample-select" class="form-label">Choose Bundled Fixture File:</label>
+            <select id="sample-select" class="form-select">
+              <option value="sample.mp3">sample.mp3 (MPEG-1 Layer III 44.1kHz 128kbps)</option>
+              <option value="sample.ts">sample.ts (MPEG-TS 188-byte containers, PAT/PMT/H264/AAC)</option>
+              <option value="sample_nvfp4.bin">sample_nvfp4.bin (NVIDIA Blackwell 4-bit NVFP4 E2M1 weights)</option>
+              <option value="sample_fp6.bin">sample_fp6.bin (OCP Microscaling 6-bit FP6 E3M2 weights)</option>
+              <option value="sample.safetensors">sample.safetensors (HuggingFace FP8 & BF16 model tensors)</option>
+              <option value="sample.wav">sample.wav (RIFF/WAVE 44.1kHz 16-bit Stereo PCM)</option>
+              <option value="sample.jpg">sample.jpg (JPEG JFIF Header with SOF0 4:2:0 subsampling)</option>
+              <option value="sample_ipv4.bin">sample_ipv4.bin (IPv4 20-byte base packet header)</option>
+              <option value="sample_tcp.bin">sample_tcp.bin (TCP 20-byte segment header)</option>
+              <option value="sample_udp.bin">sample_udp.bin (UDP 8-byte datagram header)</option>
+              <option value="sample_24bit.raw">sample_24bit.raw (24-bit 3-byte unaligned studio audio)</option>
+              <option value="sample_packets.bin">sample_packets.bin (Periodic telemetry packets)</option>
+            </select>
+            <button class="btn btn-sm btn-secondary full-width mt-2" id="btn-load-sample">Load Fixture File</button>
+          </div>
+
+          <!-- Synthetic Generator Tab -->
+          <div class="tab-content" id="tab-generator">
+            <div class="generator-options">
+              <label class="radio-label">
+                <input type="radio" name="generator-type" value="counter" checked>
+                <span>Sequence Counter (0, 1, 2, ...)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="generator-type" value="zeros">
+                <span>Infinite Zeros (0x00)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="generator-type" value="ones">
+                <span>Infinite Ones (0xFF)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="generator-type" value="random">
+                <span>Pseudo-Random Bits</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Direct Tuples Tab -->
+          <div class="tab-content" id="tab-tuples">
+            <label for="input-tuples-text" class="form-label">Tuple Input (CSV formatted lines):</label>
+            <textarea id="input-tuples-text" class="form-textarea" rows="4" placeholder="10, 20, 30&#10;11, 22, 33&#10;&quot;string&quot;, 42, 3.14"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pattern Engine & Layout Specification -->
+      <div class="card">
+        <div class="card-header">
+          <h2>2. Bitstream Pattern & Layout</h2>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <div class="label-row">
+              <label for="input-pattern" class="form-label">Input Pattern / Field Schema:</label>
+              <span class="field-meta" id="pattern-meta">Total bits: 0</span>
+            </div>
+            <input type="text" id="input-pattern" class="form-input code-font" placeholder="e.g. sync:11u,ver:2u,layer:2u or 4E4E or 32U">
+            <div class="pattern-chips-preview" id="pattern-chips-preview"></div>
+          </div>
+
+          <!-- Live Visual Pattern Layout Breakdown -->
+          <div class="pattern-diagram" id="pattern-diagram">
+            <div class="diagram-empty-hint">Enter a pattern above or select a preset to visualize bit allocation</div>
+          </div>
+
+          <div class="form-row mt-3">
+            <div class="form-group col">
+              <label for="input-unit" class="form-label">Input Unit (bits):</label>
+              <input type="text" id="input-unit" class="form-input" placeholder="e.g. 8, 16, 24, 32">
+              <div class="unit-quick-pills">
+                <button type="button" class="pill" data-unit="1">1b</button>
+                <button type="button" class="pill" data-unit="4">4b</button>
+                <button type="button" class="pill" data-unit="8">8b</button>
+                <button type="button" class="pill" data-unit="16">16b</button>
+                <button type="button" class="pill" data-unit="24">24b</button>
+                <button type="button" class="pill" data-unit="32">32b</button>
+                <button type="button" class="pill" data-unit="64">64b</button>
+              </div>
+            </div>
+            <div class="form-group col">
+              <label for="output-unit" class="form-label">Output Unit (bits):</label>
+              <input type="text" id="output-unit" class="form-input" placeholder="Default: same as input">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="output-pattern" class="form-label">Output Repack Pattern (optional):</label>
+            <input type="text" id="output-pattern" class="form-input code-font" placeholder="e.g. 8U,x,8U (discard field 1) or 8K,8U (inject counter)">
+          </div>
+        </div>
+      </div>
+
+      <!-- Advanced Slicing & Positioning Controls -->
+      <div class="card accordion-card">
+        <details class="accordion">
+          <summary class="accordion-header">
+            <h3>3. Container Seeking, Suffixes & Flags</h3>
+            <span class="accordion-arrow">▼</span>
+          </summary>
+          <div class="accordion-body">
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="input-raw-unit" class="form-label">Raw Container Unit (bits):</label>
+                <input type="text" id="input-raw-unit" class="form-input" placeholder="e.g. 1504 (188B TS)">
+              </div>
+              <div class="form-group col">
+                <label for="input-offset" class="form-label">Bit Offset in Raw Unit:</label>
+                <input type="text" id="input-offset" class="form-input" placeholder="e.g. 11 (PID)">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="input-skip-bits" class="form-label">Skip Bits (supports suffixes/math):</label>
+                <input type="text" id="input-skip-bits" class="form-input" placeholder="e.g. 10M, 1GiB, 1920x1080*24">
+              </div>
+              <div class="form-group col">
+                <label for="input-skip-units" class="form-label">Skip Units:</label>
+                <input type="text" id="input-skip-units" class="form-input" placeholder="e.g. 1000">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="input-gap" class="form-label">Periodic Container Gap (bits):</label>
+                <input type="text" id="input-gap" class="form-input" placeholder="e.g. 64">
+              </div>
+              <div class="form-group col">
+                <label for="count-limit" class="form-label">Count / Bounded Records:</label>
+                <input type="text" id="count-limit" class="form-input" placeholder="e.g. 10, 50, 100">
+              </div>
+            </div>
+
+            <div class="checkbox-grid">
+              <label class="checkbox-label">
+                <input type="checkbox" id="drop-partial-eof" checked>
+                <span>Drop Partial EOF Bits (--drop-partial-eof)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="little-endian">
+                <span>Input Little-Endian (--little-endian)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="reverse-bytes">
+                <span>Reverse Bytes (--input-reverse-bytes)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="reverse-unit">
+                <span>Reverse Bits in Unit (--input-reverse-unit)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="no-seek">
+                <span>Force Streaming Sequential Read (--no-seek)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="assert-aligned">
+                <span>Assert Byte Aligned EOF (--input-assert-aligned)</span>
+              </label>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Transformations Pipeline -->
+      <div class="card accordion-card">
+        <details class="accordion">
+          <summary class="accordion-header">
+            <h3>4. Transformations Pipeline (--round, math, filter)</h3>
+            <span class="accordion-arrow">▼</span>
+          </summary>
+          <div class="accordion-body">
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="pipeline-round" class="form-label">Round / Saturate (--round):</label>
+                <input type="text" id="pipeline-round" class="form-input" placeholder="e.g. 0,floor or 0,10,saturate">
+              </div>
+              <div class="form-group col">
+                <label for="pipeline-rearrange" class="form-label">Rearrange Fields (--rearrange):</label>
+                <input type="text" id="pipeline-rearrange" class="form-input" placeholder="e.g. 0,2,-1 or 1,0">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="pipeline-filter" class="form-label">Filter Predicate (--filter):</label>
+                <input type="text" id="pipeline-filter" class="form-input" placeholder="e.g. 0>100 or 1==5">
+              </div>
+              <div class="form-group col">
+                <label for="pipeline-math" class="form-label">Arithmetic Op (e.g. --add, --mul):</label>
+                <input type="text" id="pipeline-math" class="form-input" placeholder="e.g. add=0,10 or mul=1,2">
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Output Sink Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <h2>5. Output Format Sink</h2>
+        </div>
+        <div class="card-body">
+          <div class="sink-radios">
+            <label class="sink-radio-card active">
+              <input type="radio" name="output-sink" value="json" checked>
+              <div class="sink-info">
+                <strong>Structured JSON</strong>
+                <span>Named field attributes, ideal for APIs and structured inspection</span>
+              </div>
+            </label>
+            <label class="sink-radio-card">
+              <input type="radio" name="output-sink" value="csv">
+              <div class="sink-info">
+                <strong>CSV Table</strong>
+                <span>Tabular format with header, great for Excel and Pandas analysis</span>
+              </div>
+            </label>
+            <label class="sink-radio-card">
+              <input type="radio" name="output-sink" value="visual">
+              <div class="sink-info">
+                <strong>Visual Color Matrix</strong>
+                <span>ANSI color-mapped terminal units, great for bit alignment debugging</span>
+              </div>
+            </label>
+            <label class="sink-radio-card">
+              <input type="radio" name="output-sink" value="hex">
+              <div class="sink-info">
+                <strong>Hex Dump</strong>
+                <span>Aligned hexadecimal values per unit</span>
+              </div>
+            </label>
+            <label class="sink-radio-card">
+              <input type="radio" name="output-sink" value="bits">
+              <div class="sink-info">
+                <strong>Bit Dump</strong>
+                <span>Explicit binary strings (0s and 1s)</span>
+              </div>
+            </label>
+            <label class="sink-radio-card">
+              <input type="radio" name="output-sink" value="binary">
+              <div class="sink-info">
+                <strong>Raw Binary Stream</strong>
+                <span>Transcoded binary file available for direct download</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right Column: Command Generator & Interactive Results -->
+    <section class="results-panel">
+      <!-- Action Toolbar -->
+      <div class="action-toolbar">
+        <button class="btn btn-primary btn-lg" id="btn-run-slice">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run Slicer
+          <span class="kbd-shortcut">Ctrl+Enter</span>
+        </button>
+        <button class="btn btn-secondary" id="btn-probe-action">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Probe Structure
+        </button>
+        <button class="btn btn-ghost" id="btn-copy-cmd">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy CLI Command
+        </button>
+      </div>
+
+      <!-- Live Generated CLI Command -->
+      <div class="card cli-preview-card">
+        <div class="cli-header">
+          <span class="cli-tag">EQUIVALENT CLI COMMAND</span>
+          <span class="copied-pill hidden" id="copied-pill">Copied to clipboard!</span>
+        </div>
+        <pre class="cli-command" id="cli-command-preview"><code>bdd --input-file=sample.mp3 --preset=mp3-header --output-json</code></pre>
+      </div>
+
+      <!-- Results Display Card -->
+      <div class="card results-card">
+        <div class="results-header">
+          <div class="results-title-group">
+            <h2>Execution Output</h2>
+            <span class="badge" id="results-badge">Awaiting Execution</span>
+          </div>
+          <div class="results-actions">
+            <button class="btn btn-sm btn-outline" id="btn-download-result" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download Output
+            </button>
+          </div>
+        </div>
+
+        <!-- Output Viewport -->
+        <div class="results-viewport" id="results-viewport">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">⚡</div>
+            <h3>Ready to Slice Bitstreams</h3>
+            <p>Select a preset above, drop a file, or click <strong>Run Slicer</strong> to inspect decoded binary fields.</p>
+          </div>
+
+          <!-- Spinner Overlay -->
+          <div class="spinner-overlay hidden" id="spinner-overlay">
+            <div class="spinner"></div>
+            <p>Executing bitstream pipeline...</p>
+          </div>
+
+          <!-- Result Views Container -->
+          <div class="output-container hidden" id="output-container">
+            <pre class="output-pre code-font" id="output-text"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>bdd v0.3.0 &bull; Multi-Gigabit Rust Bitstream Engine &bull; Zero External Runtime Dependencies</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

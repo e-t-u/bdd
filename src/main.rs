@@ -14,19 +14,42 @@ fn main() {
         return;
     }
 
+    if let Some(port) = cli.serve {
+        if let Err(e) = bdd::server::run_server(port) {
+            eprintln!("[bdd web] Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if cli.list_presets {
         println!("{}", bdd::preset::format_presets_table());
         return;
     }
 
     if let Some(ref pat_opt) = cli.explain_pattern {
-        let pattern_to_explain = if !pat_opt.trim().is_empty() {
+        let raw_pat = if !pat_opt.trim().is_empty() {
             pat_opt.as_str()
         } else if let Some(ref ip) = cli.input_pattern {
             ip.as_str()
+        } else if let Some(ref pr) = cli.preset {
+            if let Some(p) = bdd::preset::find_preset(pr) {
+                p.pattern
+            } else {
+                eprintln!("Error: unknown preset '{}'", pr);
+                std::process::exit(1);
+            }
         } else {
-            eprintln!("Error: --explain-pattern requires a pattern string or --input-pattern");
+            eprintln!(
+                "Error: --explain-pattern requires a pattern string, --input-pattern, or --preset"
+            );
             std::process::exit(1);
+        };
+
+        let pattern_to_explain = if let Some(p) = bdd::preset::find_preset(raw_pat) {
+            p.pattern
+        } else {
+            raw_pat
         };
 
         match bdd::explain::explain_pattern(pattern_to_explain) {
