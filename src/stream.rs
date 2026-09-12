@@ -19,6 +19,7 @@ pub struct StreamConfig {
     pub reverse_unit: bool,
     pub unit_size: usize,
     pub seek_allowed: bool,
+    pub repeat_count: usize,
 }
 
 impl Default for StreamConfig {
@@ -33,6 +34,7 @@ impl Default for StreamConfig {
             reverse_unit: false,
             unit_size: 8,
             seek_allowed: true,
+            repeat_count: 1,
         }
     }
 }
@@ -48,6 +50,13 @@ pub trait StreamSeek {
     /// Returns Ok(false) if seeking is unsupported, failed with ESPIPE, or disabled.
     /// Returns Err(e) on fatal I/O error.
     fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+
+    /// Attempts to rewind the stream to the beginning (offset 0).
+    /// Returns Ok(true) if rewind succeeded.
+    /// Returns Ok(false) if rewinding is unsupported.
+    fn rewind(&mut self) -> std::io::Result<bool> {
         Ok(false)
     }
 }
@@ -126,11 +135,28 @@ impl StreamSeek for BddReader {
             ReaderSource::Streaming(_) => Ok(false),
         }
     }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        match &mut self.source {
+            ReaderSource::Seekable(s) => match s.seek(SeekFrom::Start(0)) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            },
+            ReaderSource::Streaming(_) => Ok(false),
+        }
+    }
 }
 
 impl<T: AsRef<[u8]>> StreamSeek for std::io::Cursor<T> {
     fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
         match self.seek(SeekFrom::Current(bytes as i64)) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Start(0)) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -145,6 +171,13 @@ impl StreamSeek for std::fs::File {
             Err(_) => Ok(false),
         }
     }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Start(0)) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
 }
 
 impl<T: Read + Seek> StreamSeek for BufReader<T> {
@@ -152,6 +185,13 @@ impl<T: Read + Seek> StreamSeek for BufReader<T> {
         match self.seek(SeekFrom::Current(bytes as i64)) {
             Ok(_) => Ok(true),
             Err(e) if e.raw_os_error() == Some(29) => Ok(false),
+            Err(_) => Ok(false),
+        }
+    }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Start(0)) {
+            Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
     }
@@ -183,6 +223,56 @@ impl StreamSeek for Box<dyn ReadSeek> {
             Err(_) => Ok(false),
         }
     }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        match self.seek(SeekFrom::Start(0)) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+/// Helper trait for buffered readers that can be rewound when repeating inputs.
+pub trait RewindableBufRead: BufRead + StreamSeek {}
+impl<T: BufRead + StreamSeek> RewindableBufRead for T {}
+
+impl StreamSeek for Box<dyn RewindableBufRead> {
+    fn try_seek(&mut self, bytes: u64) -> std::io::Result<bool> {
+        (**self).try_seek(bytes)
+    }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        (**self).rewind()
+    }
+}
+
+/// Wrapper around BufReader for non-seekable readers that implements StreamSeek with no-ops.
+pub struct StreamSeekBufReader<R>(pub BufReader<R>);
+
+impl<R: Read> Read for StreamSeekBufReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Read> BufRead for StreamSeekBufReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.0.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.0.consume(amt)
+    }
+}
+
+impl<R: Read> StreamSeek for StreamSeekBufReader<R> {
+    fn try_seek(&mut self, _bytes: u64) -> std::io::Result<bool> {
+        Ok(false)
+    }
+
+    fn rewind(&mut self) -> std::io::Result<bool> {
+        Ok(false)
+    }
 }
 
 /// Abstract iterator yielding units from an input source.
@@ -198,6 +288,7 @@ pub struct FileInputStream<R> {
     pub eof: bool,
     pub config: StreamConfig,
     pub counter: Counter,
+    pub current_repeat: usize,
 }
 
 impl<R: Read + StreamSeek> FileInputStream<R> {
@@ -209,6 +300,7 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             eof: false,
             config,
             counter,
+            current_repeat: 1,
         }
     }
 
@@ -362,6 +454,18 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 if self.config.assert_aligned {
                     return Err(BddError::NonAlignedEof);
                 }
+                if !self.counter.finished()
+                    && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                {
+                    if self.reader.rewind()? {
+                        self.current_repeat += 1;
+                        self.eof = false;
+                        self.buffer = BigUint::zero();
+                        self.bits_in_buffer = 0;
+                        self.do_skip();
+                        continue;
+                    }
+                }
                 return Ok(None);
             }
 
@@ -370,6 +474,16 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 if self.eof && self.config.drop_partial_eof {
                     self.bits_in_buffer = 0;
                     self.buffer = BigUint::zero();
+                    if !self.counter.finished()
+                        && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                    {
+                        if self.reader.rewind()? {
+                            self.current_repeat += 1;
+                            self.eof = false;
+                            self.do_skip();
+                            continue;
+                        }
+                    }
                     return Ok(None);
                 }
                 self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
@@ -400,8 +514,31 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                         if self.config.reverse_unit {
                             unit = reverse_bits(&unit, self.config.unit_size);
                         }
+                        if !self.counter.finished()
+                            && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                        {
+                            if self.reader.rewind()? {
+                                self.current_repeat += 1;
+                                self.eof = false;
+                                self.buffer = BigUint::zero();
+                                self.bits_in_buffer = 0;
+                                self.do_skip();
+                            }
+                        }
                         return Ok(Some(unit));
                     } else {
+                        if !self.counter.finished()
+                            && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                        {
+                            if self.reader.rewind()? {
+                                self.current_repeat += 1;
+                                self.eof = false;
+                                self.buffer = BigUint::zero();
+                                self.bits_in_buffer = 0;
+                                self.do_skip();
+                                continue;
+                            }
+                        }
                         return Ok(None);
                     }
                 }
@@ -585,21 +722,38 @@ impl UnitStream for CounterStream {
 pub struct IntegerInputStream<R> {
     reader: R,
     counter: Counter,
+    repeat_count: usize,
+    current_repeat: usize,
 }
 
-impl<R: BufRead> IntegerInputStream<R> {
-    pub fn new(reader: R, counter: Counter) -> Self {
-        Self { reader, counter }
+impl<R: BufRead + StreamSeek> IntegerInputStream<R> {
+    pub fn new(reader: R, counter: Counter, repeat_count: usize) -> Self {
+        Self {
+            reader,
+            counter,
+            repeat_count,
+            current_repeat: 1,
+        }
     }
 }
 
-impl<R: BufRead> UnitStream for IntegerInputStream<R> {
+impl<R: BufRead + StreamSeek> UnitStream for IntegerInputStream<R> {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
         let mut line = String::new();
         loop {
             line.clear();
             match self.reader.read_line(&mut line) {
-                Ok(0) => return Ok(None),
+                Ok(0) => {
+                    if !self.counter.finished()
+                        && (self.repeat_count == 0 || self.current_repeat < self.repeat_count)
+                    {
+                        if self.reader.rewind().unwrap_or(false) {
+                            self.current_repeat += 1;
+                            continue;
+                        }
+                    }
+                    return Ok(None);
+                }
                 Ok(_) => {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
@@ -706,11 +860,18 @@ pub fn parse_csv_tuple_line(line: &str) -> Vec<(String, bool)> {
 pub struct TupleDirectInput<R> {
     reader: R,
     counter: Counter,
+    repeat_count: usize,
+    current_repeat: usize,
 }
 
-impl<R: BufRead> TupleDirectInput<R> {
-    pub fn new(reader: R, counter: Counter) -> Self {
-        Self { reader, counter }
+impl<R: BufRead + StreamSeek> TupleDirectInput<R> {
+    pub fn new(reader: R, counter: Counter, repeat_count: usize) -> Self {
+        Self {
+            reader,
+            counter,
+            repeat_count,
+            current_repeat: 1,
+        }
     }
 
     pub fn next_tuple(&mut self) -> Result<Option<Vec<Field>>, BddError> {
@@ -718,7 +879,17 @@ impl<R: BufRead> TupleDirectInput<R> {
         loop {
             raw_bytes.clear();
             match self.reader.read_until(b'\n', &mut raw_bytes) {
-                Ok(0) => return Ok(None),
+                Ok(0) => {
+                    if !self.counter.finished()
+                        && (self.repeat_count == 0 || self.current_repeat < self.repeat_count)
+                    {
+                        if self.reader.rewind().unwrap_or(false) {
+                            self.current_repeat += 1;
+                            continue;
+                        }
+                    }
+                    return Ok(None);
+                }
                 Ok(_) => {
                     let lossy = String::from_utf8_lossy(&raw_bytes);
                     let trimmed = lossy.trim_end_matches(&['\r', '\n'][..]);

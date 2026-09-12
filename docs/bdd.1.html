@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 02:54:03 2026 -->
+<!-- CreationDate: Sun Sep 13 03:17:05 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -1383,10 +1383,12 @@ Can be repeated.</p>
 <p style="margin-left:18%;">Demux tuple fields in order to
 a comma-separated list of target files.</p>
 
-<p style="margin-left:9%;">--input-repeat=COUNT</p>
+<p style="margin-left:9%;">--input-repeat=COUNT,
+--repeat-input=COUNT</p>
 
 <p style="margin-left:18%;">Loop through the input stream
-COUNT times (supports seeking or memory buffering).</p>
+COUNT times (0 = infinite; supports seeking on files or
+memory buffering on stdin).</p>
 
 <h3>Analysis, Inspection and Model Context Protocol (MCP)
 <a name="Analysis, Inspection and Model Context Protocol (MCP)"></a>

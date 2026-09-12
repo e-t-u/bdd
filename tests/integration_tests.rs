@@ -887,6 +887,79 @@ fn test_radix_numbers_in_input_tuples_and_integers() {
 }
 
 #[test]
+fn test_input_repeat_modes() {
+    // 1. Test stdin repeat with --input-repeat
+    let mut child = Command::new(BDD_BIN)
+        .args(["--input-repeat=3"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        write!(stdin, "AB").unwrap();
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "ABABAB");
+
+    // 2. Test alias --repeat-input
+    let mut child2 = Command::new(BDD_BIN)
+        .args(["--repeat-input=3"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child2.stdin.as_mut().unwrap();
+        write!(stdin, "XY").unwrap();
+    }
+
+    let output2 = child2.wait_with_output().expect("failed to wait for bdd");
+    assert!(output2.status.success());
+    assert_eq!(String::from_utf8(output2.stdout).unwrap(), "XYXYXY");
+
+    // 3. Test --input-tuples with --input-repeat
+    let mut child3 = Command::new(BDD_BIN)
+        .args(["--input-tuples", "--input-repeat=2", "--output-tuples"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child3.stdin.as_mut().unwrap();
+        writeln!(stdin, "1,2\n3,4").unwrap();
+    }
+
+    let output3 = child3.wait_with_output().expect("failed to wait for bdd");
+    assert!(output3.status.success());
+    let stdout3 = String::from_utf8(output3.stdout).unwrap();
+    assert_eq!(stdout3.trim(), "1,2\n3,4\n1,2\n3,4");
+
+    // 4. Test regular file with --input-repeat=0 and --count=5 (infinite repeat bounded by count)
+    let tmp_file = "/tmp/bdd_repeat_test.bin";
+    std::fs::write(tmp_file, [0x10, 0x20]).unwrap();
+    let output4 = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", tmp_file),
+            "--input-repeat=0",
+            "--count=5",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd");
+    let _ = std::fs::remove_file(tmp_file);
+
+    assert!(output4.status.success());
+    let stdout4 = String::from_utf8(output4.stdout).unwrap();
+    assert_eq!(stdout4.trim(), "10 20 10 20 10");
+}
+
+#[test]
 fn test_multi_file_merge_round_robin() {
     let m1_path = "/tmp/bdd_merge_test_m1.bin";
     let m2_path = "/tmp/bdd_merge_test_m2.bin";

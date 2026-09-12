@@ -277,7 +277,8 @@ pub struct Cli {
     #[arg(long)]
     pub demux_files: Option<String>,
 
-    #[arg(long)]
+    /// Repeat input stream N times (0 = infinite)
+    #[arg(long, visible_alias = "repeat-input")]
     pub input_repeat: Option<String>,
 
     // Merge options

@@ -10,12 +10,12 @@ use crate::sink::{
 };
 use crate::stream::{
     BddReader, CounterStream, FileInputStream, IntegerInputStream, OneStream, RandomStream,
-    StreamConfig, TupleDirectInput, UnitStream, ZeroStream,
+    RewindableBufRead, StreamConfig, StreamSeekBufReader, TupleDirectInput, UnitStream, ZeroStream,
 };
 use num_bigint::BigUint;
 use num_traits::Zero;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 
 /// Runs the complete bdd pipeline based on validated configuration.
 pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
@@ -97,6 +97,7 @@ fn run_pipeline_internal(
             reverse_unit: config.merge_reverse_unit,
             unit_size: m_unit,
             seek_allowed: config.merge_use_seek,
+            repeat_count: 1,
         };
         let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
         ms.do_skip();
@@ -264,15 +265,21 @@ fn run_pipeline_internal(
     let counter = Counter::new(config.skip, config.count);
 
     if config.input_tuples {
-        let in_reader: Box<dyn BufRead> = if config.input_file == "-" {
-            Box::new(BufReader::new(io::stdin()))
+        let in_reader: Box<dyn RewindableBufRead> = if config.input_file == "-" {
+            if config.input_repeat != 1 {
+                let mut buf = Vec::new();
+                io::stdin().read_to_end(&mut buf)?;
+                Box::new(std::io::Cursor::new(buf))
+            } else {
+                Box::new(StreamSeekBufReader(BufReader::new(io::stdin())))
+            }
         } else {
             match File::open(&config.input_file) {
                 Ok(f) => Box::new(BufReader::new(f)),
                 Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
             }
         };
-        let mut tuple_in = TupleDirectInput::new(in_reader, counter);
+        let mut tuple_in = TupleDirectInput::new(in_reader, counter, config.input_repeat);
 
         while let Some(mut tuple) = tuple_in.next_tuple()? {
             let mut maybe_tuple = Some(tuple);
@@ -358,18 +365,30 @@ fn run_pipeline_internal(
         } else if config.input_counter {
             Box::new(CounterStream::new(counter, in_unit_size))
         } else if config.input_integers {
-            let in_reader: Box<dyn BufRead> = if config.input_file == "-" {
-                Box::new(BufReader::new(io::stdin()))
+            let in_reader: Box<dyn RewindableBufRead> = if config.input_file == "-" {
+                if config.input_repeat != 1 {
+                    let mut buf = Vec::new();
+                    io::stdin().read_to_end(&mut buf)?;
+                    Box::new(std::io::Cursor::new(buf))
+                } else {
+                    Box::new(StreamSeekBufReader(BufReader::new(io::stdin())))
+                }
             } else {
                 match File::open(&config.input_file) {
                     Ok(f) => Box::new(BufReader::new(f)),
                     Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
                 }
             };
-            Box::new(IntegerInputStream::new(in_reader, counter))
+            Box::new(IntegerInputStream::new(in_reader, counter, config.input_repeat))
         } else {
             let in_reader = if config.input_file == "-" {
-                BddReader::from_stdin(config.input_use_seek)
+                if config.input_repeat != 1 {
+                    let mut buf = Vec::new();
+                    io::stdin().read_to_end(&mut buf)?;
+                    BddReader::new_seekable(std::io::Cursor::new(buf), true)
+                } else {
+                    BddReader::from_stdin(config.input_use_seek)
+                }
             } else {
                 match File::open(&config.input_file) {
                     Ok(f) => BddReader::from_file(f, config.input_use_seek),
@@ -386,6 +405,7 @@ fn run_pipeline_internal(
                 reverse_unit: config.input_reverse_unit,
                 unit_size: in_unit_size,
                 seek_allowed: config.input_use_seek,
+                repeat_count: config.input_repeat,
             };
             let mut fs = FileInputStream::new(in_reader, stream_conf, counter);
             fs.do_skip();

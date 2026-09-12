@@ -742,8 +742,8 @@ Extract individual tuple field by index and stream it directly to a dedicated fi
 Demux tuple fields in order to a comma-separated list of target files.
 
 .TP
---input-repeat=COUNT
-Loop through the input stream COUNT times (supports seeking or memory buffering).
+--input-repeat=COUNT, --repeat-input=COUNT
+Loop through the input stream COUNT times (0 = infinite; supports seeking on files or memory buffering on stdin).
 
 .SS Analysis, Inspection and Model Context Protocol (MCP)
 
