@@ -767,15 +767,17 @@ Each stream specification follows the syntax:
 \f(CR[skip :] unit_or_container [+ gap]\fR
 .PP
 .IP \(bu 2
-\fBInitial Skip / Prefix (\f(CR:\fB):\fR Delimited by \f(CR:\fR. Skips \fIN\fR bits on input, or emits \fIN\fR zero bits as an initial stream prefix on output. Supports unit/byte multipliers (e.g. \f(CR123\fR, \f(CR5B\fR, \f(CR4k\fR).
+\fBInitial Skip / Prefix (\f(CR:\fB):\fR Delimited by \f(CR:\fR. Skips \fIN\fR bits on input, or emits \fIN\fR zero bits as an initial stream prefix on output. Supports unit/byte multipliers and suffixes (e.g. \f(CR123\fR, \f(CR5B\fR, \f(CR1GB\fR, \f(CR1024*1024*8\fR).
 .IP \(bu 2
-\fBPeriodic Gap (\f(CR+\fB):\fR Appended with \f(CR+\fR. Bits skipped between input containers, or zero bits emitted between output containers.
+\fBPeriodic Gap (\f(CR+\fB):\fR Appended with \f(CR+\fR. Bits skipped between input containers, or zero bits emitted between output containers (e.g. \f(CR+1MiB\fR, \f(CR+100k\fR).
 .IP \(bu 2
-\fBForm A (Container Slicing):\fR \f(CRraw_size[offset : unit]\fR \(em container size outside, offset and active unit inside. Post-gap is calculated automatically as \fIraw_size - offset - unit\fR.
+\fBForm A (Container Slicing):\fR \f(CRraw_size[offset : unit]\fR or \f(CRraw_size[offset, unit]\fR \(em container size outside, offset and active unit inside. Post-gap is calculated automatically as \fIraw_size - offset - unit\fR. Slice components may be separated by colon or comma.
 .IP \(bu 2
-\fBForm B (Physical Layout Box):\fR \f(CR[pre : unit : post]\fR \(em explicit pre-gap, active payload, and post-gap inside the box. Container size is the sum \fIpre + unit + post\fR.
+\fBForm B (Physical Layout Box):\fR \f(CR[pre : unit : post]\fR or \f(CR[pre, unit, post]\fR \(em explicit pre-gap, active payload, and post-gap inside the box. Container size is the sum \fIpre + unit + post\fR.
 .IP \(bu 2
 \fBBare Unit:\fR Plain number or size (e.g. \f(CR8\fR, \f(CR3\fR, \f(CR188B\fR).
+.PP
+All sizes in stream patterns support standard binary/decimal suffixes (\fBKiB\fR, \fBMiB\fR, \fBGiB\fR, \fBkB\fR, \fBMB\fR, \fBGB\fR) and multiplication expressions (\fB188*8\fR, \fB1024*1024*8\fR).
 .PP
 All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain fully functional and can override or complement positional arguments.
 
@@ -784,6 +786,11 @@ All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain
 .SS bdd "8 -> 3" < foo.8bit > foo.3bit
 
     Packs 8-bit bytes into a dense stream of 3-bit units (top 5 bits ignored).
+
+.SS bdd "1GB:8[2,6]+1MiB" < archive.bin
+
+    Skips 1 GB, extracts 6-bit unit from 8-bit container starting at bit offset 2,
+    skipping 1 MiB gap between containers.
 
 .SS bdd "123:8[2:4]+8 -> 5B:8[2:4]" < in.bin > out.bin
 

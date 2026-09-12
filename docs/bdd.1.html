@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 02:09:07 2026 -->
+<!-- CreationDate: Sun Sep 13 02:13:18 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -42,6 +42,7 @@
 <a href="#UNIFIED STREAM I/O MAPPING SYNTAX">UNIFIED STREAM I/O MAPPING SYNTAX</a><br>
 <a href="#EXAMPLES">EXAMPLES</a><br>
 <a href="#bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit">bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit</a><br>
+<a href="#bdd 1GB:8[2,6]+1MiB &lt; archive.bin">bdd 1GB:8[2,6]+1MiB &lt; archive.bin</a><br>
 <a href="#bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin">bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin</a><br>
 <a href="#bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin">bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin</a><br>
 <a href="#bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin">bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin</a><br>
@@ -1377,7 +1378,8 @@ unit_or_container [+ gap]</p>
 <p><b>Initial Skip / Prefix (</b>:<b>):</b> Delimited by :.
 Skips <i>N</i> bits on input, or emits <i>N</i> zero bits as
 an initial stream prefix on output. Supports unit/byte
-multipliers (e.g. 123, 5B, 4k).</p></td></tr>
+multipliers and suffixes (e.g. 123, 5B, 1GB,
+1024*1024*8).</p> </td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1390,7 +1392,7 @@ multipliers (e.g. 123, 5B, 4k).</p></td></tr>
 
 <p><b>Periodic Gap (</b>+<b>):</b> Appended with +. Bits
 skipped between input containers, or zero bits emitted
-between output containers.</p></td></tr>
+between output containers (e.g. +1MiB, +100k).</p></td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1402,9 +1404,10 @@ between output containers.</p></td></tr>
 
 
 <p><b>Form A (Container Slicing):</b> raw_size[offset :
-unit] &mdash; container size outside, offset and active unit
-inside. Post-gap is calculated automatically as <i>raw_size
-- offset - unit</i>.</p></td></tr>
+unit] or raw_size[offset, unit] &mdash; container size
+outside, offset and active unit inside. Post-gap is
+calculated automatically as <i>raw_size - offset - unit</i>.
+Slice components may be separated by colon or comma.</p></td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1416,9 +1419,9 @@ inside. Post-gap is calculated automatically as <i>raw_size
 
 
 <p><b>Form B (Physical Layout Box):</b> [pre : unit : post]
-&mdash; explicit pre-gap, active payload, and post-gap
-inside the box. Container size is the sum <i>pre + unit +
-post</i>.</p> </td></tr>
+or [pre, unit, post] &mdash; explicit pre-gap, active
+payload, and post-gap inside the box. Container size is the
+sum <i>pre + unit + post</i>.</p></td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1432,6 +1435,12 @@ post</i>.</p> </td></tr>
 <p><b>Bare Unit:</b> Plain number or size (e.g. 8, 3,
 188B).</p> </td></tr>
 </table>
+
+<p style="margin-left:9%; margin-top: 1em">All sizes in
+stream patterns support standard binary/decimal suffixes
+(<b>KiB</b>, <b>MiB</b>, <b>GiB</b>, <b>kB</b>, <b>MB</b>,
+<b>GB</b>) and multiplication expressions (<b>188*8</b>,
+<b>1024*1024*8</b>).</p>
 
 <p style="margin-left:9%; margin-top: 1em">All flags
 (<b>&minus;&minus;input&minus;raw&minus;unit</b>,
@@ -1452,6 +1461,16 @@ positional arguments.</p>
 <p style="margin-left:9%; margin-top: 1em">Packs 8-bit
 bytes into a dense stream of 3-bit units (top 5 bits
 ignored).</p>
+
+<h3>bdd 1GB:8[2,6]+1MiB &lt; archive.bin
+<a name="bdd 1GB:8[2,6]+1MiB &lt; archive.bin"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Skips 1 GB,
+extracts 6-bit unit from 8-bit container starting at bit
+offset 2, <br>
+skipping 1 MiB gap between containers.</p>
 
 <h3>bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin
 <a name="bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin"></a>

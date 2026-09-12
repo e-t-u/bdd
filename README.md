@@ -203,9 +203,17 @@ Each stream definition uses the syntax:
 - **Initial Skip / Prefix (`:`):** Delimited by `:`. Skips $N$ bits on input, or emits $N$ zero bits as an initial stream prefix on output.
 - **Periodic Gap (`+`):** Appended with `+`. Defines bits skipped between input containers, or zero bits emitted between output containers.
 - **Containers & Bitfields:** Can be expressed in two complementary formats:
-  - **Form A (Container Slicing): `raw_size[offset : unit]`** — container size outside, offset and active unit inside (post-gap is computed automatically as $\text{raw} - \text{offset} - \text{unit}$).
-  - **Form B (Physical Layout Box): `[pre : unit : post]`** — explicit pre-gap, active payload, and post-gap inside the box (container size is the sum $\text{pre} + \text{unit} + \text{post}$).
+  - **Form A (Container Slicing): `raw_size[offset : unit]`** or **`raw_size[offset, unit]`** — container size outside, offset and active unit inside (post-gap is computed automatically as $\text{raw} - \text{offset} - \text{unit}$). Slice components can be separated by either `:` or `,`.
+  - **Form B (Physical Layout Box): `[pre : unit : post]`** or **`[pre, unit, post]`** — explicit pre-gap, active payload, and post-gap inside the box (container size is the sum $\text{pre} + \text{unit} + \text{post}$).
   - **Bare Unit:** A plain number or size (e.g. `8`, `3`, `188B`, `4k`).
+
+#### Multiplications, Suffixes & Large Units (`k`, `M`, `G`)
+
+Every numeric size in a stream pattern (skips, container sizes, offsets, units, gaps) fully supports standard binary/decimal suffixes and multiplication expressions:
+- **Binary Suffixes (powers of 1024)**: `k` / `KiB` (1,024), `M` / `MiB` ($1,024^2$), `G` / `GiB` ($1,024^3$), `T` / `TiB` ($1,024^4$).
+- **Decimal Suffixes (powers of 1000)**: `kB` (1,000), `MB` ($1,000^2$), `GB` ($1,000^3$), `TB` ($1,000^4$).
+- **Byte Suffixes**: Any suffix ending in `B` (e.g. `B`, `Bytes`, `KiB`, `MiB`, `GB`) automatically multiplies by 8 when parsed as a bit size.
+- **Multiplication Expressions**: Combine factors using `*` or `x` (e.g. `188*8`, `1024*1024*8`, `1920x1080*3`).
 
 #### Real-World Recipes & Examples
 
@@ -213,24 +221,34 @@ Each stream definition uses the syntax:
 # 1. Simple unit resizing (8-bit input to 3-bit output):
 bdd "8 -> 3" < foo.8bit > foo.3bit
 
-# 2. Full periodic container slicing and output framing (Form A):
+# 2. Large units, skips, slice containers, and periodic gaps:
+# Skip 1 GB, slice 6-bit unit from 8-bit container starting at bit offset 2, skip 1 MiB between containers:
+bdd "1GB : 8[2:6] + 1MiB" < large_archive.bin
+
+# Same layout using comma slice syntax and binary GiB:
+bdd "1GiB : 8[2,6] + 1MiB" < large_archive.bin
+
+# 3. Arithmetic container sizing (188 bytes * 8 bits = 1504-bit TS packet):
+bdd "1024*1024*8 : 188*8[0:32] + 100*8" < stream.ts
+
+# 4. Full periodic container slicing and output framing (Form A):
 # Skip 123b, 8b container (2b offset, 4b payload, 2b post-gap), 8b gap between containers
 # -> Output 5B zero prefix, pack into 8b container (2b pre-gap, 4b payload, 2b post-gap):
 bdd "123 : 8[2:4] + 8 -> 5B : 8[2:4]" < in.bin > out.bin
 
-# 3. Same container layout using Form B (Physical Layout Box):
+# 5. Same container layout using Form B (Physical Layout Box):
 bdd "123 : [2:4:2] + 8 -> 5B : [2:4:2]" < in.bin > out.bin
 
-# 4. MPEG-TS: Extract 13-bit PID from 188-byte packet (11-bit header):
+# 6. MPEG-TS: Extract 13-bit PID from 188-byte packet (11-bit header):
 bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
 
-# 5. Output Framing: Pack raw 13-bit PIDs back into 188-byte container frames:
+# 7. Output Framing: Pack raw 13-bit PIDs back into 188-byte container frames:
 bdd "13 -> 188B[11:13]" < pids.bin > framed.ts
 
-# 6. Positional Tuple Patterns (Unpack two 4-bit nibbles from each byte, swap fields, repack):
+# 8. Positional Tuple Patterns (Unpack two 4-bit nibbles from each byte, swap fields, repack):
 bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
 
-# 7. Positional Output Pattern with Text Tuples (Pack comma-separated "1,2" pairs into 1 byte):
+# 9. Positional Output Pattern with Text Tuples (Pack comma-separated "1,2" pairs into 1 byte):
 bdd 4U4U --input-tuples --output-hex < pairs.txt
 ```
 

@@ -217,7 +217,11 @@ pub fn parse_stream_spec(s: &str) -> Result<StreamSpec, BddError> {
         }
         let prefix = unit_part[..open_idx].trim();
         let inside = unit_part[open_idx + 1..close_idx].trim();
-        let inner_parts: Vec<&str> = inside.split(':').map(|p| p.trim()).collect();
+        let inner_parts: Vec<&str> = if inside.contains(':') {
+            inside.split(':').map(|p| p.trim()).collect()
+        } else {
+            inside.split(',').map(|p| p.trim()).collect()
+        };
 
         if !prefix.is_empty() {
             // Form A: raw_size[offset : unit] or raw_size[offset : unit : post]
@@ -459,5 +463,37 @@ mod tests {
         assert_eq!(out.offset, Some(2));
         assert_eq!(out.unit_size, Some(4));
         assert_eq!(out.gap, Some(0));
+    }
+
+    #[test]
+    fn test_stream_multipliers_and_large_units() {
+        // 1GB skip (decimal 1000^3 * 8 bits = 8,000,000,000 bits),
+        // container size 8 bits with slice [2, 6] (offset 2, unit 6),
+        // periodic gap +1MiB (binary 1024^2 * 8 bits = 8,388,608 bits)
+        let p = parse_stream_io_pattern("1GB:8[2,6]+1MiB").unwrap();
+        let inp = p.input.unwrap();
+        assert_eq!(inp.skip, Some(8_000_000_000));
+        assert_eq!(inp.raw_unit, Some(8));
+        assert_eq!(inp.offset, Some(2));
+        assert_eq!(inp.unit_size, Some(6));
+        assert_eq!(inp.gap, Some(8_388_608));
+
+        // Colon slice syntax 8[2:6] with binary 1GiB
+        let p2 = parse_stream_io_pattern("1GiB:8[2:6]+100k").unwrap();
+        let inp2 = p2.input.unwrap();
+        assert_eq!(inp2.skip, Some(1024 * 1024 * 1024 * 8));
+        assert_eq!(inp2.raw_unit, Some(8));
+        assert_eq!(inp2.offset, Some(2));
+        assert_eq!(inp2.unit_size, Some(6));
+        assert_eq!(inp2.gap, Some(100 * 1024));
+
+        // Multiplication expressions in raw size, skip, and gap
+        let p3 = parse_stream_io_pattern("1024*1024*8 : 188*8[0:32] + 100*8").unwrap();
+        let inp3 = p3.input.unwrap();
+        assert_eq!(inp3.skip, Some(1024 * 1024 * 8));
+        assert_eq!(inp3.raw_unit, Some(1504));
+        assert_eq!(inp3.offset, Some(0));
+        assert_eq!(inp3.unit_size, Some(32));
+        assert_eq!(inp3.gap, Some(800));
     }
 }
