@@ -522,11 +522,20 @@ Furthermore, how do you pipe structured tuples into standard Unix tools like `jq
 - **`--output-json`**: Newline-delimited JSON (NDJSON) record per tuple (ideal for `jq`, Python, databases).
 - **`--output-csv`**: Comma-separated values (with optional `--csv-header="col1,col2"`).
 - **`--output-visual`**: Interactive colorized terminal dump rendering unaligned field slices in alternating ANSI colors.
-- **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples. Quoted values (e.g. `"hello"`, `'123'`) are preserved as byte strings (`Field::Bytes`) instead of numbers, preserving exact text for character/byte patterns (`c` / `C`).
+- **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples. Unquoted numbers support decimal, hexadecimal (`0x...` / `0X...`), octal (`0o...` / `0O...`), and binary (`0b...` / `0B...`) notations, as well as IEEE floating-point numbers. Quoted values (e.g. `"hello"`, `'123'`, `"0xFF"`) are preserved as raw byte strings (`Field::Bytes`) instead of numbers, preserving exact text for character/byte patterns (`c` / `C`).
+- **`--input-integers`**: Read newline-separated integers from text input (also supporting `0x`, `0o`, and `0b` prefixes).
 
 ### Packing from Text & Tuples
 
 ```bash
+# Ingest mixed-radix tuples (hex, octal, binary, decimal, negative hex):
+echo "0xFF, 0o77, 0b1010, 42, -0x10" | bdd --input-tuples --output-tuples
+# Outputs: 255,63,10,42,-16
+
+# Pack mixed-radix numbers directly into binary units:
+echo "0x12, 0o77, 0b10110011" | bdd --input-tuples --output-pattern='8U8U8U' --output-hex
+# Outputs: 123fb3
+
 # Pack octal numbers from text tuples into binary:
 printf "1,2,3\n3,7,7\n" | bdd --input-tuples --output-pattern='2U3U3U' | od -t o1
 # Outputs: 123 377

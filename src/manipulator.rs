@@ -1,7 +1,7 @@
 use crate::error::BddError;
 use crate::field::Field;
 use num_bigint::BigInt;
-use num_traits::{Num, One, Signed, ToPrimitive, Zero};
+use num_traits::{One, Signed, ToPrimitive, Zero};
 
 fn resolve_index(len: usize, idx: isize) -> Option<usize> {
     if idx >= 0 {
@@ -81,31 +81,12 @@ pub fn parse_bigint_param(s: &str, opt_name: &str) -> Result<BigInt, BddError> {
             opt_name
         )));
     }
-    let (sign, rest) = if let Some(stripped) = trimmed.strip_prefix('-') {
-        (-1, stripped)
-    } else if let Some(stripped) = trimmed.strip_prefix('+') {
-        (1, stripped)
-    } else {
-        (1, trimmed)
-    };
-
-    let val = if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
-        BigInt::from_str_radix(hex, 16)
-    } else if let Some(bin) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
-        BigInt::from_str_radix(bin, 2)
-    } else if let Some(oct) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
-        BigInt::from_str_radix(oct, 8)
-    } else {
-        BigInt::from_str_radix(rest, 10)
-    };
-
-    match val {
-        Ok(v) => Ok(if sign == -1 { -v } else { v }),
-        Err(_) => Err(BddError::ManipulatorArgumentError(format!(
+    crate::field::parse_radix_bigint(trimmed).ok_or_else(|| {
+        BddError::ManipulatorArgumentError(format!(
             "Parameter in {} must be a valid number (got '{}')",
             opt_name, s
-        ))),
-    }
+        ))
+    })
 }
 
 fn parse_fp(arg: &str, opt_name: &str) -> Result<(isize, BigInt), BddError> {

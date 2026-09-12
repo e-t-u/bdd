@@ -345,11 +345,11 @@ but --count, --skip and tuple manipulation options can be used.
 
 Allowed types and their internal representations are:
 
-   Integers (signed bignums)
+   Integers: signed bignums supporting decimal, hexadecimal (\f(CR0x...\fR / \f(CR0X...\fR), octal (\f(CR0o...\fR / \f(CR0O...\fR), and binary (\f(CR0b...\fR / \f(CR0B...\fR) notations
 .br
-   Floats (translated as IEEE 754 64-bit floating point numbers)
+   Floats: translated as IEEE 754 64-bit floating point numbers
 .br
-   Strings (UTF-8, enclosed in quotes like "123" to prevent numeric coercion)
+   Strings: UTF-8, enclosed in quotes like "123" or "0xFF" to prevent numeric coercion
 
 .SS Manipulate tuple
 
@@ -843,6 +843,9 @@ All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain
 .SS bdd --input-pattern=8U8U --rearrange=1,0 --output-pattern=8U8U
 
     Swap two consecutive bytes.
+
+.SS echo "0xFF, 0o77, 0b1010, 42" | bdd --input-tuples --output-tuples
+    Ingest mixed-radix tuples (prints 255,63,10,42)
 
 .SS echo -en '1,2,3\n3,7,7' | bdd --input-tuples --output-pattern='2U3U3U' | od -t o1
 

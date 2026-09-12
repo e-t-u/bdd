@@ -1,6 +1,6 @@
 use crate::counter::Counter;
 use crate::error::BddError;
-use crate::field::{reverse_bits, Field};
+use crate::field::{parse_radix_bigint, reverse_bits, Field};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, Zero};
 use rand::RngCore;
@@ -612,9 +612,9 @@ impl<R: BufRead> UnitStream for IntegerInputStream<R> {
                     if !self.counter.included() {
                         continue;
                     }
-                    let bi = match trimmed.parse::<BigInt>() {
-                        Ok(i) => i,
-                        Err(_) => {
+                    let bi = match parse_radix_bigint(trimmed) {
+                        Some(i) => i,
+                        None => {
                             crate::diag::warn(format!(
                                 "Non-integer '{}' interpreted as zero",
                                 trimmed
@@ -737,7 +737,7 @@ impl<R: BufRead> TupleDirectInput<R> {
                     for (field_str, is_quoted) in parsed_fields {
                         if is_quoted {
                             tuple.push(Field::Bytes(field_str.into_bytes()));
-                        } else if let Ok(bi) = field_str.parse::<BigInt>() {
+                        } else if let Some(bi) = parse_radix_bigint(&field_str) {
                             if bi.is_negative() {
                                 tuple.push(Field::Int(bi));
                             } else {

@@ -820,6 +820,73 @@ fn test_quoted_strings_in_input_tuples() {
 }
 
 #[test]
+fn test_radix_numbers_in_input_tuples_and_integers() {
+    // 1. Test hex, octal, binary, and negative literals in --input-tuples
+    let mut child = Command::new(BDD_BIN)
+        .args([
+            "--input-tuples",
+            "--output-tuples",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "0xFF, 0o77, 0b1010, 42, -0x10").unwrap();
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.trim(), "255,63,10,42,-16");
+
+    // 2. Test packing mixed-radix tuples to binary output
+    let mut child2 = Command::new(BDD_BIN)
+        .args([
+            "--input-tuples",
+            "--output-pattern=8U8U8U",
+            "--output-hex",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child2.stdin.as_mut().unwrap();
+        writeln!(stdin, "0x12, 0o77, 0b10110011").unwrap();
+    }
+
+    let output2 = child2.wait_with_output().expect("failed to wait for bdd");
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    assert_eq!(stdout2.trim(), "123fb3");
+
+    // 3. Test radix numbers in --input-integers
+    let mut child3 = Command::new(BDD_BIN)
+        .args([
+            "--input-integers",
+            "--output-hex",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child3.stdin.as_mut().unwrap();
+        writeln!(stdin, "0xFF\n0o77\n0b1010\n42").unwrap();
+    }
+
+    let output3 = child3.wait_with_output().expect("failed to wait for bdd");
+    assert!(output3.status.success());
+    let stdout3 = String::from_utf8(output3.stdout).unwrap();
+    assert_eq!(stdout3.trim(), "ff 3f 0a 2a");
+}
+
+#[test]
 fn test_multi_file_merge_round_robin() {
     let m1_path = "/tmp/bdd_merge_test_m1.bin";
     let m2_path = "/tmp/bdd_merge_test_m2.bin";

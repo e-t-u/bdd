@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 02:26:06 2026 -->
+<!-- CreationDate: Sun Sep 13 02:54:03 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -51,6 +51,7 @@
 <a href="#bdd --input-unit=3">bdd --input-unit=3</a><br>
 <a href="#bdd --input-unit=1 --output-pattern=1U1z">bdd --input-unit=1 --output-pattern=1U1z</a><br>
 <a href="#bdd --input-pattern=8U8U --rearrange=1,0 --output-pattern=8U8U">bdd --input-pattern=8U8U --rearrange=1,0 --output-pattern=8U8U</a><br>
+<a href="#echo 0xFF, 0o77, 0b1010, 42 | bdd --input-tuples --output-tuples">echo 0xFF, 0o77, 0b1010, 42 | bdd --input-tuples --output-tuples</a><br>
 <a href="#echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1">echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1</a><br>
 <a href="#bdd --input-counter --count=16 --output-hex">bdd --input-counter --count=16 --output-hex</a><br>
 <a href="#bdd --input-counter --count=16 --input-unit=12 --output-unit=12--merge-file=/etc/passwd --output-hex">bdd --input-counter --count=16 --input-unit=12 --output-unit=12--merge-file=/etc/passwd --output-hex</a><br>
@@ -638,12 +639,14 @@ manipulation options can be used.</p>
 <p style="margin-left:18%; margin-top: 1em">Allowed types
 and their internal representations are:</p>
 
-<p style="margin-left:18%; margin-top: 1em">Integers
-(signed bignums) <br>
-Floats (translated as IEEE 754 64-bit floating point
-numbers) <br>
-Strings (UTF-8, enclosed in quotes like &quot;123&quot; to
-prevent numeric coercion)</p>
+<p style="margin-left:18%; margin-top: 1em">Integers:
+signed bignums supporting decimal, hexadecimal (0x... /
+0X...), octal (0o... / 0O...), and binary (0b... / 0B...)
+notations <br>
+Floats: translated as IEEE 754 64-bit floating point numbers
+<br>
+Strings: UTF-8, enclosed in quotes like &quot;123&quot; or
+&quot;0xFF&quot; to prevent numeric coercion</p>
 
 <h3>Manipulate tuple
 <a name="Manipulate tuple"></a>
@@ -1665,6 +1668,14 @@ Four two-bit units are packed to one byte.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Swap two
 consecutive bytes.</p>
+
+<h3>echo 0xFF, 0o77, 0b1010, 42 | bdd --input-tuples --output-tuples
+<a name="echo 0xFF, 0o77, 0b1010, 42 | bdd --input-tuples --output-tuples"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Ingest
+mixed-radix tuples (prints 255,63,10,42)</p>
 
 <h3>echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1
 <a name="echo -en &rsquo;1,2,30,7,7&rsquo; | bdd --input-tuples --output-pattern=&rsquo;2U3U3U&rsquo; | od-t o1"></a>

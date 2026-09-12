@@ -1,6 +1,33 @@
 use num_bigint::{BigInt, BigUint, Sign};
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::{Num, One, ToPrimitive, Zero};
 use std::fmt;
+
+/// Parses an integer string supporting decimal, hex (`0x`/`0X`), octal (`0o`/`0O`), and binary (`0b`/`0B`) prefixes.
+pub fn parse_radix_bigint(s: &str) -> Option<BigInt> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (sign, rest) = if let Some(stripped) = trimmed.strip_prefix('-') {
+        (-1, stripped)
+    } else if let Some(stripped) = trimmed.strip_prefix('+') {
+        (1, stripped)
+    } else {
+        (1, trimmed)
+    };
+
+    let val = if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        BigInt::from_str_radix(hex, 16).ok()
+    } else if let Some(bin) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        BigInt::from_str_radix(bin, 2).ok()
+    } else if let Some(oct) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        BigInt::from_str_radix(oct, 8).ok()
+    } else {
+        BigInt::from_str_radix(rest, 10).ok()
+    };
+
+    val.map(|v| if sign == -1 { -v } else { v })
+}
 
 /// Represents a single field value within a tuple.
 #[derive(Debug, Clone, PartialEq)]
