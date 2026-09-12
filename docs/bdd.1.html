@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 07:29:17 2026 -->
+<!-- CreationDate: Sat Sep 12 07:48:12 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -436,8 +436,10 @@ K - i - auto-incrementing unit counter or unsigned integer
 
 <p style="margin-left:9%; margin-top: 1em">Bit widths in
 pattern specifications are optional. Omitting the bit count
-applies natural defaults: <i>B</i> defaults to 8 bits,
-<i>F</i>/<i>f</i> to 32 bits, <i>D</i>/<i>d</i> to 64 bits,
+applies natural defaults: <i>B</i> defaults to 8 bits
+(identical to 8U or 8B in big-endian bit order; conversely
+8u reverses bit order within the byte), <i>F</i>/<i>f</i> to
+32 bits, <i>D</i>/<i>d</i> to 64 bits,
 <i>H</i>/<i>h</i>/<i>Y</i>/<i>y</i> to 16 bits,
 <i>E</i>/<i>e</i>/<i>Q</i>/<i>q</i>/<i>C</i>/<i>c</i>/<i>K</i>/<i>k</i>
 to 8 bits, <i>m</i> to 4 bits, and single-bit types
@@ -446,14 +448,19 @@ default to 1 bit.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Patterns also
 support repetition multipliers in the format
-<i>COUNT*SPEC</i> or <i>COUNT*(SPEC1 SPEC2 ...)</i>. For
-example, 4*8B or 4*B expands to four 8-bit unsigned bytes,
-and 2*(4U4u) expands to 4U4u4U4u. Patterns also support
-named fields in the format <i>name:SPEC</i> or
-<i>name:COUNT*SPEC</i> (e.g. sync:11u,version:2u or w:4*6E
-which expands to w_0:6E,w_1:6E,w_2:6E,w_3:6E). Field names
-automatically label JSON object keys with --json-object and
-generate CSV header lines. <br>
+<i>COUNT*SPEC</i> or <i>COUNT*(SPEC1 SPEC2 ...)</i>. A
+multiplier creates <i>COUNT</i> separate fields in the
+tuple, not one combined integer. For example, 8*3U expands
+to eight separate 3-bit fields 3U3U3U3U3U3U3U3U (producing
+an 8-field tuple, total 24 bits), whereas 24U produces a
+single 24-bit integer field. Likewise, 4*8B or 4*B expands
+to four 8-bit unsigned bytes, and 2*(4U4u) expands to
+4U4u4U4u. Patterns also support named fields in the format
+<i>name:SPEC</i> or <i>name:COUNT*SPEC</i> (e.g.
+sync:11u,version:2u or w:4*6E which expands to
+w_0:6E,w_1:6E,w_2:6E,w_3:6E). Field names automatically
+label JSON object keys with --json-object and generate CSV
+header lines. <br>
 --preset=NAME</p>
 
 <p style="margin-left:18%;">Select a predefined binary

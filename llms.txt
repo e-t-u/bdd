@@ -56,9 +56,9 @@ Bit widths are optional; bare type letters use natural defaults (`B`=8, `f`/`F`=
 - `m`: NVIDIA NVFP4 E2M1 floating-point (`4m`, bare `m` = 4 bits)
 
 ### Multipliers & Field Names
-- Repetition: `4*8B` expands to `8B8B8B8B`
-- Named repetition: `w:4*6E` expands to `w_0:6E,w_1:6E,w_2:6E,w_3:6E`
-- Named fields: `sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u`
+- Repetition: `COUNT*SPEC` repeats the field definition and creates `COUNT` separate fields in the tuple (e.g. `8*3U` expands to eight separate 3-bit fields: `3U3U3U3U3U3U3U3U`, NOT a single 24-bit integer; `4*8B` expands to four byte fields `8B8B8B8B`).
+- Named repetition: `w:4*6E` expands to `w_0:6E,w_1:6E,w_2:6E,w_3:6E` (4 distinct named fields).
+- Named fields: `sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u`.
 
 ---
 

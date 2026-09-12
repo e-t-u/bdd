@@ -287,10 +287,12 @@ necessary and it makes sense to output them to the bit stream:
 .br
     K - i  - auto-incrementing unit counter or unsigned integer (msb)
 .PP
-Bit widths in pattern specifications are optional. Omitting the bit count applies natural defaults: \fIB\fR defaults to 8 bits, \fIF\fR/\fIf\fR to 32 bits, \fID\fR/\fId\fR to 64 bits, \fIH\fR/\fIh\fR/\fIY\fR/\fIy\fR to 16 bits, \fIE\fR/\fIe\fR/\fIQ\fR/\fIq\fR/\fIC\fR/\fIc\fR/\fIK\fR/\fIk\fR to 8 bits, \fIm\fR to 4 bits, and single-bit types \fIU\fR/\fIu\fR/\fIS\fR/\fIs\fR/\fIx\fR/\fIX\fR/\fIz\fR/\fIo\fR/\fIr\fR default to 1 bit.
+Bit widths in pattern specifications are optional. Omitting the bit count applies natural defaults: \fIB\fR defaults to 8 bits (identical to \f(CR8U\fR or \f(CR8B\fR in big-endian bit order; conversely \f(CR8u\fR reverses bit order within the byte), \fIF\fR/\fIf\fR to 32 bits, \fID\fR/\fId\fR to 64 bits, \fIH\fR/\fIh\fR/\fIY\fR/\fIy\fR to 16 bits, \fIE\fR/\fIe\fR/\fIQ\fR/\fIq\fR/\fIC\fR/\fIc\fR/\fIK\fR/\fIk\fR to 8 bits, \fIm\fR to 4 bits, and single-bit types \fIU\fR/\fIu\fR/\fIS\fR/\fIs\fR/\fIx\fR/\fIX\fR/\fIz\fR/\fIo\fR/\fIr\fR default to 1 bit.
 .PP
 Patterns also support repetition multipliers in the format \fICOUNT*SPEC\fR or \fICOUNT*(SPEC1 SPEC2 ...)\fR.
-For example, \f(CR4*8B\fR or \f(CR4*B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
+A multiplier creates \fICOUNT\fR separate fields in the tuple, not one combined integer.
+For example, \f(CR8*3U\fR expands to eight separate 3-bit fields \f(CR3U3U3U3U3U3U3U3U\fR (producing an 8-field tuple, total 24 bits), whereas \f(CR24U\fR produces a single 24-bit integer field.
+Likewise, \f(CR4*8B\fR or \f(CR4*B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
 Patterns also support named fields in the format \fIname:SPEC\fR or \fIname:COUNT*SPEC\fR (e.g. \f(CRsync:11u,version:2u\fR or \f(CRw:4*6E\fR which expands to \f(CRw_0:6E,w_1:6E,w_2:6E,w_3:6E\fR). Field names automatically label JSON object keys with --json-object and generate CSV header lines.
 
 .TP

@@ -226,7 +226,7 @@ Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a un
 Every field in an `--input-pattern` or `--output-pattern` is specified as `[<bits>]<type>` (with optional repetition multipliers like `4*8B`, `4*B`, or `2*(4U4u)`).
 
 When `<bits>` is omitted, natural bit width defaults are automatically assigned:
-- `B` $\to$ 8 bits (byte)
+- `B` $\to$ 8 bits (byte; identical to `8U` or `8B` in standard big-endian bit order. Conversely, `8u` reverses bit order within the byte, matching `8b`).
 - `F` / `f` $\to$ 32 bits (IEEE 754 single)
 - `D` / `d` $\to$ 64 bits (IEEE 754 double)
 - `H` / `h` / `Y` / `y` $\to$ 16 bits (FP16 / BF16)
@@ -258,10 +258,17 @@ When `<bits>` is omitted, natural bit width defaults are automatically assigned:
 | `nr` | Fill Random | Inserts $n$ pseudo-random bits (default 1 bit) | Any positive integer | Output only |
 
 ### Pattern Repetition Multipliers
-Patterns support multiplier syntax for repetitive fields and tensor arrays:
-- `4*8B`: Expands to `8B8B8B8B` (4 bytes).
-- `10*16H`: Expands to ten 16-bit half-precision floats.
-- `2*(4U4u)`: Expands to `4U4u4U4u`.
+
+Patterns support multiplier syntax for repetitive fields, arrays, and tensor weights:
+`COUNT*SPEC` or `COUNT*(SPEC1 SPEC2 ...)`
+
+> [!IMPORTANT]
+> A multiplier creates **$N$ separate fields** in the tuple, **not** a single combined integer.
+> - `8*3U` expands to eight separate 3-bit fields: `3U3U3U3U3U3U3U3U` (producing an 8-field tuple `(f0, f1, f2, f3, f4, f5, f6, f7)`, total width 24 bits). To extract a single 24-bit integer, use `24U` instead.
+> - `4*8B` (or `4*B`) expands to four 8-bit byte fields: `8B8B8B8B`.
+> - `10*16H` expands to ten 16-bit half-precision float fields.
+> - `2*(4U4u)` expands to four alternating fields: `4U4u4U4u`.
+> - Named repetition `w:8*3U` expands to eight indexed fields: `w_0:3U, w_1:3U, ..., w_7:3U`.
 
 ### Distinction Between `S` and `M`
 
