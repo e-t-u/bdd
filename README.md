@@ -245,7 +245,7 @@ bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
 # 7. Output Framing: Pack raw 13-bit PIDs back into 188-byte container frames:
 bdd "13 -> 188B[11:13]" < pids.bin > framed.ts
 
-# 8. Positional Tuple Patterns (Unpack two 4-bit nibbles from each byte, swap fields, repack):
+# 8. Positional Tuple Patterns (Unpack two 4-bit nibbles [A, B], output in order [B, A] via --rearrange=1,0, repack):
 bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
 
 # 9. Positional Output Pattern with Text Tuples (Pack comma-separated "1,2" pairs into 1 byte):
@@ -407,7 +407,14 @@ Once unpacked into a tuple, fields can be transformed using pipeline manipulator
 
 ### Pipeline Manipulators
 
-- **`--rearrange=F0,F1,...`**: Reorders, duplicates, or drops fields (e.g., `--rearrange=1,0`).
+- **`--rearrange=F0,F1,...`**: Assembles the output tuple by listing the input field indices in the exact order you want them in the result. **This is not an imperative sequence of swap actions; it directly defines the output field order:**
+  - Each entry in the comma-separated list specifies *which input field index* is placed into that slot of the result tuple.
+  - Given an input tuple with 3 fields `[A, B, C]` (indices `0, 1, 2`):
+    - `--rearrange=1,0,2` $\to$ `[B, A, C]` *(slot 0 gets input field 1, slot 1 gets field 0, slot 2 gets field 2)*
+    - `--rearrange=2,1,0` $\to$ `[C, B, A]` *(reverses the fields)*
+    - `--rearrange=1,0` $\to$ `[B, A]` *(drops field 2 entirely)*
+    - `--rearrange=0,0,1` $\to$ `[A, A, B]` *(duplicates field 0)*
+    - `--rearrange=-1` $\to$ `[C]` *(negative indices count backwards from the end: `-1` is last, `-2` second-to-last)*
 - **`--round=FIELD,LIMIT[,MODE]`** or **`--round=FIELD,MODE`** *(alias: `--cut-maxint`)*: Rounds floating-point fields or clamps/bounds integer fields within `[-LIMIT, LIMIT]` (or `[0, LIMIT]` if unsigned). `MODE` can be specified using comma or colon (e.g. `--round 0,floor` or `--round 0,127,wrap`). When `LIMIT` is omitted, the rounding mode is applied without magnitude clamping. Supported modes:
   - `saturate` / `clamp` (default when limit is specified): Clamps out-of-bounds values to `LIMIT` or `-LIMIT`.
   - `wrap` / `wrapping`: Wraps values around using modular arithmetic (`[0, LIMIT]` for unsigned, `[-LIMIT, LIMIT]` for signed).
@@ -960,7 +967,7 @@ Bit Reversal Options:
       --output-little-endian       Combined byte and unit reversal for output
 
 Tuple Manipulators:
-      --rearrange <FIELDS>         Reorder output fields (e.g. "1,0" or "-1,0")
+      --rearrange <FIELDS>         Explicit output field order by input index (e.g. "1,0,2", "1,0", "-1", "0,0")
       --round <F,LIMIT[,MODE]>     Round or clamp field F (alias: --cut-maxint; modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
       --remove-right <F,BITS>      Right-shift field F by BITS
       --shift-right <F,BITS>       Right-shift field F by BITS (synonym)

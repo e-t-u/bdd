@@ -358,12 +358,19 @@ The manipulation pipeline is ordered and stackable: operations execute in the ex
 
 .TP
 --rearrange=FIELDLIST
-Selects fields from input tuple for output tuple. Comma-separated list
-of field numbers starting from 0 (field 0 is the first field in the
-tuple).  Negative field number refers to the field counting from the
-end of the tuple (-1 is the last field). The same field number can
-exist several times duplicating the input field. Not all input fields
-need to be in the output tuple.
+Constructs the output tuple by listing the input field indices in the exact order you want them in the result. This is not an imperative sequence of swap actions; it directly defines the output field order.
+.IP
+Each item in \fIFIELDLIST\fR specifies which input field index is placed into that slot of the result tuple. For example, given an input tuple with 3 fields \fB[A, B, C]\fR (indices 0, 1, 2):
+.IP \(bu 2
+\fB--rearrange=1,0,2\fR produces \fB[B, A, C]\fR (slot 0 gets input field 1, slot 1 gets field 0, slot 2 gets field 2).
+.IP \(bu 2
+\fB--rearrange=2,1,0\fR produces \fB[C, B, A]\fR (reverses the tuple).
+.IP \(bu 2
+\fB--rearrange=1,0\fR produces \fB[B, A]\fR (drops input field 2).
+.IP \(bu 2
+\fB--rearrange=0,0,1\fR produces \fB[A, A, B]\fR (duplicates input field 0).
+.IP \(bu 2
+\fB--rearrange=-1\fR selects only the last field (negative indices count backwards from the end: -1 is the last field, -2 is second to last).
 
 .TP
 --add=FIELD,VALUE
@@ -804,7 +811,7 @@ All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain
 
 .SS bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
 
-    Unpack each binary byte into two 4-bit nibbles, swap fields, and repack into bytes.
+    Unpack each binary byte into two 4-bit nibbles [A, B], output in order [B, A], and repack into bytes.
 
 .SS bdd 4U4U --input-tuples --output-hex < pairs.txt
 

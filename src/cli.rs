@@ -119,6 +119,7 @@ pub struct Cli {
     pub count: Option<String>,
 
     // Manipulate tuples
+    /// Construct result tuple by listing input field indices in desired output order (e.g. "1,0,2", "-1,0", "0,0")
     #[arg(long, default_missing_value = "", num_args = 0..=1)]
     pub rearrange: Option<String>,
 

@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 02:13:18 2026 -->
+<!-- CreationDate: Sun Sep 13 02:19:04 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -660,61 +660,131 @@ bit shifts, logical masks, filtering, and reordering) can be
 chained together. <br>
 --rearrange=FIELDLIST</p>
 
-<p style="margin-left:18%;">Selects fields from input tuple
-for output tuple. Comma-separated list of field numbers
-starting from 0 (field 0 is the first field in the tuple).
-Negative field number refers to the field counting from the
-end of the tuple (-1 is the last field). The same field
-number can exist several times duplicating the input field.
-Not all input fields need to be in the output tuple.</p>
+<p style="margin-left:18%;">Constructs the output tuple by
+listing the input field indices in the exact order you want
+them in the result. This is not an imperative sequence of
+swap actions; it directly defines the output field
+order.</p>
+
+<p style="margin-left:18%; margin-top: 1em">Each item in
+<i>FIELDLIST</i> specifies which input field index is placed
+into that slot of the result tuple. For example, given an
+input tuple with 3 fields <b>[A, B, C]</b> (indices 0, 1,
+2):</p>
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>--rearrange=1,0,2</b> produces <b>[B, A, C]</b> (slot
+0 gets input field 1, slot 1 gets field 0, slot 2 gets field
+2).</p> </td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>--rearrange=2,1,0</b> produces <b>[C, B, A]</b>
+(reverses the tuple).</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>--rearrange=1,0</b> produces <b>[B, A]</b> (drops
+input field 2).</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>--rearrange=0,0,1</b> produces <b>[A, A, B]</b>
+(duplicates input field 0).</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>--rearrange=-1</b> selects only the last field
+(negative indices count backwards from the end: -1 is the
+last field, -2 is second to last).</p></td></tr>
+</table>
 
 <p style="margin-left:9%;">--add=FIELD,VALUE</p>
 
-<p style="margin-left:18%;">Adds VALUE to the numerical
+<p style="margin-left:12%;">Adds VALUE to the numerical
 value of FIELD.</p>
 
 <p style="margin-left:9%;">--sub=FIELD,VALUE</p>
 
-<p style="margin-left:18%;">Subtracts VALUE from the
+<p style="margin-left:12%;">Subtracts VALUE from the
 numerical value of FIELD.</p>
 
 <p style="margin-left:9%;">--mul=FIELD,VALUE</p>
 
-<p style="margin-left:18%;">Multiplies FIELD by VALUE.</p>
+<p style="margin-left:12%;">Multiplies FIELD by VALUE.</p>
 
 <p style="margin-left:9%;">--div=FIELD,VALUE</p>
 
-<p style="margin-left:18%;">Performs integer or
+<p style="margin-left:12%;">Performs integer or
 floating-point division of FIELD by VALUE.</p>
 
 <p style="margin-left:9%;">--mod=FIELD,VALUE</p>
 
-<p style="margin-left:18%;">Computes modulo remainder of
+<p style="margin-left:12%;">Computes modulo remainder of
 FIELD by VALUE.</p>
 
 <p style="margin-left:9%;">--shift-left=FIELD,BITS</p>
 
-<p style="margin-left:18%;">Shifts FIELD left by BITS bits
+<p style="margin-left:12%;">Shifts FIELD left by BITS bits
 (multiplies by 2&#710;BITS).</p>
 
 <p style="margin-left:9%;">--shift-right=FIELD,BITS</p>
 
-<p style="margin-left:18%;">Shifts FIELD right by BITS bits
+<p style="margin-left:12%;">Shifts FIELD right by BITS bits
 (integer division by 2&#710;BITS).</p>
 
 <p style="margin-left:9%;">--and=FIELD,MASK</p>
 
-<p style="margin-left:18%;">Performs bitwise AND of FIELD
+<p style="margin-left:12%;">Performs bitwise AND of FIELD
 with MASK (decimal, 0x hex, or 0b binary).</p>
 
 <p style="margin-left:9%;">--or=FIELD,MASK</p>
 
-<p style="margin-left:18%;">Performs bitwise OR of FIELD
+<p style="margin-left:12%;">Performs bitwise OR of FIELD
 with MASK (decimal, 0x hex, or 0b binary).</p>
 
 <p style="margin-left:9%;">--xor=FIELD,BITS</p>
 
-<p style="margin-left:18%;">Inverts the rightmost BITS bits
+<p style="margin-left:12%;">Inverts the rightmost BITS bits
 of FIELD, or applies a direct bitwise XOR mask if specified
 in hex or binary format. For example, the sign of a number
 read using pattern &quot;M&quot; can be changed using
@@ -722,23 +792,23 @@ read using pattern &quot;M&quot; can be changed using
 
 <p style="margin-left:9%;">--not=FIELD</p>
 
-<p style="margin-left:18%;">Inverts all bits of FIELD.</p>
+<p style="margin-left:12%;">Inverts all bits of FIELD.</p>
 
 <p style="margin-left:9%;">--abs=FIELD</p>
 
-<p style="margin-left:18%;">Removes sign from the value of
+<p style="margin-left:12%;">Removes sign from the value of
 the field (calculates absolute value). Legacy syntax
 --abs=FIELD,0 is also accepted.</p>
 
 <p style="margin-left:9%;">--sign=FIELD</p>
 
-<p style="margin-left:18%;">Extracts the sign of the field:
+<p style="margin-left:12%;">Extracts the sign of the field:
 1 if the value was negative and 0 if non-negative. Legacy
 syntax --sign=FIELD,0 is also accepted.</p>
 
 <p style="margin-left:9%;">--filter=FIELD,OP,VALUE</p>
 
-<p style="margin-left:18%;">Filters tuples based on a
+<p style="margin-left:12%;">Filters tuples based on a
 predicate condition where OP is one of ==, !=, &lt;, &lt;=,
 &gt;, or &gt;=. Tuples failing the predicate are discarded
 from the output stream.</p>
@@ -746,7 +816,7 @@ from the output stream.</p>
 <p style="margin-left:9%;">--round=FIELD,LIMIT[,MODE] |
 --round=FIELD,MODE</p>
 
-<p style="margin-left:18%;">Rounds floating-point fields or
+<p style="margin-left:12%;">Rounds floating-point fields or
 bounds/clamps integer fields within [-LIMIT, LIMIT] (or [0,
 LIMIT] if unsigned). Visible alias: --cut-maxint. When LIMIT
 is omitted (e.g. --round=0,floor or
@@ -759,107 +829,107 @@ Supported modes:</p>
 <table width="100%" border="0" rules="none" frame="void"
        cellspacing="0" cellpadding="0">
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>saturate</b> or <b>clamp</b> (default): Clamps
 out-of-range values to MAXINT or -MAXINT.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>wrap</b> or <b>wrapping</b>: Wraps values around
 using modular arithmetic (modulo MAXINT+1 for unsigned, or
 across [-MAXINT, MAXINT] for signed).</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>zero</b> or <b>reset</b>: Replaces out-of-range
 values with zero.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>drop</b> or <b>filter</b>: Discards the entire tuple
 from the output stream if value exceeds bounds.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>trunc</b>: Truncates magnitude toward zero.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>floor</b>: Rounds toward negative infinity.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>ceil</b>: Rounds toward positive infinity.</p></td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>round</b>: Rounds to nearest neighbor, ties away from
 zero.</p> </td></tr>
 <tr valign="top" align="left">
-<td width="18%"></td>
+<td width="12%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="2%"></td>
-<td width="79%">
+<td width="1%"></td>
+<td width="86%">
 
 
 <p><b>round_ties_even</b>: Rounds to nearest neighbor, ties
@@ -871,7 +941,7 @@ rounding).</p> </td></tr>
 when the position is counted from the end of the tuple. <br>
 --remove-right=FIELD,BITS</p>
 
-<p style="margin-left:18%;">If we want to output other bits
+<p style="margin-left:12%;">If we want to output other bits
 from the field than the rightmost ones, we can remove BITS
 rightmost bits from the field.</p>
 
@@ -1500,8 +1570,8 @@ streams.</p>
 
 
 <p style="margin-left:9%; margin-top: 1em">Unpack each
-binary byte into two 4-bit nibbles, swap fields, and repack
-into bytes.</p>
+binary byte into two 4-bit nibbles [A, B], output in order
+[B, A], and repack into bytes.</p>
 
 <h3>bdd 4U4U --input-tuples --output-hex &lt; pairs.txt
 <a name="bdd 4U4U --input-tuples --output-hex &lt; pairs.txt"></a>
