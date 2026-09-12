@@ -7,11 +7,15 @@ pub mod cli;
 pub mod counter;
 pub mod engine;
 pub mod error;
+pub mod explain;
 pub mod ffi;
 pub mod field;
 pub mod float_types;
 pub mod manipulator;
+pub mod mcp;
 pub mod pattern;
+pub mod preset;
+pub mod probe;
 pub mod sink;
 pub mod stream;
 

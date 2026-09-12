@@ -7,15 +7,33 @@ use rand::RngCore;
 /// A single token in a bitstream pattern specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternItem {
+    pub name: Option<String>,
     pub bits: usize,
     pub char_code: char,
 }
 
-/// Expands repetition multipliers in pattern strings, e.g. "4*8B" -> "8B8B8B8B"
-/// and "2*(4U4U)" -> "4U4U4U4U".
-pub fn expand_pattern_multipliers(s: &str) -> String {
+fn expand_single_token(s: &str) -> String {
+    let s = s.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let (name, body) = if let Some(colon) = s.find(':') {
+        let n = s[..colon].trim();
+        let b = s[colon + 1..].trim();
+        (
+            if n.is_empty() {
+                None
+            } else {
+                Some(n.to_string())
+            },
+            b,
+        )
+    } else {
+        (None, s)
+    };
+
     let mut out = String::new();
-    let mut chars = s.chars().peekable();
+    let mut chars = body.chars().peekable();
     while let Some(c) = chars.next() {
         if c.is_ascii_digit() {
             let mut num_str = String::new();
@@ -50,8 +68,19 @@ pub fn expand_pattern_multipliers(s: &str) -> String {
                     }
                     let count: usize = num_str.parse().unwrap_or(1);
                     let expanded_inner = expand_pattern_multipliers(&inner);
-                    for _ in 0..count {
-                        out.push_str(&expanded_inner);
+                    for i in 0..count {
+                        if let Some(ref n) = name {
+                            if count > 1 {
+                                if !out.is_empty() && !out.ends_with(',') {
+                                    out.push(',');
+                                }
+                                out.push_str(&format!("{}_{}:{}", n, i, expanded_inner));
+                            } else {
+                                out.push_str(&format!("{}:{}", n, expanded_inner));
+                            }
+                        } else {
+                            out.push_str(&expanded_inner);
+                        }
                     }
                 } else {
                     let mut token_digits = String::new();
@@ -65,11 +94,24 @@ pub fn expand_pattern_multipliers(s: &str) -> String {
                     if let Some(letter) = chars.next() {
                         let count: usize = num_str.parse().unwrap_or(1);
                         let token = format!("{}{}", token_digits, letter);
-                        for _ in 0..count {
-                            out.push_str(&token);
+                        for i in 0..count {
+                            if let Some(ref n) = name {
+                                if count > 1 {
+                                    if !out.is_empty() && !out.ends_with(',') {
+                                        out.push(',');
+                                    }
+                                    out.push_str(&format!("{}_{}:{}", n, i, token));
+                                } else {
+                                    out.push_str(&format!("{}:{}", n, token));
+                                }
+                            } else {
+                                out.push_str(&token);
+                            }
                         }
                     }
                 }
+            } else if let Some(ref n) = name {
+                out.push_str(&format!("{}:{}", n, num_str));
             } else {
                 out.push_str(&num_str);
             }
@@ -80,29 +122,86 @@ pub fn expand_pattern_multipliers(s: &str) -> String {
     out
 }
 
-/// Parse and validate an input pattern string (e.g. "2U3U5U", "32F", "4*8B", "16H", "8E").
+/// Expands repetition multipliers in pattern strings, e.g. "4*8B" -> "8B8B8B8B",
+/// "w:4*6E" -> "w_0:6E,w_1:6E,w_2:6E,w_3:6E", and "2*(4U4U)" -> "4U4U4U4U".
+pub fn expand_pattern_multipliers(s: &str) -> String {
+    if s.contains(',') || s.contains(';') || s.chars().any(|c| c.is_whitespace()) {
+        let mut expanded_tokens = Vec::new();
+        for t in s.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
+            let trimmed = t.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            expanded_tokens.push(expand_single_token(trimmed));
+        }
+        expanded_tokens.join(",")
+    } else {
+        expand_single_token(s)
+    }
+}
+
+/// Parse and validate an input pattern string (e.g. "2U3U5U", "sync:11u,version:2u", "32F", "4*8B", "16H", "8E").
 pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
     let expanded = expand_pattern_multipliers(pattern_str);
     let mut items = Vec::new();
-    let mut digits = String::new();
-    let mut matched_len = 0;
 
-    for c in expanded.chars() {
-        if c.is_ascii_digit() {
-            digits.push(c);
+    let tokens: Vec<&str> = expanded
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        return Err(BddError::MissingInputPattern);
+    }
+
+    for token in tokens {
+        let (name, body) = if let Some(colon) = token.find(':') {
+            let n = token[..colon].trim();
+            let b = token[colon + 1..].trim();
+            (
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n.to_string())
+                },
+                b,
+            )
         } else {
-            let bits = if digits.is_empty() {
-                0
+            (None, token)
+        };
+
+        let mut digits = String::new();
+        let mut is_first = true;
+        for c in body.chars() {
+            if c.is_ascii_digit() {
+                digits.push(c);
             } else {
-                digits.parse::<usize>().unwrap_or(0)
-            };
-            digits.clear();
-            items.push(PatternItem { bits, char_code: c });
-            matched_len += 1;
+                let bits = if digits.is_empty() {
+                    0
+                } else {
+                    digits.parse::<usize>().unwrap_or(0)
+                };
+                digits.clear();
+                let item_name = if is_first {
+                    is_first = false;
+                    name.clone()
+                } else {
+                    None
+                };
+                items.push(PatternItem {
+                    name: item_name,
+                    bits,
+                    char_code: c,
+                });
+            }
+        }
+        if !digits.is_empty() {
+            return Err(BddError::MissingInputPattern);
         }
     }
 
-    if items.is_empty() || matched_len == 0 || !digits.is_empty() {
+    if items.is_empty() {
         return Err(BddError::MissingInputPattern);
     }
 
@@ -144,23 +243,48 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
 pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddError> {
     let expanded = expand_pattern_multipliers(pattern_str);
     let mut items = Vec::new();
-    let mut digits = String::new();
 
-    for c in expanded.chars() {
-        if c.is_ascii_digit() {
-            digits.push(c);
+    let tokens: Vec<&str> = expanded
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        return Err(BddError::MissingOutputPattern);
+    }
+
+    for token in tokens {
+        let body = if let Some(colon) = token.find(':') {
+            token[colon + 1..].trim()
         } else {
-            let bits = if digits.is_empty() {
-                0
+            token
+        };
+
+        let mut digits = String::new();
+        for c in body.chars() {
+            if c.is_ascii_digit() {
+                digits.push(c);
             } else {
-                digits.parse::<usize>().unwrap_or(0)
-            };
-            digits.clear();
-            items.push(PatternItem { bits, char_code: c });
+                let bits = if digits.is_empty() {
+                    0
+                } else {
+                    digits.parse::<usize>().unwrap_or(0)
+                };
+                digits.clear();
+                items.push(PatternItem {
+                    name: None,
+                    bits,
+                    char_code: c,
+                });
+            }
+        }
+        if !digits.is_empty() {
+            return Err(BddError::MissingOutputPattern);
         }
     }
 
-    if items.is_empty() || !digits.is_empty() {
+    if items.is_empty() {
         return Err(BddError::MissingOutputPattern);
     }
 
@@ -216,6 +340,32 @@ impl TupleUnpacker {
             reversed_pattern,
             total_bits,
         })
+    }
+
+    /// Returns field names for the unpacked tuple if any field in the pattern was named.
+    pub fn field_names(&self) -> Option<Vec<String>> {
+        let has_any_name = self.pattern_items.iter().any(|p| p.name.is_some());
+        if !has_any_name {
+            return None;
+        }
+        let mut names = Vec::new();
+        let mut idx = 0;
+        for p in &self.pattern_items {
+            if p.char_code == 'x' {
+                continue;
+            }
+            if p.char_code == 'M' || p.char_code == 'm' {
+                let base = p.name.clone().unwrap_or_else(|| format!("field_{}", idx));
+                names.push(format!("{}_mag", base));
+                names.push(format!("{}_sign", base));
+                idx += 2;
+            } else {
+                let name = p.name.clone().unwrap_or_else(|| format!("field_{}", idx));
+                names.push(name);
+                idx += 1;
+            }
+        }
+        Some(names)
     }
 
     pub fn unpack(&self, mut unit: BigUint) -> Vec<Field> {
@@ -461,10 +611,28 @@ mod tests {
         assert_eq!(
             p[0],
             PatternItem {
+                name: None,
                 bits: 2,
                 char_code: 'U'
             }
         );
+
+        let named_p = parse_input_pattern("sync:11u,version:2u,layer:2u").unwrap();
+        assert_eq!(named_p.len(), 3);
+        assert_eq!(named_p[0].name.as_deref(), Some("sync"));
+        assert_eq!(named_p[1].name.as_deref(), Some("version"));
+        assert_eq!(named_p[2].name.as_deref(), Some("layer"));
+
+        let unpacker_named = TupleUnpacker::new("sync:11u,version:2u").unwrap();
+        assert_eq!(
+            unpacker_named.field_names(),
+            Some(vec!["sync".to_string(), "version".to_string()])
+        );
+
+        let mult_named = parse_input_pattern("w:4*6E").unwrap();
+        assert_eq!(mult_named.len(), 4);
+        assert_eq!(mult_named[0].name.as_deref(), Some("w_0"));
+        assert_eq!(mult_named[3].name.as_deref(), Some("w_3"));
 
         let unpacker = TupleUnpacker::new("8U").unwrap();
         assert_eq!(unpacker.total_bits, 8);

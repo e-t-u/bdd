@@ -6,6 +6,7 @@ This directory provides practical, ready-to-run examples demonstrating how to us
 contrib/
 ├── Makefile                    # Builds C binaries and executes all tests
 ├── README.md                   # This documentation
+├── README.pdf                  # Print-ready vector PDF documentation
 ├── data/                       # Realistic binary sample files
 │   ├── sample.mp3              # MPEG-1 Layer III audio frames (128k & 160k)
 │   ├── sample.ts               # MPEG-2 Transport Stream (188B packets with PIDs 0, 256, 257)

@@ -243,41 +243,90 @@ impl<W: Write> TupleSink for TupleDirectOutput<W> {
 /// Sink formatting tuples as NDJSON records.
 pub struct JsonOutputStream<W> {
     writer: W,
+    field_names: Option<Vec<String>>,
 }
 
 impl<W: Write> JsonOutputStream<W> {
-    pub fn new(writer: W) -> Self {
-        Self { writer }
+    pub fn new(writer: W, field_names: Option<Vec<String>>) -> Self {
+        Self {
+            writer,
+            field_names,
+        }
     }
 }
 
 impl<W: Write> TupleSink for JsonOutputStream<W> {
     fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
-        let items: Vec<String> = tuple
-            .iter()
-            .map(|f| match f {
-                Field::UInt(u) => u.to_string(),
-                Field::Int(i) => i.to_string(),
-                Field::Float(fl) => {
-                    if fl.is_nan() {
-                        "null".to_string()
-                    } else if fl.is_infinite() {
-                        if fl.is_sign_negative() {
-                            "-1e999".to_string()
+        if let Some(ref names) = self.field_names {
+            let mut map = serde_json::Map::new();
+            for (i, f) in tuple.iter().enumerate() {
+                let key = names
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("field_{}", i));
+                let val = match f {
+                    Field::UInt(u) => {
+                        if let Some(n) = u.to_u64() {
+                            serde_json::Value::Number(n.into())
                         } else {
-                            "1e999".to_string()
+                            serde_json::Value::String(u.to_string())
                         }
-                    } else {
-                        format!("{}", fl)
                     }
-                }
-                Field::Bytes(b) => {
-                    let s = String::from_utf8_lossy(b);
-                    format!("\"{}\"", s.escape_default())
-                }
-            })
-            .collect();
-        writeln!(self.writer, "[{}]", items.join(","))?;
+                    Field::Int(i) => {
+                        if let Some(n) = i.to_i64() {
+                            serde_json::Value::Number(n.into())
+                        } else {
+                            serde_json::Value::String(i.to_string())
+                        }
+                    }
+                    Field::Float(fl) => {
+                        if fl.is_nan() || fl.is_infinite() {
+                            serde_json::Value::Null
+                        } else if let Some(n) = serde_json::Number::from_f64(*fl) {
+                            serde_json::Value::Number(n)
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    }
+                    Field::Bytes(b) => {
+                        let s = String::from_utf8_lossy(b).into_owned();
+                        serde_json::Value::String(s)
+                    }
+                };
+                map.insert(key, val);
+            }
+            writeln!(
+                self.writer,
+                "{}",
+                serde_json::to_string(&serde_json::Value::Object(map))?
+            )?;
+        } else {
+            let items: Vec<String> = tuple
+                .iter()
+                .map(|f| match f {
+                    Field::UInt(u) => u.to_string(),
+                    Field::Int(i) => i.to_string(),
+                    Field::Float(fl) => {
+                        if fl.is_nan() {
+                            "null".to_string()
+                        } else if fl.is_infinite() {
+                            if fl.is_sign_negative() {
+                                "-1e999".to_string()
+                            } else {
+                                "1e999".to_string()
+                            }
+                        } else {
+                            format!("{}", fl)
+                        }
+                    }
+                    Field::Bytes(b) => {
+                        let s = String::from_utf8_lossy(b);
+                        format!("\"{}\"", s.escape_default())
+                    }
+                })
+                .collect();
+            writeln!(self.writer, "[{}]", items.join(","))?;
+        }
         Ok(())
     }
 
@@ -470,15 +519,35 @@ mod tests {
             Field::Bytes(b"test".to_vec()),
         ];
 
-        // JSON sink
+        // JSON sink (array)
         let mut json_buf = Vec::new();
         {
-            let mut sink = JsonOutputStream::new(&mut json_buf);
+            let mut sink = JsonOutputStream::new(&mut json_buf, None);
             sink.write_tuple(&tuple).unwrap();
             sink.flush_stream().unwrap();
         }
         let json_str = String::from_utf8(json_buf).unwrap();
         assert_eq!(json_str.trim(), "[10,3.5,\"test\"]");
+
+        // JSON sink (object with field names)
+        let mut json_obj_buf = Vec::new();
+        {
+            let mut sink = JsonOutputStream::new(
+                &mut json_obj_buf,
+                Some(vec![
+                    "count".to_string(),
+                    "val".to_string(),
+                    "tag".to_string(),
+                ]),
+            );
+            sink.write_tuple(&tuple).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let json_obj_str = String::from_utf8(json_obj_buf).unwrap();
+        assert_eq!(
+            json_obj_str.trim(),
+            "{\"count\":10,\"tag\":\"test\",\"val\":3.5}"
+        );
 
         // CSV sink
         let mut csv_buf = Vec::new();

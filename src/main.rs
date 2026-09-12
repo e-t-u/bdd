@@ -5,6 +5,84 @@ use clap::Parser;
 fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
     let cli = Cli::parse();
+
+    if cli.mcp {
+        if let Err(e) = bdd::mcp::run_mcp_server() {
+            eprintln!("{}", e);
+            std::process::exit(e.exit_code());
+        }
+        return;
+    }
+
+    if cli.list_presets {
+        println!("{}", bdd::preset::format_presets_table());
+        return;
+    }
+
+    if let Some(ref pat_opt) = cli.explain_pattern {
+        let pattern_to_explain = if !pat_opt.trim().is_empty() {
+            pat_opt.as_str()
+        } else if let Some(ref ip) = cli.input_pattern {
+            ip.as_str()
+        } else {
+            eprintln!("Error: --explain-pattern requires a pattern string or --input-pattern");
+            std::process::exit(1);
+        };
+
+        match bdd::explain::explain_pattern(pattern_to_explain) {
+            Ok(exp) => {
+                if cli.output_json {
+                    println!("{}", bdd::explain::format_explanation_json(&exp));
+                } else {
+                    println!("{}", bdd::explain::format_explanation_text(&exp));
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(e.exit_code());
+            }
+        }
+    }
+
+    if let Some(ref probe_opt) = cli.probe {
+        let target = if !probe_opt.trim().is_empty() {
+            probe_opt.as_str()
+        } else if cli.input_file != "-" {
+            cli.input_file.as_str()
+        } else {
+            "-"
+        };
+
+        let report = if target == "-" {
+            let mut stdin = std::io::stdin();
+            bdd::probe::probe_reader(&mut stdin, "stdin")
+        } else {
+            match std::fs::File::open(target) {
+                Ok(mut f) => bdd::probe::probe_reader(&mut f, target),
+                Err(e) => {
+                    eprintln!("Cannot open probe target '{}': {}", target, e);
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        match report {
+            Ok(rep) => {
+                if cli.output_json {
+                    println!("{}", bdd::probe::format_probe_json(&rep));
+                } else {
+                    println!("{}", bdd::probe::format_probe_text(&rep));
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(e.exit_code());
+            }
+        }
+    }
+
     let mut config = match validate_and_process(cli) {
         Ok(c) => c,
         Err(e) => {

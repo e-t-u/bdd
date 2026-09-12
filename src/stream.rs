@@ -383,36 +383,38 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
 }
 
 pub struct ZeroStream {
-    remaining: u64,
+    remaining: Option<u64>,
 }
 
 impl ZeroStream {
     pub fn new(counter: Counter) -> Self {
         Self {
-            remaining: counter.count.unwrap_or(0),
+            remaining: counter.count,
         }
     }
 }
 
 impl UnitStream for ZeroStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
-        if self.remaining == 0 {
-            return Ok(None);
+        if let Some(rem) = &mut self.remaining {
+            if *rem == 0 {
+                return Ok(None);
+            }
+            *rem -= 1;
         }
-        self.remaining -= 1;
         Ok(Some(BigUint::zero()))
     }
 }
 
 pub struct OneStream {
-    remaining: u64,
+    remaining: Option<u64>,
     pub unit_size: usize,
 }
 
 impl OneStream {
     pub fn new(counter: Counter, unit_size: usize) -> Self {
         Self {
-            remaining: counter.count.unwrap_or(0),
+            remaining: counter.count,
             unit_size,
         }
     }
@@ -420,34 +422,42 @@ impl OneStream {
 
 impl UnitStream for OneStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
-        if self.remaining == 0 {
-            return Ok(None);
+        if let Some(rem) = &mut self.remaining {
+            if *rem == 0 {
+                return Ok(None);
+            }
+            *rem -= 1;
         }
-        self.remaining -= 1;
         Ok(Some((BigUint::one() << self.unit_size) - 1u32))
     }
 }
 
 pub struct RandomStream {
-    remaining: u64,
+    remaining: Option<u64>,
     pub unit_size: usize,
 }
 
 impl RandomStream {
     pub fn new(counter: Counter, unit_size: usize) -> Self {
-        Self {
-            remaining: counter.count.unwrap_or(0),
+        let mut s = Self {
+            remaining: counter.count,
             unit_size,
+        };
+        for _ in 0..counter.skip {
+            let _ = s.next_unit();
         }
+        s
     }
 }
 
 impl UnitStream for RandomStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
-        if self.remaining == 0 {
-            return Ok(None);
+        if let Some(rem) = &mut self.remaining {
+            if *rem == 0 {
+                return Ok(None);
+            }
+            *rem -= 1;
         }
-        self.remaining -= 1;
         let mut rng = rand::thread_rng();
         let num_bytes = self.unit_size / 8 + 1;
         let mut buf = vec![0u8; num_bytes];
@@ -460,7 +470,7 @@ impl UnitStream for RandomStream {
 }
 
 pub struct CounterStream {
-    remaining: u64,
+    remaining: Option<u64>,
     pub unit_size: usize,
     current_val: u64,
 }
@@ -468,7 +478,7 @@ pub struct CounterStream {
 impl CounterStream {
     pub fn new(counter: Counter, unit_size: usize) -> Self {
         Self {
-            remaining: counter.count.unwrap_or(0),
+            remaining: counter.count,
             unit_size,
             current_val: counter.skip,
         }
@@ -477,10 +487,12 @@ impl CounterStream {
 
 impl UnitStream for CounterStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
-        if self.remaining == 0 {
-            return Ok(None);
+        if let Some(rem) = &mut self.remaining {
+            if *rem == 0 {
+                return Ok(None);
+            }
+            *rem -= 1;
         }
-        self.remaining -= 1;
         let mask = (BigUint::one() << self.unit_size) - 1u32;
         let val = BigUint::from(self.current_val) & mask;
         self.current_val = self.current_val.wrapping_add(1);

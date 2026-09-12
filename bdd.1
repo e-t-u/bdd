@@ -151,7 +151,7 @@ After --input-little-endian, the content is usually read as a big-endian number 
 
 Instead of the file input, the input can be one of these fake inputs. You can use 
 either file input or one of these fake inputs.
-You must use --count to tell how many units the fake input has (except for --input-integers).
+The --count option specifies how many units the fake input produces. If --count is omitted, fake inputs stream indefinitely until standard output pipe breaks or the process is terminated.
 
 Values of fake inputs are truncated to the input unit size. For example, if you use
 --input-counter with input unit size 8 and output unit size 9, the topmost bit of the
@@ -284,6 +284,15 @@ necessary and it makes sense to output them to the bit stream:
 .PP
 Patterns also support repetition multipliers in the format \fICOUNT*SPEC\fR or \fICOUNT*(SPEC1 SPEC2 ...)\fR.
 For example, \f(CR4*8B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
+Patterns also support named fields in the format \fIname:SPEC\fR or \fIname:COUNT*SPEC\fR (e.g. \f(CRsync:11u,version:2u\fR or \f(CRw:4*6E\fR which expands to \f(CRw_0:6E,w_1:6E,w_2:6E,w_3:6E\fR). Field names automatically label JSON object keys with --json-object and generate CSV header lines.
+
+.TP
+--preset=NAME
+Select a predefined binary protocol or AI float format preset. Automatically configures --input-pattern, --input-unit, and field names. Supported presets include \fBmp3-header\fR, \fBmpeg-ts\fR, \fBwav-header\fR, \fBjpeg-sof0\fR, \fBh264-nal\fR, \fBnvfp4\fR, \fBfp6-e3m2\fR, \fBfp8-e4m3\fR, \fBfp8-e5m2\fR, \fBbf16\fR, \fBfp16\fR, \fBipv4-header\fR, and \fBriscv-r-type\fR.
+
+.TP
+--list-presets
+Print a formatted table of all available built-in presets with pattern definitions, unit widths, and descriptions, then exit.
 
 S and s should be used with caution. If negative value is
 used in making a unit, it will cause an error. The only
@@ -644,7 +653,15 @@ Look --output-hex for more information.
 
 .TP
 --output-json
-Output stream of structured JSON objects (NDJSON), one object per line with typed field names and decoded values.
+Output stream of structured JSON arrays or objects (NDJSON), one record per line. When named patterns, presets, or --json-fields are used, emits keyed JSON dictionaries.
+
+.TP
+--json-object
+Force JSON output to be emitted as keyed JSON objects instead of positional arrays. Field keys default to pattern names (e.g. \f(CRsync:11u\fR), custom --json-fields, or auto-generated \f(CRfield_0, field_1, ...\fR keys.
+
+.TP
+--json-fields=NAME1,NAME2,...
+Explicit comma-separated list of field names used for JSON object keys and CSV column headers.
 
 .TP
 --output-csv
@@ -671,6 +688,20 @@ Demux tuple fields in order to a comma-separated list of target files.
 .TP
 --input-repeat=COUNT
 Loop through the input stream COUNT times (supports seeking or memory buffering).
+
+.SS Analysis, Inspection and Model Context Protocol (MCP)
+
+.TP
+--explain-pattern[=PATTERN]
+Analyze and display the structural breakdown of PATTERN (or the pattern set via --preset or --input-pattern), reporting total bits, bytes, byte alignment, and per-field bit ranges, byte offsets, and data types. If --output-json is specified, produces structured JSON output suitable for AI tooling and IDE extensions.
+
+.TP
+--probe[=FILENAME]
+Deeply inspect the input file (or standard input if omitted). Computes Shannon entropy, byte class frequencies (nulls, printable ASCII, high bytes), periodic stride autocorrelation across offsets 1..512 bytes (detecting periodic formats like 188-byte MPEG-TS packets, 24-bit audio, or fixed-width telemetry frames), and extracts prominent ASCII string runs. If --output-json is specified, outputs full structured JSON metrics.
+
+.TP
+--mcp
+Run native JSON-RPC 2.0 Model Context Protocol (MCP) server over standard input and standard output. Exposes four tools for AI agent pair programming, binary reverse engineering, and pipeline automation: \fBbdd_slice\fR (extract, transcode, and slice bitstreams into text or JSON), \fBbdd_probe\fR (probing binary blobs for entropy and periodicity), \fBbdd_explain_pattern\fR (inspecting schema bit layouts), and \fBbdd_list_presets\fR (cataloging built-in protocols).
 
 .SH EXAMPLES
 

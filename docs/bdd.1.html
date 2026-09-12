@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 06:38:39 2026 -->
+<!-- CreationDate: Sat Sep 12 07:09:31 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -37,6 +37,7 @@
 <a href="#Merge output with another data stream:">Merge output with another data stream:</a><br>
 <a href="#Show output as human readable">Show output as human readable</a><br>
 <a href="#Stream demuxing and routing">Stream demuxing and routing</a><br>
+<a href="#Analysis, Inspection and Model Context Protocol (MCP)">Analysis, Inspection and Model Context Protocol (MCP)</a><br>
 <a href="#EXAMPLES">EXAMPLES</a><br>
 <a href="#bdd &lt; foo &gt; bar">bdd &lt; foo &gt; bar</a><br>
 <a href="#bdd --input-unit=3">bdd --input-unit=3</a><br>
@@ -286,9 +287,11 @@ big-endian number in --input-pattern!</p>
 
 <p style="margin-left:9%; margin-top: 1em">Instead of the
 file input, the input can be one of these fake inputs. You
-can use either file input or one of these fake inputs. You
-must use --count to tell how many units the fake input has
-(except for --input-integers).</p>
+can use either file input or one of these fake inputs. The
+--count option specifies how many units the fake input
+produces. If --count is omitted, fake inputs stream
+indefinitely until standard output pipe breaks or the
+process is terminated.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Values of fake
 inputs are truncated to the input unit size. For example, if
@@ -428,15 +431,36 @@ C - s - same, lsb first</p>
 support repetition multipliers in the format
 <i>COUNT*SPEC</i> or <i>COUNT*(SPEC1 SPEC2 ...)</i>. For
 example, 4*8B expands to four 8-bit unsigned bytes, and
-2*(4U4u) expands to 4U4u4U4u.</p>
+2*(4U4u) expands to 4U4u4U4u. Patterns also support named
+fields in the format <i>name:SPEC</i> or
+<i>name:COUNT*SPEC</i> (e.g. sync:11u,version:2u or w:4*6E
+which expands to w_0:6E,w_1:6E,w_2:6E,w_3:6E). Field names
+automatically label JSON object keys with --json-object and
+generate CSV header lines. <br>
+--preset=NAME</p>
 
-<p style="margin-left:9%; margin-top: 1em">S and s should
+<p style="margin-left:18%;">Select a predefined binary
+protocol or AI float format preset. Automatically configures
+--input-pattern, --input-unit, and field names. Supported
+presets include <b>mp3-header</b>, <b>mpeg-ts</b>,
+<b>wav-header</b>, <b>jpeg-sof0</b>, <b>h264-nal</b>,
+<b>nvfp4</b>, <b>fp6-e3m2</b>, <b>fp8-e4m3</b>,
+<b>fp8-e5m2</b>, <b>bf16</b>, <b>fp16</b>,
+<b>ipv4-header</b>, and <b>riscv-r-type</b>.</p>
+
+<p style="margin-left:9%;">--list-presets</p>
+
+<p style="margin-left:18%;">Print a formatted table of all
+available built-in presets with pattern definitions, unit
+widths, and descriptions, then exit.</p>
+
+<p style="margin-left:18%; margin-top: 1em">S and s should
 be used with caution. If negative value is used in making a
 unit, it will cause an error. The only way to use negative
 values correctly is --output-pattern=nS, --abs or
 --output-tuples.</p>
 
-<p style="margin-left:9%; margin-top: 1em">Floating-point
+<p style="margin-left:18%; margin-top: 1em">Floating-point
 numbers can be read and written using any of the supported
 float patterns: 64D/64d (FP64), 32F/32f (FP32), 16H/16h
 (IEEE FP16), 16Y/16y (Google Brain BF16), 8E/8e (OCP FP8
@@ -1005,8 +1029,24 @@ for more information.</p>
 <p style="margin-left:9%;">--output-json</p>
 
 <p style="margin-left:18%;">Output stream of structured
-JSON objects (NDJSON), one object per line with typed field
-names and decoded values.</p>
+JSON arrays or objects (NDJSON), one record per line. When
+named patterns, presets, or --json-fields are used, emits
+keyed JSON dictionaries.</p>
+
+<p style="margin-left:9%;">--json-object</p>
+
+<p style="margin-left:18%;">Force JSON output to be emitted
+as keyed JSON objects instead of positional arrays. Field
+keys default to pattern names (e.g. sync:11u), custom
+--json-fields, or auto-generated field_0, field_1, ...
+keys.</p>
+
+
+<p style="margin-left:9%;">--json-fields=NAME1,NAME2,...</p>
+
+<p style="margin-left:18%;">Explicit comma-separated list
+of field names used for JSON object keys and CSV column
+headers.</p>
 
 <p style="margin-left:9%;">--output-csv</p>
 
@@ -1045,6 +1085,56 @@ a comma-separated list of target files.</p>
 
 <p style="margin-left:18%;">Loop through the input stream
 COUNT times (supports seeking or memory buffering).</p>
+
+<h3>Analysis, Inspection and Model Context Protocol (MCP)
+<a name="Analysis, Inspection and Model Context Protocol (MCP)"></a>
+</h3>
+
+
+
+<p style="margin-left:9%; margin-top: 1em">--explain-pattern[=PATTERN]</p>
+
+<p style="margin-left:18%;">Analyze and display the
+structural breakdown of PATTERN (or the pattern set via
+--preset or --input-pattern), reporting total bits, bytes,
+byte alignment, and per-field bit ranges, byte offsets, and
+data types. If --output-json is specified, produces
+structured JSON output suitable for AI tooling and IDE
+extensions.</p>
+
+<p style="margin-left:9%;">--probe[=FILENAME]</p>
+
+<p style="margin-left:18%;">Deeply inspect the input file
+(or standard input if omitted). Computes Shannon entropy,
+byte class frequencies (nulls, printable ASCII, high bytes),
+periodic stride autocorrelation across offsets 1..512 bytes
+(detecting periodic formats like 188-byte MPEG-TS packets,
+24-bit audio, or fixed-width telemetry frames), and extracts
+prominent ASCII string runs. If --output-json is specified,
+outputs full structured JSON metrics.</p>
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="6%">
+
+
+<p>--mcp</p></td>
+<td width="3%"></td>
+<td width="82%">
+
+
+<p>Run native JSON-RPC 2.0 Model Context Protocol (MCP)
+server over standard input and standard output. Exposes four
+tools for AI agent pair programming, binary reverse
+engineering, and pipeline automation: <b>bdd_slice</b>
+(extract, transcode, and slice bitstreams into text or
+JSON), <b>bdd_probe</b> (probing binary blobs for entropy
+and periodicity), <b>bdd_explain_pattern</b> (inspecting
+schema bit layouts), and <b>bdd_list_presets</b> (cataloging
+built-in protocols).</p></td></tr>
+</table>
 
 <h2>EXAMPLES
 <a name="EXAMPLES"></a>

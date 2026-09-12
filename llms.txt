@@ -1,0 +1,167 @@
+# Bit Dump & Dissect (bdd) - LLM & Agent Reference
+
+`bdd` is an ultra-fast, zero-copy Unix binary tool, Rust library, and MCP server for sub-byte bitstream slicing, arbitrary-width arithmetic, floating-point transcoding (FP16/BF16/FP8/FP6/FP4), format probing, and structured binary extraction.
+
+## 1. Core Architecture & Pipeline
+
+```
+[Input Stream / Seekable File / Generator]
+   │
+   ▼
+[Bit Slicer: Skip -> Raw Unit Offset -> Extract Unit -> Skip Gap]
+   │
+   ▼
+[Pattern Unpacker: Name/Type/Width Tuple Extraction]
+   │
+   ▼
+[Manipulator Pipeline: Arithmetic, Bitwise, Clamping, Transcoding, Rearrange]
+   │
+   ▼
+[Output Sink: Binary, Hex Dump, Keyed JSON, CSV, Bitstring]
+```
+
+### Raw Unit & Stream Positioning Model
+- `--input-raw-unit <BITS>`: Defines total periodic chunk container (e.g. 188B MPEG-TS packet = `188*8` or `1504`).
+- `--input-offset <BITS>`: Offset in bits from container start to target payload unit.
+- `--input-unit <BITS>`: Payload bit count to extract. Default equals `--input-raw-unit` if omitted.
+- `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers.
+- `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
+- `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
+- Size syntax supports multipliers and SI suffixes: `1024*188B`, `4k`, `10M`, `1G`, `16*8`, `1000000*24`.
+
+---
+
+## 2. Pattern Syntax
+
+A pattern string extracts or packs structured multi-field tuples:
+`[field_name:]<width><type_code>[,[field_name:]<width><type_code>...]`
+
+### Type Codes
+- `u`: Big-Endian Unsigned integer (e.g. `11u`, `32u`)
+- `U`: Little-Endian Unsigned integer (e.g. `32U`)
+- `s`: Big-Endian Signed 2's complement integer (e.g. `16s`)
+- `S`: Little-Endian Signed 2's complement integer (e.g. `16S`)
+- `B`: Byte slice / Raw octets (e.g. `4B` = 32 bits byte buffer)
+- `b`: Boolean bit flag (`1b`)
+- `x`: Skipped / Ignored padding bits (e.g. `5x`)
+- `f`: IEEE 754 Floating-point Big-Endian (`16f`, `32f`, `64f`)
+- `F`: IEEE 754 Floating-point Little-Endian (`16F`, `32F`, `64F`)
+- `b`: Brain Floating-point (`16b` = BF16)
+- `e`: OCP FP8 E4M3 floating-point (`8e`)
+- `E`: OCP FP8 E5M2 (`8E`) or FP6 E3M2 (`6E`)
+- `m`: NVIDIA NVFP4 E2M1 floating-point (`4m`)
+
+### Multipliers & Field Names
+- Repetition: `4*8B` expands to `8B8B8B8B`
+- Named repetition: `w:4*6E` expands to `w_0:6E,w_1:6E,w_2:6E,w_3:6E`
+- Named fields: `sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u`
+
+---
+
+## 3. Standard Presets
+
+Use `--preset <NAME>` to instantly configure pattern, units, and named fields:
+
+| Preset Name | Pattern | Unit Bits | Description |
+|---|---|---|---|
+| `mp3-header` | `sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u,samplerate:2u,padding:1b,private:1b,channel_mode:2u,mode_ext:2u,copyright:1b,original:1b,emphasis:2u` | 32 | MPEG Audio Frame Header |
+| `mpeg-ts` | `sync:8u,tei:1b,pusi:1b,priority:1b,pid:13u,scrambling:2u,afc:2u,cc:4u` | 32 | MPEG Transport Stream Header (first 4 bytes of 188B packet) |
+| `wav-header` | `chunk_id:4B,chunk_size:32U,format:4B` | 96 | RIFF WAV Header Identifier |
+| `jpeg-sof0` | `marker:16u,len:16u,precision:8u,height:16u,width:16u,components:8u` | 80 | JPEG Start of Frame 0 |
+| `h264-nal` | `forbidden_zero:1b,nal_ref_idc:2u,nal_unit_type:5u` | 8 | H.264 / AVC NAL Unit Header |
+| `nvfp4` | `w:2*4m` | 8 | Dual packed NVFP4 E2M1 AI weights |
+| `fp6-e3m2` | `w:4*6E` | 24 | Quad packed FP6 E3M2 AI weights |
+| `fp8-e4m3` | `w:8e` | 8 | Single OCP FP8 E4M3 AI weight |
+| `fp8-e5m2` | `w:8E` | 8 | Single OCP FP8 E5M2 AI weight |
+| `bf16` | `val:16b` | 16 | Bfloat16 Brain Floating Point |
+| `fp16` | `val:16f` | 16 | IEEE 754 Half-Precision Float |
+| `ipv4-header` | `ver:4u,ihl:4u,dscp:6u,ecn:2u,len:16u,id:16u,flags:3u,frag:13u,ttl:8u,proto:8u,csum:16u,src:32u,dst:32u` | 160 | IPv4 Header (20 bytes) |
+| `riscv-r-type` | `funct7:7u,rs2:5u,rs1:5u,funct3:3u,rd:5u,opcode:7u` | 32 | RISC-V 32-bit R-type Instruction |
+
+List all presets via CLI: `bdd --list-presets`
+
+---
+
+## 4. Inspection & Schema Tools
+
+### Pattern Explainer (`--explain-pattern`)
+Analyzes bit layouts, byte alignments, offsets, and field types:
+```bash
+bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
+# Or JSON for agent consumption:
+bdd --explain-pattern "sync:11u,version:2u" --output-json
+```
+
+### Binary Prober (`--probe`)
+Analyzes unknown binary blobs, measuring Shannon entropy, byte class distributions, stride periodicity (detecting MPEG-TS, PCM strides), and ASCII runs:
+```bash
+bdd --probe firmware.bin
+# Or JSON format:
+bdd --probe payload.dat --output-json
+```
+
+---
+
+## 5. Output Formats & Keyed JSON
+
+- Binary (default): Raw byte packing to stdout or `--output-file <FILE>`.
+- Hex Dump: `--output-hex` (`--hex-group 2`, `--hex-columns 16`, `--hex-ascii`).
+- Keyed JSON Objects: `--output-json --json-object`
+  Emits newline-delimited JSON objects where keys match pattern field names or `--json-fields="foo,bar"`.
+- CSV: `--output-csv` (header automatically mirrors field names).
+- Bitstring: `--output-bits`.
+
+---
+
+## 6. Infinite Generators
+
+Generate synthetic streams without `--count`:
+- `--input-zeros`: Infinite stream of zero bits `0x00`.
+- `--input-ones`: Infinite stream of one bits `0xFF`.
+- `--input-random`: High-entropy pseudo-random bitstream.
+- `--input-counter`: Monotonically incrementing integers modulo unit size.
+Specify `--count <N>` only when bounded generation is desired.
+
+---
+
+## 7. Model Context Protocol (MCP)
+
+Start native JSON-RPC 2.0 stdio server:
+```bash
+bdd --mcp
+```
+
+### Registered Tools
+1. `bdd_slice`: Extract, transcode, and format binary slices into text or JSON.
+   Arguments: `file_path`, `stdin_hex`, `preset`, `input_pattern`, `output_pattern`, `input_unit`, `input_raw_unit`, `input_offset`, `count`, `json_object`, `output_format`.
+2. `bdd_probe`: Compute entropy, periodicity strides, and heuristics for a binary file or hex sample.
+   Arguments: `file_path`, `sample_hex`, `as_json`.
+3. `bdd_explain_pattern`: Break down bit offsets and field schemas.
+   Arguments: `pattern`, `as_json`.
+4. `bdd_list_presets`: List all built-in binary and AI float presets.
+   Arguments: none.
+
+---
+
+## 8. Common Recipes
+
+### Extract MPEG-TS PIDs to JSON
+```bash
+bdd --input-file stream.ts --input-raw-unit 188B --preset mpeg-ts --json-object --count 5
+```
+
+### Extract 24-bit PCM Audio Channels
+```bash
+# Extract left channel (first 24 bits of 48-bit stereo frame)
+bdd --input-file audio.raw --input-raw-unit 48 --input-unit 24 --output-file left.raw
+```
+
+### Transcode NVFP4 / FP8 Weights to FP32 CSV
+```bash
+bdd --input-file weights.fp8 --input-pattern "8e" --output-pattern "32f" --output-csv
+```
+
+### High-Speed Bit Reversal
+```bash
+bdd --input-file in.bin --input-unit 8 --reverse-bits --output-file out.bin
+```

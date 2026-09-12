@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bdd"
+version = "0.3.0"
+description = "Bit Dump & Dissect (bdd) - High performance bitstream slicing, transcoding, and inspection"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Esa Turtiainen" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: System :: Archiving",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[tool.setuptools.package-dir]
+bdd = "python"
+
+[tool.setuptools.packages.find]
+where = ["python"]

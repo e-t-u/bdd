@@ -19,6 +19,21 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 /// Runs the complete bdd pipeline based on validated configuration.
 pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
+    run_pipeline_internal(config, None)
+}
+
+/// Runs the complete bdd pipeline capturing output into a custom writer.
+pub fn run_pipeline_to_writer<W: Write + 'static>(
+    config: ValidatedConfig,
+    writer: W,
+) -> Result<(), BddError> {
+    run_pipeline_internal(config, Some(Box::new(writer)))
+}
+
+fn run_pipeline_internal(
+    config: ValidatedConfig,
+    custom_writer: Option<Box<dyn Write>>,
+) -> Result<(), BddError> {
     let unpacker = if let Some(ref p) = config.input_pattern {
         Some(TupleUnpacker::new(p)?)
     } else {
@@ -138,7 +153,9 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
         }
     }
 
-    let out_writer: Box<dyn Write> = if config.output_file == "-" {
+    let out_writer: Box<dyn Write> = if let Some(w) = custom_writer {
+        w
+    } else if config.output_file == "-" {
         Box::new(io::stdout())
     } else {
         match File::create(&config.output_file) {
@@ -153,12 +170,27 @@ pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
     if config.output_tuples {
         tuple_sink = Some(Box::new(TupleDirectOutput::new(out_writer)));
     } else if config.output_json {
-        tuple_sink = Some(Box::new(JsonOutputStream::new(out_writer)));
+        let field_names = if let Some(ref jf) = config.json_fields {
+            Some(jf.clone())
+        } else if let Some(ref u) = unpacker {
+            u.field_names()
+        } else if config.json_object {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        tuple_sink = Some(Box::new(JsonOutputStream::new(out_writer, field_names)));
     } else if config.output_csv {
-        tuple_sink = Some(Box::new(CsvOutputStream::new(
-            out_writer,
-            config.csv_header.clone(),
-        )));
+        let header = config.csv_header.clone().or_else(|| {
+            if let Some(ref jf) = config.json_fields {
+                Some(jf.join(","))
+            } else if let Some(ref u) = unpacker {
+                u.field_names().map(|names| names.join(","))
+            } else {
+                None
+            }
+        });
+        tuple_sink = Some(Box::new(CsvOutputStream::new(out_writer, header)));
     } else if config.output_visual {
         tuple_sink = Some(Box::new(VisualOutputStream::new(out_writer)));
     } else if config.output_integers {

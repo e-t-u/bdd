@@ -186,6 +186,34 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output_visual: bool,
 
+    /// Emit JSON tuples as key-value objects instead of arrays
+    #[arg(long, default_value_t = false, visible_alias = "output-json-dict")]
+    pub json_object: bool,
+
+    /// Comma-separated field names for JSON object / CSV output
+    #[arg(long, visible_alias = "json-keys")]
+    pub json_fields: Option<String>,
+
+    /// Use built-in format preset (e.g. 'mp3-header', 'mpeg-ts', 'nvfp4', 'wav-header')
+    #[arg(long)]
+    pub preset: Option<String>,
+
+    /// List all available built-in format presets
+    #[arg(long, default_value_t = false)]
+    pub list_presets: bool,
+
+    /// Explain pattern layout, field bit ranges, and byte alignment
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
+    pub explain_pattern: Option<String>,
+
+    /// Probe binary file characteristics, Shannon entropy, and repeating strides
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
+    pub probe: Option<String>,
+
+    /// Start Model Context Protocol (MCP) JSON-RPC 2.0 stdio server
+    #[arg(long, default_value_t = false)]
+    pub mcp: bool,
+
     // Demux and looping options
     #[arg(long)]
     pub demux: Vec<String>,
@@ -310,6 +338,13 @@ pub struct ValidatedConfig {
     pub merge_reverse_bytes: bool,
     pub merge_reverse_unit: bool,
     pub raw_args: Vec<String>,
+    pub json_fields: Option<Vec<String>>,
+    pub json_object: bool,
+    pub preset: Option<String>,
+    pub list_presets: bool,
+    pub explain_pattern: Option<String>,
+    pub probe: Option<String>,
+    pub mcp: bool,
 }
 
 fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
@@ -552,6 +587,35 @@ fn parse_number_argument(
 
 /// Validate CLI flags against legacy exclusivity rules and calculate effective options.
 pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
+    if let Some(ref preset_name) = cli.preset {
+        if let Some(preset) = crate::preset::find_preset(preset_name) {
+            if cli.input_pattern.is_none() {
+                cli.input_pattern = Some(preset.pattern.to_string());
+            }
+            if preset.little_endian {
+                cli.input_little_endian = true;
+            }
+            if cli.count.is_none() && preset.default_count.is_some() {
+                cli.count = preset.default_count.map(|c| c.to_string());
+            }
+            let has_output_format = cli.output_tuples
+                || cli.output_integers
+                || cli.output_hex
+                || cli.output_bits
+                || cli.output_json
+                || cli.output_csv
+                || cli.output_visual;
+            if !has_output_format {
+                cli.output_json = true;
+            }
+        } else {
+            return Err(BddError::CliError(format!(
+                "Unknown preset '{}'. Use --list-presets to see available presets.",
+                preset_name
+            )));
+        }
+    }
+
     check_exclusive(
         "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter,--input-integers, --input-tuples",
         &[
@@ -575,13 +639,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
 
     let skip = parse_number_argument(cli.skip.as_deref(), "--skip", Some(0), false)?.unwrap_or(0);
     let count = parse_number_argument(cli.count.as_deref(), "--count", None, false)?;
-
-    if has_special_stream && count.is_none() {
-        return Err(BddError::CliError(
-            "--input-zeros, --input-ones, --input-random and --input-counter require --count"
-                .to_string(),
-        ));
-    }
 
     check_exclusive(
         "Only one of the following: --output-tuples, --output-integers, --output-hex, --output-bits, --output-json, --output-csv, --output-visual",
@@ -913,6 +970,18 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,
         raw_args: Vec::new(),
+        json_fields: cli.json_fields.as_deref().map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect()
+        }),
+        json_object: cli.json_object,
+        preset: cli.preset,
+        list_presets: cli.list_presets,
+        explain_pattern: cli.explain_pattern,
+        probe: cli.probe,
+        mcp: cli.mcp,
     })
 }
 

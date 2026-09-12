@@ -430,3 +430,162 @@ fn test_cli_multiplication_sizes() {
 
     let _ = std::fs::remove_file(test_path);
 }
+
+#[test]
+fn test_infinite_generators() {
+    // Pipe infinite zeros into head -c 16
+    let out_zeros = Command::new("bash")
+        .args(["-c", "./bdd --input-zeros 2>/dev/null | head -c 16 | wc -c"])
+        .output()
+        .expect("failed to run infinite zeros");
+    assert!(out_zeros.status.success());
+    let stdout_zeros = String::from_utf8(out_zeros.stdout).unwrap();
+    assert_eq!(stdout_zeros.trim(), "16");
+
+    // Pipe infinite random into head -c 32
+    let out_rand = Command::new("bash")
+        .args([
+            "-c",
+            "./bdd --input-random 2>/dev/null | head -c 32 | wc -c",
+        ])
+        .output()
+        .expect("failed to run infinite random");
+    assert!(out_rand.status.success());
+    let stdout_rand = String::from_utf8(out_rand.stdout).unwrap();
+    assert_eq!(stdout_rand.trim(), "32");
+}
+
+#[test]
+fn test_named_patterns_and_presets() {
+    // Test preset mp3-header on sample.mp3
+    let out_mp3 = Command::new("./bdd")
+        .args([
+            "--preset=mp3-header",
+            "--input-file=contrib/data/sample.mp3",
+            "--count=1",
+        ])
+        .output()
+        .expect("failed to run bdd preset mp3-header");
+    assert!(out_mp3.status.success());
+    let stdout_mp3 = String::from_utf8(out_mp3.stdout).unwrap();
+    assert!(stdout_mp3.contains("\"sync\":2047"));
+    assert!(stdout_mp3.contains("\"bitrate\":9"));
+    assert!(stdout_mp3.contains("\"layer\":2"));
+
+    // Test preset nvfp4 on sample_nvfp4.bin
+    let out_nvfp4 = Command::new("./bdd")
+        .args([
+            "--preset=nvfp4",
+            "--input-file=contrib/data/sample_nvfp4.bin",
+            "--count=2",
+        ])
+        .output()
+        .expect("failed to run bdd preset nvfp4");
+    assert!(out_nvfp4.status.success());
+    let stdout_nvfp4 = String::from_utf8(out_nvfp4.stdout).unwrap();
+    let lines: Vec<&str> = stdout_nvfp4.trim().lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("\"w0\":0.0") && lines[0].contains("\"w1\":0.5"));
+    assert!(lines[1].contains("\"w0\":1.0") && lines[1].contains("\"w1\":1.5"));
+
+    // Test custom pattern with names and --json-fields
+    let out_custom = Command::new("./bdd")
+        .args([
+            "--input-zeros",
+            "--count=1",
+            "--input-pattern=4u4u",
+            "--json-fields=hi,lo",
+            "--output-json",
+        ])
+        .output()
+        .expect("failed to run custom json fields");
+    assert!(out_custom.status.success());
+    let stdout_custom = String::from_utf8(out_custom.stdout).unwrap();
+    assert_eq!(stdout_custom.trim(), "{\"hi\":0,\"lo\":0}");
+}
+
+#[test]
+fn test_explain_pattern() {
+    // Text output
+    let out_text = Command::new("./bdd")
+        .args(["--explain-pattern=sync:11u,ver:2u,layer:2u"])
+        .output()
+        .expect("failed to run explain-pattern text");
+    assert!(out_text.status.success());
+    let stdout_text = String::from_utf8(out_text.stdout).unwrap();
+    assert!(stdout_text.contains("Total Width: 15 bits"));
+    assert!(stdout_text.contains("sync"));
+    assert!(stdout_text.contains("ver"));
+    assert!(stdout_text.contains("layer"));
+
+    // JSON output
+    let out_json = Command::new("./bdd")
+        .args(["--explain-pattern=sync:11u,ver:2u", "--output-json"])
+        .output()
+        .expect("failed to run explain-pattern json");
+    assert!(out_json.status.success());
+    let stdout_json = String::from_utf8(out_json.stdout).unwrap();
+    assert!(stdout_json.contains("\"field_count\": 2"));
+    assert!(stdout_json.contains("\"total_bits\": 13"));
+}
+
+#[test]
+fn test_probe_binary() {
+    let out_probe = Command::new("./bdd")
+        .args(["--probe=contrib/data/sample.mp3", "--output-json"])
+        .output()
+        .expect("failed to run probe json");
+    assert!(out_probe.status.success());
+    let stdout_probe = String::from_utf8(out_probe.stdout).unwrap();
+    assert!(stdout_probe.contains("\"sample_bytes\": 939"));
+    assert!(stdout_probe.contains("\"entropy\":"));
+}
+
+#[test]
+fn test_mcp_server_protocol() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("./bdd")
+        .arg("--mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd --mcp");
+
+    {
+        let stdin = child.stdin.as_mut().expect("failed to open child stdin");
+        // 1. initialize
+        writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2024-11-05\"}}}}").unwrap();
+        // 2. tools/list
+        writeln!(
+            stdin,
+            "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}}"
+        )
+        .unwrap();
+        // 3. tools/call bdd_list_presets
+        writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"bdd_list_presets\",\"arguments\":{{}}}}}}").unwrap();
+        // 4. tools/call bdd_slice on sample.mp3
+        writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"bdd_slice\",\"arguments\":{{\"file_path\":\"contrib/data/sample.mp3\",\"preset\":\"mp3-header\",\"count\":1}}}}}}").unwrap();
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for bdd --mcp");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 4);
+
+    // Line 1: initialize
+    assert!(lines[0].contains("\"serverInfo\":{\"name\":\"bdd-mcp\",\"version\":\"0.3.0\"}"));
+    // Line 2: tools/list
+    assert!(lines[1].contains("\"name\":\"bdd_slice\""));
+    assert!(lines[1].contains("\"name\":\"bdd_probe\""));
+    // Line 3: bdd_list_presets
+    assert!(lines[2].contains("mp3-header"));
+    assert!(lines[2].contains("nvfp4"));
+    // Line 4: bdd_slice output
+    assert!(lines[3].contains("sync") && lines[3].contains("2047"));
+    assert!(lines[3].contains("bitrate") && lines[3].contains("9"));
+}

@@ -475,6 +475,8 @@ Arguments:
 Input Unit & Raw Unit Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
   -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
+      --preset <NAME>              Use built-in protocol or float preset (e.g. mp3-header, mpeg-ts, nvfp4)
+      --list-presets               List all built-in format presets and exit
       --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
       --input-skip-units <UNITS>   Skip initial N units from input stream [default: 0]
       --input-gap <BITS>           Bit gap skipped after each unit (or between raw units) [default: 0]
@@ -492,7 +494,7 @@ Synthetic Stream Sources:
   -r, --input-random               Generate pseudo-random bits
   -t, --input-tuples               Read comma-separated tuple lines from text input
       --skip <UNITS>               Skip initial N units [default: 0]
-      --count <COUNT>              Process at most N units (0 = infinite) [default: 0]
+      --count <COUNT>              Process at most N units (0 or omitted = infinite) [default: 0]
 
 Bit Reversal Options:
       --reverse-input-bytes        Reverse bit order within each input byte
@@ -529,9 +531,16 @@ Output Unit & Pattern Options:
   -i, --output-integers            Output unsigned integer per unit (one per line)
   -T, --output-tuples              Output fields as comma-separated tuples
       --output-json                Output tuples as newline-delimited JSON (NDJSON)
+      --json-object                Emit JSON as keyed objects instead of positional arrays
+      --json-fields <FIELDS>       Explicit comma-separated field names for JSON/CSV
       --output-csv                 Output tuples as CSV
       --csv-header <HEADER>        Optional CSV column header row
       --output-visual              Colorized ANSI terminal dump of unaligned fields
+
+Inspection & Model Context Protocol (MCP):
+      --explain-pattern [PATTERN]  Analyze bit layout, byte alignment, and field breakdown
+      --probe [FILE]               Inspect binary entropy, byte classes, periodic strides, and strings
+      --mcp                        Launch native JSON-RPC 2.0 Model Context Protocol (MCP) server
 
 Demuxing & Channel Splitting:
       --demux <FIELD:PATH>         Route individual tuple field to a dedicated output file
@@ -557,7 +566,77 @@ General:
 
 ---
 
-## 8. Channel Demuxing & Splitting
+## 8. AI Ergonomics, Binary Inspection & Model Context Protocol (MCP)
+
+`bdd` provides native primitives for autonomous AI coding agents, reverse engineers, and pipeline automation:
+
+### Built-in Format Presets (`--preset`, `--list-presets`)
+Instead of manually calculating complex bit offsets, standard protocol and AI weight presets configure input patterns, unit widths, and field names in one step:
+```bash
+# List all 13 standard presets:
+bdd --list-presets
+```
+Standard presets include:
+- `mp3-header` (MPEG Audio Frame Header, 32 bits)
+- `mpeg-ts` (MPEG Transport Stream Header, 32 bits from 188B packet)
+- `wav-header` (RIFF WAV Header Identifier, 96 bits)
+- `jpeg-sof0` (JPEG Start of Frame 0, 80 bits)
+- `h264-nal` (H.264 / AVC NAL Unit Header, 8 bits)
+- `nvfp4` (Dual packed NVIDIA NVFP4 E2M1 weights, 8 bits)
+- `fp6-e3m2` (Quad packed FP6 E3M2 AI weights, 24 bits)
+- `fp8-e4m3` (OCP FP8 E4M3 AI weight, 8 bits)
+- `fp8-e5m2` (OCP FP8 E5M2 AI weight, 8 bits)
+- `bf16` (Bfloat16 Brain Floating Point, 16 bits)
+- `fp16` (IEEE 754 Half-Precision Float, 16 bits)
+- `ipv4-header` (IPv4 Packet Header, 160 bits / 20 bytes)
+- `riscv-r-type` (RISC-V 32-bit R-type Instruction, 32 bits)
+
+### Keyed JSON Objects (`--json-object`, `--json-fields`)
+Pair named patterns or presets with `--json-object` to emit newline-delimited JSON dictionaries where keys match field names:
+```bash
+bdd --input-file stream.ts --input-raw-unit 188B --preset mpeg-ts --json-object --count 3
+```
+Output:
+```json
+{"afc":1,"cc":0,"pid":0,"priority":0,"pusi":0,"scrambling":0,"sync":71,"tei":0}
+{"afc":1,"cc":1,"pid":17,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
+{"afc":1,"cc":2,"pid":256,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
+```
+
+### Pattern Explainer (`--explain-pattern`)
+Examine bit ranges, byte alignments, offsets, and field types without running a processing job:
+```bash
+bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
+# Machine-readable JSON output for AI toolchains:
+bdd --explain-pattern "sync:11u,version:2u" --output-json
+```
+
+### Binary Prober (`--probe`)
+Inspect unknown binary blobs without prior schema knowledge. Computes Shannon entropy ($H = -\sum p_i \log_2 p_i$), byte class distributions, periodic stride autocorrelation across offsets 1..512 bytes (detecting MPEG-TS, 24-bit audio, or fixed-stride telemetry), and extracts printable ASCII strings:
+```bash
+bdd --probe payload.bin
+# Full JSON metrics:
+bdd --probe payload.bin --output-json
+```
+
+### Model Context Protocol (MCP) Server (`--mcp`)
+`bdd` includes a native JSON-RPC 2.0 stdio MCP server for agent integration:
+```bash
+bdd --mcp
+```
+Registered MCP tools:
+- `bdd_slice`: Slices a file or hex string by pattern/preset and outputs text or JSON.
+- `bdd_probe`: Analyzes entropy, periodic strides, and format heuristics.
+- `bdd_explain_pattern`: Explains schema bit offsets and field types.
+- `bdd_list_presets`: Returns available protocol presets.
+
+### Agent Documentation (`llms.txt` & Agent Skill)
+- **[`llms.txt`](llms.txt)**: High-density reference tailored for LLM context windows.
+- **Agent Skill**: Available at `~/.agents/skills/bdd/SKILL.md`.
+
+---
+
+## 9. Channel Demuxing & Splitting
 
 When processing multiplexed packet formats or interleaved bitstreams (e.g. audio + video, header + payload), `bdd` can demux fields into independent files or pipes:
 
@@ -573,11 +652,11 @@ bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin
 
 ---
 
-## 9. Programmatic Interfaces (C Header & Python)
+## 10. Programmatic Interfaces (C Header & Python)
 
 `bdd` exports clean C-ABI symbols in `libbdd.so` and includes an official C header ([`include/bdd.h`](include/bdd.h)) and a zero-dependency Python wrapper ([`python/bdd.py`](python/bdd.py)):
 
-### Python (`ctypes`)
+### Python (`ctypes` & `pyproject.toml`)
 
 ```python
 from bdd import Bdd
@@ -614,14 +693,14 @@ int main() {
 
 ---
 
-## 10. UTF-8 Stream Processing & Architectural Study
+## 11. UTF-8 Stream Processing & Architectural Study
 
 For an in-depth analysis of UTF-8 bitstream hazards, byte-alignment constraints, continuation header preservation, and Unicode scalar value processing in `bdd`, consult the technical report:
 * [`docs/utf8_study.md`](docs/utf8_study.md)
 
 ---
 
-## 11. Performance & Throughput Benchmarks
+## 12. Performance & Throughput Benchmarks
 
 `bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
 
@@ -640,14 +719,14 @@ Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
 
 ---
 
-## 12. Architecture & Codebase Design
+## 13. Architecture & Codebase Design
 
 The Rust implementation is organized cleanly into modular crates:
 
 ```
 src/
 ├── lib.rs          # Public library crate interface
-├── main.rs         # Thin 18-line executable wrapper
+├── main.rs         # Thin CLI wrapper & early dispatcher
 ├── error.rs        # Strongly-typed BddError hierarchy
 ├── counter.rs      # Unit and skip counting logic
 ├── field.rs        # Arbitrary-precision Field enum & hardware bit-reversals
@@ -657,12 +736,19 @@ src/
 ├── stream.rs       # Stream generators (File, Counter, Zeros, Ones, Random, Tuples)
 ├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV, NDJSON, ANSI Visual)
 ├── manipulator.rs  # Ordered pipeline transformations (Arithmetic, Bitwise, Filter)
+├── preset.rs       # Standard protocol & AI float presets (mp3, ts, wav, nvfp4, etc.)
+├── explain.rs      # Pattern bit layout, alignment & schema analysis
+├── probe.rs        # Shannon entropy, periodic stride autocorrelation & byte classes
+├── mcp.rs          # Native JSON-RPC 2.0 Model Context Protocol (MCP) server
 ├── cli.rs          # Clap CLI definition & validation rules
 └── engine.rs       # End-to-end pipeline execution orchestrator
 include/
 └── bdd.h           # C/C++ API header
 python/
+├── __init__.py     # Python package root
 └── bdd.py          # Zero-dependency Python ctypes wrapper
+pyproject.toml      # Standard Python package configuration
+llms.txt            # High-density agent & LLM reference card
 ```
 
 ### Key Design Principles
@@ -674,7 +760,7 @@ python/
 
 ---
 
-## 13. Development, Testing & Documentation
+## 14. Development, Testing & Documentation
 
 Run the test suite:
 

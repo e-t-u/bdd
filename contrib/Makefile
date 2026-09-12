@@ -5,7 +5,7 @@ LDLIBS ?= -lbdd -lm
 
 C_BINS = c/decode_media c/decode_ai_weights
 
-.PHONY: all samples c-bins test clean clean-data
+.PHONY: all samples c-bins test pdf clean clean-data
 
 all: samples c-bins
 
@@ -21,6 +21,9 @@ c/decode_media: c/decode_media.c ../include/bdd.h
 c/decode_ai_weights: c/decode_ai_weights.c ../include/bdd.h
 	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
 
+pdf:
+	node ../scripts/render_pdf.js README.md README.pdf
+
 test: all
 	@echo "==> Testing Shell Scripts..."
 	./shell/run_all_shell_examples.sh
@@ -33,7 +36,7 @@ test: all
 	@echo "==> All contrib demonstrations passed successfully!"
 
 clean:
-	rm -f $(C_BINS)
+	rm -f $(C_BINS) README.pdf
 
 clean-data:
 	rm -f data/*
