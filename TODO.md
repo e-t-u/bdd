@@ -16,10 +16,26 @@ This document consolidates high-value feature improvements, API additions, and a
   - The current `--round` / `--cut-maxint` manipulator conflates two fundamentally distinct operations:
     1. **Upper-End Magnitude / Range Overflow (MSB Cutting)**: When a larger value must fit into a smaller unit (e.g. value 300 into an 8-bit container max 255), the *most significant bits* exceed the range. This is **clamping, saturation, wrapping, or high-bit clipping**—it is *not* rounding.
     2. **Lower-End Precision Reduction (LSB Rounding)**: When reducing precision, fractional digits, or low-order bits, bits are removed from the *least significant part*. This is **true rounding / quantization**.
-  - Additionally, floating-point handling currently translates values through an internal 64-bit double (`f64`). While convenient for pipeline arithmetic, converting to/from `f64` can introduce subtle rounding artifacts, alter NaN payloads, or affect subnormal representations in sub-byte and 16-bit AI floats.
+- **Options Analysis in `--round`**:
+  - **Options that do NOT make sense in rounding (only in truncation / clamping / filtering)**:
+    - `saturate` / `clamp`: Magnitude capping to `[-LIMIT, LIMIT]`. This is range saturation, not rounding.
+    - `wrap` / `modulo`: High-bit truncation discarding overflow MSBs modulo $(LIMIT + 1)$. This is integer overflow wrapping, not rounding.
+    - `zero` / `reset`: Out-of-bounds reset policy setting out-of-range values to 0. Not rounding.
+    - `drop` / `filter` / `checked`: Discards the tuple entirely on range overflow. This is record filtering, not rounding.
+    - The `LIMIT` parameter itself: Passing a maximum magnitude threshold (e.g. `--round 0,255`) is a bounding limit, not a rounding step or precision scale.
+  - **Options that belong to true rounding (precision reduction on fractional parts / LSBs)**:
+    - `round` / `half_up`: Round to nearest neighbor, ties away from zero.
+    - `round_ties_even` / `bankers`: Round to nearest neighbor, ties to nearest even digit (IEEE 754 default).
+    - `floor`: Round toward $-\infty$.
+    - `ceil`: Round toward $+\infty$.
+    - `trunc`: Round toward zero (fractional truncation).
+  - **Implementation Flaws in `RoundManipulator`**:
+    - For integer fields with a `LIMIT`, specifying `round`, `floor`, `ceil`, `trunc`, or `round_ties_even` silently degenerates to `saturate` (clamping).
+    - For integer fields without a `LIMIT`, `--round 0,round` is an inert no-op because integers lack fractional parts and `bdd` lacks integer step quantization (e.g. rounding to nearest 10 or nearest $2^k$).
+    - For floating-point fields, `saturate` and `wrap` bypass rounding and merely clamp/wrap the float magnitude.
 - **Target Architecture & Next Steps**:
-  - Decouple upper-end range overflow handling (clamping / saturation / wrapping) from lower-end precision reduction (rounding / quantization).
-  - Clarify or provide clean dedicated options (e.g. explicit range clamping / saturation vs. true precision rounding).
+  - Decouple upper-end range overflow handling (clamping / saturation / wrapping via `--cut-maxint` or `--clamp`) from lower-end precision reduction (rounding / quantization via `--round`).
+  - Reserve `--round` strictly for precision reduction: rounding floats to integers or rounding floats/integers to a specified step/precision (`--round FIELD,PRECISION[,MODE]`).
   - Re-examine floating-point codecs and pipelines to avoid unintended `f64` conversions when bit-exactness is required, and ensure rounding modes applied to float mantissas and integers are mathematically precise and consistent.
 
 ---
