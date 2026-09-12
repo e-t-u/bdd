@@ -38,6 +38,28 @@ This document consolidates high-value feature improvements, API additions, and a
   - Reserve `--round` strictly for precision reduction: rounding floats to integers or rounding floats/integers to a specified step/precision (`--round FIELD,PRECISION[,MODE]`).
   - Re-examine floating-point codecs and pipelines to avoid unintended `f64` conversions when bit-exactness is required, and ensure rounding modes applied to float mantissas and integers are mathematically precise and consistent.
 
+### 1.3 Clarification and Architectural Evolution of Binary Probing (`--probe`)
+- **Current Architecture & Pipeline Stage**:
+  - **Where Probe Executes Today**: `--probe` is currently implemented as an **out-of-band pre-flight diagnostic scan** (`src/main.rs:83-113`). It runs directly on the raw input stream or file (`stdin` or target file) **before** the engine pipeline starts, and terminates immediately after printing its report without running the pipeline.
+  - **What It Currently Bypasses**: It does not pass through stream patterns (`--stream-pattern`), container slicing (`8[2:6]`), unit extraction (`--input-unit`), or tuple manipulation (`--rearrange`, `--round`). It samples up to 1 MB of raw input bytes and calculates:
+    1. Overall Shannon entropy ($0.0 - 8.0$).
+    2. Byte class distributions (null bytes, printable ASCII, high bytes).
+    3. Periodic autocorrelation strides ($1..512$ bytes) to identify container packet lengths (e.g. 188-byte MPEG-TS).
+    4. Printable ASCII string runs.
+  - **Documentation Deficit**: The user documentation (`README.md`, `bdd.1`) needs a much clearer explanation of what `--probe` does, how each metric should be interpreted, and where in the data lifecycle it operates.
+- **Proposed Feature: "Find Crypto Keys / High-Entropy Regions"**:
+  - **Motivation**: In binary reverse engineering, firmware auditing, and forensic analysis, a single global entropy score is insufficient—an uncompressed firmware image or memory dump might have moderate overall entropy (~4.5), but contain embedded 256-bit AES keys, RSA private keys, or encrypted payload blocks with maximal entropy ($H \approx 8.0$).
+  - **Target Feature**: Sliding-window localized entropy scanning (`--probe-entropy-scan` or `--probe-keys`):
+    - Slides across the stream using configurable window sizes (e.g. 16, 32, 64, 256 bytes).
+    - Detects localized entropy spikes ($H > 7.8$) to pinpoint candidate encryption keys, IVs, ciphertext blobs, or compressed segments.
+    - Outputs candidate offset locations, bit ranges, length, and local entropy score in human-readable output and structured JSON (`--output-json`).
+- **Proposed Architectural Evolution: Probing Inside the Processing Pipeline**:
+  - **Post-Pattern / Per-Field Probing (`--probe-field=F` / `--probe-tuple`)**:
+    - Allow probing *after* the stream unpacker / container pattern has sliced the stream.
+    - *Use Case*: In a multiplexed container (e.g. MPEG-TS, telemetry frames, or custom protocol headers), measure the entropy and distribution of individual fields across packets (e.g. check if field 1 / payload is encrypted while field 0 / header remains structured).
+  - **Unit-Level Probing**:
+    - Allow computing entropy and periodicity across unpacked units rather than only raw bytes.
+
 ---
 
 ## 2. Pattern Engine & Data Types
