@@ -131,7 +131,7 @@ bdd --serve 8080     # Custom port
 Generate synthetic streams without `--count`:
 - `--input-zeros`: Infinite stream of zero bits `0x00`.
 - `--input-ones`: Infinite stream of one bits `0xFF`.
-- `--input-random`: High-entropy pseudo-random bitstream.
+- `--input-random`: Cryptographically strong random bitstream from `/dev/urandom` (not PRNG).
 - `--input-counter`: Monotonically incrementing integers modulo unit size.
 Specify `--count <N>` only when bounded generation is desired.
 

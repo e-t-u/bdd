@@ -2,6 +2,7 @@ use crate::error::BddError;
 use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
+use rand::rngs::OsRng;
 use rand::RngCore;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -542,6 +543,7 @@ pub struct TuplePacker {
     pattern: Vec<PatternItem>,
     pub total_bits: usize,
     counter: AtomicU64,
+    random_bit_buffer: std::sync::Mutex<(BigUint, usize)>,
 }
 
 impl TuplePacker {
@@ -556,6 +558,7 @@ impl TuplePacker {
             pattern,
             total_bits,
             counter: AtomicU64::new(0),
+            random_bit_buffer: std::sync::Mutex::new((BigUint::zero(), 0)),
         })
     }
 
@@ -568,7 +571,6 @@ impl TuplePacker {
 
     pub fn pack(&self, mut tuple: Vec<Field>) -> Result<BigUint, BddError> {
         let mut unit = BigUint::zero();
-        let mut rng = rand::thread_rng();
 
         for p in &self.pattern {
             let bits = p.bits;
@@ -670,10 +672,31 @@ impl TuplePacker {
                 'z' => BigUint::zero(),
                 'o' => (BigUint::one() << bits) - 1u32,
                 'r' => {
-                    let num_bytes = bits / 8 + 1;
-                    let mut buf = vec![0u8; num_bytes];
-                    rng.fill_bytes(&mut buf);
-                    BigUint::from_bytes_be(&buf)
+                    if bits == 0 {
+                        BigUint::zero()
+                    } else {
+                        let mut guard = self.random_bit_buffer.lock().unwrap();
+                        while guard.1 < bits {
+                            let needed_bits = bits - guard.1;
+                            let needed_bytes = needed_bits.div_ceil(8);
+                            let mut buf = vec![0u8; needed_bytes];
+                            OsRng.fill_bytes(&mut buf);
+                            let chunk = BigUint::from_bytes_be(&buf);
+                            let chunk_bits = needed_bytes * 8;
+                            guard.0 = (std::mem::take(&mut guard.0) << chunk_bits) | chunk;
+                            guard.1 += chunk_bits;
+                        }
+                        let right_edge = guard.1 - bits;
+                        let val = &guard.0 >> right_edge;
+                        guard.1 -= bits;
+                        let mask = if guard.1 > 0 {
+                            (BigUint::one() << guard.1) - 1u32
+                        } else {
+                            BigUint::zero()
+                        };
+                        guard.0 &= mask;
+                        val
+                    }
                 }
                 'k' | 'K' => {
                     let cnt = self.counter.fetch_add(1, Ordering::Relaxed);

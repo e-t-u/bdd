@@ -255,7 +255,7 @@ When `<bits>` is omitted, natural bit width defaults are automatically assigned:
 | `nx` / `nX` | Skip / Discard | Input: skips $n$ bits. Output: consumes and discards 1 tuple field without emitting bits. (Default 1 bit) | Any positive integer | Input / Output |
 | `nz` | Fill Zeros | Inserts $n$ constant zero bits (default 1 bit) | Any positive integer | Output only |
 | `no` | Fill Ones | Inserts $n$ constant one bits (default 1 bit) | Any positive integer | Output only |
-| `nr` | Fill Random | Inserts $n$ pseudo-random bits (default 1 bit) | Any positive integer | Output only |
+| `nr` | Fill Random | Inserts $n$ random bits from `/dev/urandom` (default 1 bit) | Any positive integer | Output only |
 
 ### Pattern Repetition Multipliers
 
@@ -386,7 +386,7 @@ Explanation:
 
 - **`--input-zeros` (`-0`)**: Endless stream of zero bits.
 - **`--input-ones` (`-1`)**: Endless stream of one bits.
-- **`--input-random` (`-r`)**: Pseudo-random bits (PRNG).
+- **`--input-random` (`-r`)**: Random bits from `/dev/urandom` (cryptographically strong OS randomness, not PRNG).
 - **`--input-counter` (`-c`)**: Sequential integer counter starting at 0, incrementing by 1 per unit.
 - **`--count=N`**: Limit processing to $N$ units (0 = infinite).
 - **`--skip=N`**: Skip $N$ initial units before processing.
@@ -539,7 +539,7 @@ Synthetic Stream Sources:
   -c, --input-counter              Generate sequential counter numbers (0, 1, 2...)
   -0, --input-zeros                Generate endless stream of zero bits
   -1, --input-ones                 Generate endless stream of one bits
-  -r, --input-random               Generate pseudo-random bits
+  -r, --input-random               Generate random bits from /dev/urandom
   -t, --input-tuples               Read comma-separated tuple lines from text input
       --skip <UNITS>               Skip initial N units [default: 0]
       --count <COUNT>              Process at most N units (0 or omitted = infinite) [default: 0]

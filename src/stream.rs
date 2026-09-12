@@ -4,6 +4,7 @@ use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, Zero};
 use rand::RngCore;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
 /// Stream configuration parameters for bit extraction.
@@ -480,16 +481,25 @@ impl UnitStream for OneStream {
     }
 }
 
+/// Stream generator producing cryptographically strong random bits sourced from `/dev/urandom`.
+/// Employs a bit-level accumulator so every single bit of randomness is utilized without waste.
 pub struct RandomStream {
     remaining: Option<u64>,
     pub unit_size: usize,
+    urandom: Option<BufReader<File>>,
+    bit_buffer: BigUint,
+    bits_in_buffer: usize,
 }
 
 impl RandomStream {
     pub fn new(counter: Counter, unit_size: usize) -> Self {
+        let urandom = File::open("/dev/urandom").ok().map(BufReader::new);
         let mut s = Self {
             remaining: counter.count,
             unit_size,
+            urandom,
+            bit_buffer: BigUint::zero(),
+            bits_in_buffer: 0,
         };
         for _ in 0..counter.skip {
             let _ = s.next_unit();
@@ -506,14 +516,38 @@ impl UnitStream for RandomStream {
             }
             *rem -= 1;
         }
-        let mut rng = rand::thread_rng();
-        let num_bytes = self.unit_size / 8 + 1;
-        let mut buf = vec![0u8; num_bytes];
-        rng.fill_bytes(&mut buf);
-        let mut val = BigUint::from_bytes_be(&buf);
-        let mask = (BigUint::one() << self.unit_size) - 1u32;
-        val &= mask;
-        Ok(Some(val))
+        if self.unit_size == 0 {
+            return Ok(Some(BigUint::zero()));
+        }
+
+        while self.bits_in_buffer < self.unit_size {
+            let needed_bits = self.unit_size - self.bits_in_buffer;
+            let needed_bytes = needed_bits.div_ceil(8);
+            let mut buf = vec![0u8; needed_bytes];
+            if let Some(reader) = &mut self.urandom {
+                reader.read_exact(&mut buf)?;
+            } else {
+                rand::rngs::OsRng.fill_bytes(&mut buf);
+            }
+            let chunk = BigUint::from_bytes_be(&buf);
+            let chunk_bits = needed_bytes * 8;
+            self.bit_buffer = (std::mem::take(&mut self.bit_buffer) << chunk_bits) | chunk;
+            self.bits_in_buffer += chunk_bits;
+        }
+
+        let right_edge = self.bits_in_buffer - self.unit_size;
+        let mut unit = &self.bit_buffer >> right_edge;
+        self.bits_in_buffer -= self.unit_size;
+        let mask = if self.bits_in_buffer > 0 {
+            (BigUint::one() << self.bits_in_buffer) - 1u32
+        } else {
+            BigUint::zero()
+        };
+        self.bit_buffer &= mask;
+
+        let unit_mask = (BigUint::one() << self.unit_size) - 1u32;
+        unit &= unit_mask;
+        Ok(Some(unit))
     }
 }
 
@@ -861,5 +895,32 @@ mod tests {
         stream_drop.do_skip();
         assert_eq!(stream_drop.next_unit().unwrap(), Some(BigUint::from(50u32)));
         assert_eq!(stream_drop.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_random_stream_urandom() {
+        let mut stream = RandomStream::new(Counter::new(0, Some(5)), 12);
+        assert_eq!(stream.unit_size, 12);
+        let max_val = (BigUint::one() << 12) - 1u32;
+        let mut count = 0;
+        while let Some(unit) = stream.next_unit().unwrap() {
+            assert!(unit <= max_val);
+            count += 1;
+        }
+        assert_eq!(count, 5);
+        assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    fn test_random_stream_single_bit() {
+        let mut stream = RandomStream::new(Counter::new(0, Some(24)), 1);
+        assert_eq!(stream.unit_size, 1);
+        let mut count = 0;
+        while let Some(unit) = stream.next_unit().unwrap() {
+            assert!(unit == BigUint::zero() || unit == BigUint::one());
+            count += 1;
+        }
+        assert_eq!(count, 24);
+        assert_eq!(stream.next_unit().unwrap(), None);
     }
 }

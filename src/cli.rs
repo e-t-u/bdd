@@ -72,18 +72,23 @@ pub struct Cli {
     pub input_reverse_unit: bool,
 
     // Special input bit streams
+    /// Generate endless stream of zero bits
     #[arg(long, default_value_t = false)]
     pub input_zeros: bool,
 
+    /// Generate endless stream of one bits
     #[arg(long, default_value_t = false)]
     pub input_ones: bool,
 
+    /// Generate random bits from /dev/urandom
     #[arg(long, default_value_t = false)]
     pub input_random: bool,
 
+    /// Generate sequential counter numbers (0, 1, 2...)
     #[arg(long, default_value_t = false)]
     pub input_counter: bool,
 
+    /// Read text input as newline-separated unsigned integers
     #[arg(long, default_value_t = false)]
     pub input_integers: bool,
 

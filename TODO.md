@@ -34,12 +34,30 @@ This document consolidates high-value feature improvements, API additions, and a
 - **Motivation**: `--input-counter` generates an infinite sequence by default. For testing, generating a complete cycle of all values in a unit ($2^{\text{unit}}$ items) is a common requirement.
 - **Specification**: Support `--count=cycle` or `--count=full-range` (or math expressions like `2^16`), which automatically terminates the stream after counting exactly $2^{\text{unit\_size}}$ values.
 
-### 3.3 Per-Stream Configuration for Multi-File Merge
-- **Motivation**: Building on repeatable `--merge-file` and `--merge-files`, complex container muxing often requires different skip offsets or gap sizes per merge stream.
-- **Specification**: Allow structured syntax in merge file arguments, e.g.:
-  ```bash
-  bdd --input-file=video.es --merge-file="audio.es:unit=16:skip=32" --merge-file="subtitles.es:unit=8"
-  ```
+### 3.3 Heterogeneous Unit Sizes & Per-Stream Configuration for Multi-File Merge
+- **Current State**:
+  - The primary stream and merge streams can have different unit sizes from each other via `--input-unit` and `--merge-unit` (e.g. `--input-unit=12 --merge-unit=8` interleaves 12-bit units with 8-bit units).
+  - However, when merging **multiple** secondary streams (via repeated `--merge-file` or `--merge-files`), **all merge streams must share the exact same unit size** (`--merge-unit`, default 8 bits), skip offsets, and gap parameters.
+- **Problem & Motivation**:
+  - Complex container multiplexing (e.g. interleaving a video elementary stream with audio frames, telemetry words, or subtitles) frequently requires different unit sizes per stream (e.g. 188-byte video packets interleaved with 16-bit audio samples and 1-bit sync flags).
+- **Target Enhancements**:
+  1. **Per-stream unit size list (`--merge-units`)**:
+     Allow specifying comma-separated unit sizes corresponding by index to each merge file:
+     ```bash
+     bdd --input-file=video.raw --input-unit=188B \
+         --merge-files=audio.raw,sync.raw --merge-units=16,1 \
+         --output-file=muxed.bin
+     ```
+  2. **Structured inline parameter syntax on `--merge-file`**:
+     Allow key-value attributes attached directly to each merge file argument:
+     ```bash
+     bdd --input-file=video.es --input-unit=188B \
+         --merge-file="audio.es:unit=16:skip=32" \
+         --merge-file="flags.bin:unit=1" \
+         --output-file=muxed.bin
+     ```
+  3. **Per-stream pattern support (`--merge-patterns` / `:pattern=...`)**:
+     Allow merge streams to unpack arbitrary bitfield patterns rather than only raw integers.
 
 ---
 
