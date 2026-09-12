@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 01:03:42 2026 -->
+<!-- CreationDate: Sun Sep 13 01:06:47 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -917,7 +917,24 @@ must not be defined. If there is neither --output-unit nor
 bits.</p>
 
 <p style="margin-left:18%; margin-top: 1em">The last output
-byte is filled with zeros, if needed.</p>
+byte is filled with zeros, if needed to align to an 8-bit
+byte boundary.</p>
+
+<p style="margin-left:18%; margin-top: 1em"><b>Warning on
+Sub-Byte Streams:</b> When packing smaller units into bytes
+(for example, 1-bit or 3-bit output units), the remaining
+bits in the final flushed byte are zero-padded. For
+instance, if the stream terminates after writing three 1-bit
+units, <b>bdd</b> flushes a full 8-bit byte containing those
+three bits followed by five zero bits. When that file is
+subsequently read as bits (or with
+<b>&minus;&minus;input&minus;unit=1</b>), the reader will
+observe eight bits (the three original units plus five extra
+zero bits). <i>The count of what you write is not
+necessarily the count of what you read.</i> If exact unit
+preservation is important, you have to count units yourself
+and supply <b>&minus;&minus;count=N</b> when reading back
+the stream, or store the length in external metadata.</p>
 
 <p style="margin-left:9%;">--output-raw-unit=BITS</p>
 

@@ -87,6 +87,17 @@ bdd --input-unit=3 < foo.3bit > foo.8bit
 
 Because the output unit remains at its default of 8 bits, each 3-bit input unit (`xxx`) is padded on the left with five zero bits (`00000xxx`) to produce an 8-bit byte on standard output.
 
+> [!WARNING]
+> **Sub-Byte Output Packing & End-of-Stream Zero Padding**
+> Unix files, pipes, and block devices operate strictly on 8-bit bytes. When packing units smaller than 8 bits (e.g. `--output-unit=1` or `--output-unit=3`) whose total count does not sum to an exact multiple of 8 bits, the final byte flushed to output is padded with trailing zero bits to reach a byte boundary.
+>
+> That means that if the last byte contains, for example, **three 1-bit units** (`1, 0, 1`), `bdd` flushes a full 8-bit byte containing those three bits followed by five synthetic zeros (`10100000` = `0xA0`). When that file or pipe is subsequently read as bits (e.g. `--input-unit=1`), the reader will receive **eight bits** (the 3 original units plus 5 extra zero bits).
+>
+> **The count of what you write is not necessarily the count of what you read.** If exact unit preservation is important, you have to count units yourself:
+> - Specify `--count=N` when reading the stream back (e.g. `bdd --input-unit=1 --count=3 < stream.bin`), or
+> - Frame sub-byte units within explicit byte-aligned containers (e.g. `8[0:1]`), or
+> - Store the exact unit count or bit length in external metadata or an application header.
+
 ---
 
 ### Units, Skips, and Gaps (The Simple Model)

@@ -536,7 +536,9 @@ pattern and --output-unit must not be defined. If there is
 neither --output-unit nor --output-pattern, the default
 output unit size is 8 bits. 
 
-The last output byte is filled with zeros, if needed.
+The last output byte is filled with zeros, if needed to align to an 8-bit byte boundary.
+.IP
+\fBWarning on Sub-Byte Streams:\fR When packing smaller units into bytes (for example, 1-bit or 3-bit output units), the remaining bits in the final flushed byte are zero-padded. For instance, if the stream terminates after writing three 1-bit units, \fBbdd\fR flushes a full 8-bit byte containing those three bits followed by five zero bits. When that file is subsequently read as bits (or with \fB\-\-input\-unit=1\fR), the reader will observe eight bits (the three original units plus five extra zero bits). \fIThe count of what you write is not necessarily the count of what you read.\fR If exact unit preservation is important, you have to count units yourself and supply \fB\-\-count=N\fR when reading back the stream, or store the length in external metadata.
 
 .TP
 --output-raw-unit=BITS

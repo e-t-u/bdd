@@ -34,6 +34,7 @@
 - `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
 - `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
 - Size syntax supports multipliers and SI suffixes: `1024*188B`, `4k`, `10M`, `1G`, `16*8`, `1000000*24`.
+- **Sub-byte zero padding at EOF**: Unix byte I/O flushes 8-bit bytes. When writing sub-byte units (e.g. 1-bit or 3-bit units) whose count is not a multiple of 8, the last byte is zero-padded. Writing three 1-bit units yields an 8-bit byte on disk (`xxx00000`); reading it back as bits returns 8 units (3 original + 5 extra zero bits). Units written ≠ units read. When exact counts are needed, use `--count=N` when reading back the stream.
 
 ### Unified Stream I/O Mapping Syntax (`bdd "<in> -> <out>"`)
 - Syntax: `[skip:] unit_or_container [+ gap] -> [prefix:] unit_or_container [+ gap]`
