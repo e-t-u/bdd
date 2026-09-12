@@ -74,7 +74,7 @@ This document consolidates high-value feature improvements, API additions, and a
 
 The following items from the original 2010 `docs/TODO` scratchpad have been implemented and verified in modern `bdd` (v0.3.0):
 
-- [x] **Output unit default to input unit**: `--output-unit` defaults to input unit or pattern length instead of hardcoded 8.
+- [x] **Output unit default (8 bits)**: Maintained original design where `--output-unit` defaults to 8 bits (preserving byte padding semantics and stream symmetry).
 - [x] **Repeatable tuple manipulation pipeline**: Ordered transformation operators (`--round`, `--rearrange`, `--cut-maxint`, `--filter`, arithmetic/bitwise flags) executed sequentially.
 - [x] **Unary `--abs` and `--sign` without dummy parameter**: Supports `--abs=FIELD` without requiring a trailing `,0`.
 - [x] **Bare pattern types with implicit lengths**: Support for bare `x`, `u`/`U`, `b`/`B`, `f`/`F`, `d`/`D`, `e`/`E`, `h`/`H`, `y`/`Y`.
@@ -86,4 +86,7 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Multi-file round-robin merge**: Interleaving primary input with multiple secondary files via repeatable `--merge-file` and comma-separated `--merge-files`.
 - [x] **Multi-gigabit Rust engine**: High-performance engine achieving 16 Gbps bit reversal and multi-gigabit streaming throughput.
 - [x] **Warning deduplication & quiet mode on high-throughput streams**: Diagnostic warnings printed only on first occurrence during stream processing; deduplicated warning summary emitted at EOF. Added `-q` / `--quiet` flag to completely suppress non-fatal warnings and summaries for maximum pipeline throughput.
+- [x] **Unified Stream I/O Mapping Syntax & Symmetrical Output Framing (Approach 1)**: Unified positional stream pattern argument (e.g. `8->3`, `123:8[2:4]+8 -> 5B:8[2:4]`) supporting both Form A (`raw[offset:unit]`) and Form B (`[pre:unit:post]`), flexible positional CLI syntax (`bdd [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN] [OPTIONS]`), and symmetrical output framing flags (`--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`).
+- [ ] **Inline Unit Manipulations in Stream Patterns**: Extend the stream arrow notation to support inline unit transformations between input and output specifications (e.g. `<in> -> <manip> -> <out>`).
+
 

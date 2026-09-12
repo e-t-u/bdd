@@ -10,6 +10,19 @@ use clap::Parser;
     after_help = "AI & LLM Integration:\n  Run 'bdd --llms' (or 'bdd --ai-guide') to print the concise agent cheatsheet.\n  Run 'bdd --mcp' to launch the Model Context Protocol stdio server.\n  Documentation file: /usr/share/doc/bdd/llms.txt"
 )]
 pub struct Cli {
+    // Positional pattern arguments
+    /// Stream I/O pattern (e.g. '8->3', '123:8[2:4]+8 -> 5B:8[2:4]', '[2:4:2] -> 4')
+    #[arg(value_name = "STREAM_PATTERN")]
+    pub stream_pattern: Option<String>,
+
+    /// Input pattern for unpacking tuples (e.g. '8U', '24S', 'sync:11u,version:2u')
+    #[arg(value_name = "INPUT_PATTERN")]
+    pub pos_input_pattern: Option<String>,
+
+    /// Output pattern for packing tuples (e.g. '8U', '8U,x,8U')
+    #[arg(value_name = "OUTPUT_PATTERN")]
+    pub pos_output_pattern: Option<String>,
+
     // File options
     #[arg(long, default_value = "-")]
     pub input_file: String,
@@ -165,9 +178,25 @@ pub struct Cli {
     #[arg(long, visible_alias = "output-tuple", default_value_t = false)]
     pub output_tuples: bool,
 
-    // Output unit
+    // Output unit and framing options
     #[arg(long)]
     pub output_unit: Option<String>,
+
+    /// Size of repeating raw unit / container in bits on output
+    #[arg(long)]
+    pub output_raw_unit: Option<String>,
+
+    /// Bit offset of unit within output raw unit
+    #[arg(long, allow_hyphen_values = true)]
+    pub output_offset: Option<String>,
+
+    /// Bit gap between output raw units
+    #[arg(long, allow_hyphen_values = true)]
+    pub output_gap: Option<String>,
+
+    /// Initial prefix/skip bits emitted on output before first unit
+    #[arg(long, allow_hyphen_values = true, visible_aliases = ["output-skip", "output-prefix"])]
+    pub output_skip_bits: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub output_little_endian: bool,
@@ -355,6 +384,11 @@ pub struct ValidatedConfig {
     pub output_pattern: Option<String>,
     pub output_tuples: bool,
     pub output_unit: Option<usize>,
+    pub output_raw_unit: Option<u64>,
+    pub output_offset: u64,
+    pub output_post_gap: u64,
+    pub output_gap: u64,
+    pub output_skip_bits: u64,
     pub output_reverse_bytes: bool,
     pub output_reverse_unit: bool,
     pub output_integers: bool,
@@ -631,6 +665,71 @@ fn parse_number_argument(
 /// Validate CLI flags against legacy exclusivity rules and calculate effective options.
 pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     crate::diag::set_quiet(cli.quiet);
+
+    // 1. Process positional arguments:
+    // bdd <optional stream i/o pattern> <optional input pattern> <optional output pattern>
+    let mut stream_pat = cli.stream_pattern.take();
+    let mut pos_in_pat = cli.pos_input_pattern.take();
+    let mut pos_out_pat = cli.pos_output_pattern.take();
+
+    // Disambiguation: if stream_pat does not look like a stream pattern, but looks like an input pattern
+    if let Some(ref sp) = stream_pat {
+        if !crate::stream_pattern::is_stream_io_pattern(sp) {
+            pos_out_pat = pos_in_pat;
+            pos_in_pat = stream_pat.take();
+        }
+    }
+
+    if let Some(ref sp) = stream_pat {
+        let parsed = crate::stream_pattern::parse_stream_io_pattern(sp)?;
+        if let Some(ref inp) = parsed.input {
+            if cli.input_skip_bits.is_none() && inp.skip.is_some() {
+                cli.input_skip_bits = inp.skip.map(|v| v.to_string());
+            }
+            if cli.input_raw_unit.is_none() && inp.raw_unit.is_some() {
+                cli.input_raw_unit = inp.raw_unit.map(|v| v.to_string());
+            }
+            if cli.input_offset.is_none() && inp.offset.is_some() {
+                cli.input_offset = inp.offset.map(|v| v.to_string());
+            }
+            if cli.input_unit.is_none() && inp.unit_size.is_some() {
+                cli.input_unit = inp.unit_size.map(|v| v.to_string());
+            }
+            if cli.input_pattern.is_none() && inp.pattern.is_some() {
+                cli.input_pattern = inp.pattern.clone();
+            }
+            if cli.input_gap.is_none() && inp.gap.is_some() {
+                cli.input_gap = inp.gap.map(|v| v.to_string());
+            }
+        }
+        if let Some(ref out) = parsed.output {
+            if cli.output_skip_bits.is_none() && out.skip.is_some() {
+                cli.output_skip_bits = out.skip.map(|v| v.to_string());
+            }
+            if cli.output_raw_unit.is_none() && out.raw_unit.is_some() {
+                cli.output_raw_unit = out.raw_unit.map(|v| v.to_string());
+            }
+            if cli.output_offset.is_none() && out.offset.is_some() {
+                cli.output_offset = out.offset.map(|v| v.to_string());
+            }
+            if cli.output_unit.is_none() && out.unit_size.is_some() {
+                cli.output_unit = out.unit_size.map(|v| v.to_string());
+            }
+            if cli.output_pattern.is_none() && out.pattern.is_some() {
+                cli.output_pattern = out.pattern.clone();
+            }
+            if cli.output_gap.is_none() && out.gap.is_some() {
+                cli.output_gap = out.gap.map(|v| v.to_string());
+            }
+        }
+    }
+
+    if cli.input_pattern.is_none() && pos_in_pat.is_some() {
+        cli.input_pattern = pos_in_pat;
+    }
+    if cli.output_pattern.is_none() && pos_out_pat.is_some() {
+        cli.output_pattern = pos_out_pat;
+    }
 
     if let Some(ref preset_name) = cli.preset {
         if let Some(preset) = crate::preset::find_preset(preset_name) {
@@ -950,6 +1049,54 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             .map(|v| v as usize)
             .or(pattern_output_unit);
 
+    let output_raw_unit = parse_number_argument(
+        cli.output_raw_unit.as_deref(),
+        "--output-raw-unit",
+        None,
+        false,
+    )?;
+    let output_offset = parse_number_argument(
+        cli.output_offset.as_deref(),
+        "--output-offset",
+        Some(0),
+        false,
+    )?
+    .unwrap_or(0);
+    let output_gap =
+        parse_number_argument(cli.output_gap.as_deref(), "--output-gap", Some(0), false)?
+            .unwrap_or(0);
+    let output_skip_bits = parse_number_argument(
+        cli.output_skip_bits.as_deref(),
+        "--output-skip-bits",
+        Some(0),
+        true,
+    )?
+    .unwrap_or(0);
+
+    if output_offset > 0 && output_raw_unit.is_none() {
+        return Err(BddError::CliError(
+            "--output-offset requires --output-raw-unit to be specified".to_string(),
+        ));
+    }
+
+    let output_post_gap = if let Some(r) = output_raw_unit {
+        if r == 0 {
+            return Err(BddError::CliError(
+                "--output-raw-unit must be greater than 0".to_string(),
+            ));
+        }
+        let u = resolved_output_unit.unwrap_or(8) as u64;
+        if output_offset + u > r {
+            return Err(BddError::CliError(format!(
+                "--output-offset ({}) + output unit/pattern ({}) exceeds --output-raw-unit ({})",
+                output_offset, u, r
+            )));
+        }
+        r - output_offset - u
+    } else {
+        0
+    };
+
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {
             crate::diag::warn(
@@ -1039,6 +1186,11 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         output_pattern: cli.output_pattern,
         output_tuples: cli.output_tuples,
         output_unit: resolved_output_unit,
+        output_raw_unit,
+        output_offset,
+        output_post_gap,
+        output_gap,
+        output_skip_bits,
         output_reverse_bytes: cli.output_reverse_bytes,
         output_reverse_unit: cli.output_reverse_unit,
         output_integers: cli.output_integers,

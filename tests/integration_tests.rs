@@ -699,8 +699,8 @@ fn test_periodic_gap_seeking() {
 }
 
 #[test]
-fn test_output_unit_default_to_input_unit() {
-    // When --output-unit and --output-pattern are omitted, output unit defaults to input unit
+fn test_output_unit_default_to_8_bits() {
+    // When --output-unit and --output-pattern are omitted, output unit defaults to 8 bits
     let output = Command::new(BDD_BIN)
         .args([
             "--input-counter",
@@ -714,8 +714,8 @@ fn test_output_unit_default_to_input_unit() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let tokens: Vec<&str> = stdout.split_whitespace().collect();
-    // 3-bit values: 0 -> 000, 1 -> 001, 2 -> 010, 3 -> 011
-    assert_eq!(tokens, vec!["000", "001", "010", "011"]);
+    // 3-bit values zero-padded to 8-bit output units: 0 -> 00000000, 1 -> 00000001, 2 -> 00000010, 3 -> 00000011
+    assert_eq!(tokens, vec!["00000000", "00000001", "00000010", "00000011"]);
 }
 
 #[test]
@@ -878,7 +878,7 @@ fn test_drop_partial_eof_cli() {
     // 1 byte = 8 bits (0000 0001)
     std::fs::write(p, [0x01]).unwrap();
 
-    // Default: unit size 3 pads remaining 2 bits (010 = 2) => 3 units: 0 0 2
+    // Default: unit size 3 pads remaining 2 bits (010 = 2) => 3 units: 00 00 02 (default 8-bit output unit)
     let out_default = Command::new(BDD_BIN)
         .args(["--input-file", p, "--input-unit=3", "--output-hex"])
         .output()
@@ -886,9 +886,9 @@ fn test_drop_partial_eof_cli() {
     assert!(out_default.status.success());
     let stdout_def = String::from_utf8(out_default.stdout).unwrap();
     let tokens_def: Vec<&str> = stdout_def.split_whitespace().collect();
-    assert_eq!(tokens_def, vec!["0", "0", "2"]);
+    assert_eq!(tokens_def, vec!["00", "00", "02"]);
 
-    // With --drop-partial-eof: drops incomplete trailing 2 bits => 2 units: 0 0
+    // With --drop-partial-eof: drops incomplete trailing 2 bits => 2 units: 00 00
     let out_drop = Command::new(BDD_BIN)
         .args([
             "--input-file",
@@ -902,7 +902,7 @@ fn test_drop_partial_eof_cli() {
     assert!(out_drop.status.success());
     let stdout_drop = String::from_utf8(out_drop.stdout).unwrap();
     let tokens_drop: Vec<&str> = stdout_drop.split_whitespace().collect();
-    assert_eq!(tokens_drop, vec!["0", "0"]);
+    assert_eq!(tokens_drop, vec!["00", "00"]);
 
     // With alias --drop-trailing-bits
     let out_alias = Command::new(BDD_BIN)
@@ -918,7 +918,7 @@ fn test_drop_partial_eof_cli() {
     assert!(out_alias.status.success());
     let stdout_alias = String::from_utf8(out_alias.stdout).unwrap();
     let tokens_alias: Vec<&str> = stdout_alias.split_whitespace().collect();
-    assert_eq!(tokens_alias, vec!["0", "0"]);
+    assert_eq!(tokens_alias, vec!["00", "00"]);
 
     let _ = std::fs::remove_file(p);
 }
@@ -1229,4 +1229,119 @@ fn test_llms_flag() {
     assert!(out_alias.status.success());
     let stdout_alias = String::from_utf8(out_alias.stdout).unwrap();
     assert_eq!(stdout, stdout_alias);
+}
+
+#[test]
+fn test_stream_io_pattern_simple_arrow() {
+    let out = Command::new(BDD_BIN)
+        .args(["8->3", "--input-counter", "--count=4", "--output-bits"])
+        .output()
+        .expect("failed to run bdd 8->3");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(tokens, vec!["000", "001", "010", "011"]);
+}
+
+#[test]
+fn test_stream_io_pattern_container_forms() {
+    // 123 bits skip: 123 zeros
+    // Container 1: 2 bits (00) + 4 bits (1011 = 11) + 2 bits (00)
+    // Gap: 8 bits (11111111)
+    // Container 2: 2 bits (00) + 4 bits (1100 = 12) + 2 bits (00)
+    let mut bits = String::new();
+    for _ in 0..123 {
+        bits.push('0');
+    }
+    bits.push_str("00101100"); // Container 1: 0x2C
+    bits.push_str("11111111"); // Gap: 8 bits
+    bits.push_str("00110000"); // Container 2: 0x30
+    while !bits.len().is_multiple_of(8) {
+        bits.push('0');
+    }
+
+    let mut bytes = Vec::new();
+    for chunk in bits.as_bytes().chunks(8) {
+        let s = std::str::from_utf8(chunk).unwrap();
+        bytes.push(u8::from_str_radix(s, 2).unwrap());
+    }
+
+    let p_in = "/tmp/bdd_test_stream_pattern_in.bin";
+    std::fs::write(p_in, &bytes).unwrap();
+
+    // Test Form A: 123:8[2:4]+8 -> 5B:8[2:4]
+    let out_a = Command::new(BDD_BIN)
+        .args([
+            "123:8[2:4]+8 -> 5B:8[2:4]",
+            "--input-file",
+            p_in,
+            "--count=2",
+        ])
+        .output()
+        .expect("failed to run Form A stream pattern");
+    assert!(out_a.status.success());
+    assert_eq!(out_a.stdout, vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x30]);
+
+    // Test Form B: 123:[2:4:2]+8 -> 5B:[2:4:2]
+    let out_b = Command::new(BDD_BIN)
+        .args([
+            "123:[2:4:2]+8 -> 5B:[2:4:2]",
+            "--input-file",
+            p_in,
+            "--count=2",
+        ])
+        .output()
+        .expect("failed to run Form B stream pattern");
+    assert!(out_b.status.success());
+    assert_eq!(out_b.stdout, vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x30]);
+
+    // Test explicit output framing options mirror:
+    let out_opts = Command::new(BDD_BIN)
+        .args([
+            "--input-skip-bits=123",
+            "--input-raw-unit=8",
+            "--input-offset=2",
+            "--input-unit=4",
+            "--input-gap=8",
+            "--output-skip-bits=40",
+            "--output-raw-unit=8",
+            "--output-offset=2",
+            "--output-unit=4",
+            "--output-gap=0",
+            "--input-file",
+            p_in,
+            "--count=2",
+        ])
+        .output()
+        .expect("failed to run explicit output options");
+    assert!(out_opts.status.success());
+    assert_eq!(
+        out_opts.stdout,
+        vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x30]
+    );
+
+    let _ = std::fs::remove_file(p_in);
+}
+
+#[test]
+fn test_positional_tuple_patterns() {
+    let mut child = Command::new(BDD_BIN)
+        .args(["4U4U", "8U", "--input-tuples", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "1,2").unwrap();
+        writeln!(stdin, "3,4").unwrap();
+    }
+
+    let out = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(tokens, vec!["01", "03"]);
 }

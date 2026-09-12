@@ -33,7 +33,7 @@ Both `.deb` and `.rpm` packages install the complete `bdd` toolchain:
 ### Python Package (.whl & .tar.gz)
 - `bdd`: Python module exposing `from bdd import Bdd`
 - Bundled `libbdd.so` inside wheel for immediate out-of-the-box operation via ctypes
-- Usable directly with `pip install bdd-0.4.0-py3-none-any.whl`
+- Usable directly with `pip install bdd-0.5.0-py3-none-any.whl`
 
 ---
 
@@ -80,17 +80,17 @@ All generated packages and checksum files are written to `dist/`:
 
 ### On Fedora / RHEL / CentOS / Rocky (DNF / RPM)
 ```bash
-sudo dnf install ./dist/bdd-0.4.0-1.*.rpm
+sudo dnf install ./dist/bdd-0.5.0-1.*.rpm
 ```
 
 ### On Debian / Ubuntu / Mint (APT / DPKG)
 ```bash
-sudo apt install ./dist/bdd_0.4.0_*.deb
+sudo apt install ./dist/bdd_0.5.0_*.deb
 ```
 
 ### Python (Pip)
 ```bash
-pip install ./dist/bdd-0.4.0-py3-none-any.whl
+pip install ./dist/bdd-0.5.0-py3-none-any.whl
 ```
 ```python
 from bdd import Bdd
@@ -100,8 +100,8 @@ print(b.decode_f16(0x3c00))  # 1.0
 
 ### C Library SDK
 ```bash
-tar -xzf dist/bdd-c-0.4.0-linux-x86_64.tar.gz
-cd bdd-c-0.4.0-linux-x86_64/examples
+tar -xzf dist/bdd-c-0.5.0-linux-x86_64.tar.gz
+cd bdd-c-0.5.0-linux-x86_64/examples
 make
 ./decode_network
 ```

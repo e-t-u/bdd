@@ -1,13 +1,14 @@
 .\" 
 .\" bdd.1 $Revision: 64 $
 .\" 
-.TH bdd 1 "11 July 2009" "0.2" "User commands"
+.TH bdd 1 "12 September 2026" "0.5.0" "User commands"
 
 .SH NAME
 bdd \- Bit stream copy and modify
 
 .SH SYNOPSIS
-bdd [OPTIONS]
+.B bdd
+[\fISTREAM_PATTERN\fR] [\fIINPUT_PATTERN\fR] [\fIOUTPUT_PATTERN\fR] [\fIOPTIONS\fR]
 
 .SH DESCRIPTION
 bdd  modifies information in bit streams (non byte-aligned).
@@ -36,6 +37,22 @@ The name bdd comes from binary-dd because it is able to do much of
 the operations anyone would need in dd to handle bit streams.
 
 .SH OPTIONS
+
+.SS Positional Pattern Arguments:
+
+\fBbdd\fR supports optional positional arguments for rapid bitstream slicing and tuple unpacking:
+
+.TP
+\fISTREAM_PATTERN\fR
+Stream I/O mapping pattern defining input and output framing (e.g. \f(CR"8->3"\fR, \f(CR"123:8[2:4]+8 -> 5B:8[2:4]"\fR, or \f(CR"[2:4:2] -> 4"\fR). See \fBUNIFIED STREAM I/O MAPPING SYNTAX\fR below. If the first positional argument does not match a stream pattern (e.g. \f(CR4U4U\fR), it is interpreted as the \fIINPUT_PATTERN\fR.
+
+.TP
+\fIINPUT_PATTERN\fR
+Tuple unpack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"sync:11u,version:2u"\fR). Equivalent to \fB\-\-input\-pattern\fR.
+
+.TP
+\fIOUTPUT_PATTERN\fR
+Tuple pack pattern (e.g. \f(CR"8U"\fR, \f(CR"8U,x,8U"\fR). Equivalent to \fB\-\-output\-pattern\fR.
 
 .SS Input and output file selection:
 
@@ -517,9 +534,29 @@ Packs the output unit to BITS bits. If --output-pattern is defined,
 output unit size comes from the total size of the output
 pattern and --output-unit must not be defined. If there is
 neither --output-unit nor --output-pattern, the default
-output unit size equals the input unit size (which itself defaults to 8 bits). 
+output unit size is 8 bits. 
 
 The last output byte is filled with zeros, if needed.
+
+.TP
+--output-raw-unit=BITS
+Size of repeating raw unit / container in bits on output.
+When specified, the active output unit is framed within the container at
+--output-offset, and any remaining bits (post-gap = raw_unit - offset - unit)
+are filled with zeros.
+
+.TP
+--output-offset=BITS
+Bit offset of the active unit within the output raw container (default: 0).
+Requires --output-raw-unit to be specified.
+
+.TP
+--output-gap=BITS
+Bit gap in zeros emitted between successive output raw unit containers (default: 0).
+
+.TP
+--output-skip-bits=BITS, --output-skip, --output-prefix
+Initial prefix of zero bits emitted on output before the first unit is written (default: 0).
 
 .TP
 --output-little-endian
@@ -741,7 +778,44 @@ Launch the interactive Web UI application server (default port 7788). Allows exp
 -q, --quiet
 Quiet mode. Suppress non-fatal diagnostic warnings (such as missing tuple fields or stream conversion notices) and the EOF warning summary. Diagnostic warnings are automatically deduplicated during stream processing, and --quiet silences them entirely for maximum pipeline throughput.
 
+.SH UNIFIED STREAM I/O MAPPING SYNTAX
+Instead of specifying separate flags for skips, containers, offsets, and gaps, \fBbdd\fR accepts a unified, expressive stream I/O mapping expression as an optional positional argument:
+.PP
+.B bdd
+\f(CR"<input_stream> -> <output_stream>"\fR [\fIinput_pattern\fR] [\fIoutput_pattern\fR] [\fIoptions\fR]
+.PP
+Each stream specification follows the syntax:
+.IP
+\f(CR[skip :] unit_or_container [+ gap]\fR
+.PP
+.IP \(bu 2
+\fBInitial Skip / Prefix (\f(CR:\fB):\fR Delimited by \f(CR:\fR. Skips \fIN\fR bits on input, or emits \fIN\fR zero bits as an initial stream prefix on output. Supports unit/byte multipliers (e.g. \f(CR123\fR, \f(CR5B\fR, \f(CR4k\fR).
+.IP \(bu 2
+\fBPeriodic Gap (\f(CR+\fB):\fR Appended with \f(CR+\fR. Bits skipped between input containers, or zero bits emitted between output containers.
+.IP \(bu 2
+\fBForm A (Container Slicing):\fR \f(CRraw_size[offset : unit]\fR \(em container size outside, offset and active unit inside. Post-gap is calculated automatically as \fIraw_size - offset - unit\fR.
+.IP \(bu 2
+\fBForm B (Physical Layout Box):\fR \f(CR[pre : unit : post]\fR \(em explicit pre-gap, active payload, and post-gap inside the box. Container size is the sum \fIpre + unit + post\fR.
+.IP \(bu 2
+\fBBare Unit:\fR Plain number or size (e.g. \f(CR8\fR, \f(CR3\fR, \f(CR188B\fR).
+.PP
+All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain fully functional and can override or complement positional arguments.
+
 .SH EXAMPLES
+
+.SS bdd "8 -> 3" < foo.8bit > foo.3bit
+
+    Packs 8-bit bytes into a dense stream of 3-bit units (top 5 bits ignored).
+
+.SS bdd "123:8[2:4]+8 -> 5B:8[2:4]" < in.bin > out.bin
+
+    Skips 123 bits, slices 4-bit payload from 8-bit containers (offset 2, post-gap 2)
+    with 8-bit gaps between containers, then emits 5 zero bytes on output and frames
+    each unit inside an 8-bit container (offset 2, post-gap 2).
+
+.SS bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
+
+    Extracts 13-bit MPEG-TS PID fields directly from 188-byte packet streams.
 
 .SS bdd < foo > bar
 

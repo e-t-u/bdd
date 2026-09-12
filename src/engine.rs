@@ -71,7 +71,7 @@ fn run_pipeline_internal(
     } else if let Some(ref p) = packer {
         p.total_bits
     } else {
-        in_unit_size
+        8
     };
 
     let mut merge_streams: Vec<FileInputStream<BddReader>> = Vec::new();
@@ -260,6 +260,7 @@ fn run_pipeline_internal(
         }
     }
 
+    let mut prefix_written = false;
     let counter = Counter::new(config.skip, config.count);
 
     if config.input_tuples {
@@ -315,7 +316,16 @@ fn run_pipeline_internal(
                     BigUint::zero()
                 };
                 if let Some(ref mut sink) = unit_sink {
-                    sink.write_bits(unit, out_unit_size)?;
+                    write_framed_unit(
+                        sink.as_mut(),
+                        unit,
+                        out_unit_size,
+                        config.output_raw_unit,
+                        config.output_post_gap,
+                        config.output_gap,
+                        config.output_skip_bits,
+                        &mut prefix_written,
+                    )?;
                 }
             }
             let mut premature_eof = false;
@@ -430,7 +440,16 @@ fn run_pipeline_internal(
                     BigUint::zero()
                 };
                 if let Some(ref mut sink) = unit_sink {
-                    sink.write_bits(out_unit, out_unit_size)?;
+                    write_framed_unit(
+                        sink.as_mut(),
+                        out_unit,
+                        out_unit_size,
+                        config.output_raw_unit,
+                        config.output_post_gap,
+                        config.output_gap,
+                        config.output_skip_bits,
+                        &mut prefix_written,
+                    )?;
                 }
             }
 
@@ -464,6 +483,52 @@ fn run_pipeline_internal(
     }
     for (_, sink) in demux_sinks.iter_mut() {
         sink.flush_stream()?;
+    }
+
+    Ok(())
+}
+
+fn write_zero_bits(sink: &mut dyn UnitSink, mut bits: u64) -> Result<(), BddError> {
+    while bits > 0 {
+        let chunk = bits.min(64) as usize;
+        sink.write_bits(num_bigint::BigUint::default(), chunk)?;
+        bits -= chunk as u64;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_framed_unit(
+    sink: &mut dyn UnitSink,
+    unit: num_bigint::BigUint,
+    unit_size: usize,
+    raw_unit: Option<u64>,
+    post_gap: u64,
+    gap: u64,
+    skip_bits: u64,
+    prefix_written: &mut bool,
+) -> Result<(), BddError> {
+    if !*prefix_written {
+        if skip_bits > 0 {
+            write_zero_bits(sink, skip_bits)?;
+        }
+        *prefix_written = true;
+    }
+
+    if let Some(raw) = raw_unit {
+        let mask = if unit_size > 0 {
+            (num_bigint::BigUint::from(1u32) << unit_size) - 1u32
+        } else {
+            num_bigint::BigUint::default()
+        };
+        let framed = (unit & mask) << (post_gap as usize);
+        sink.write_bits(framed, raw as usize)?;
+    } else {
+        sink.write_bits(unit, unit_size)?;
+    }
+
+    if gap > 0 {
+        write_zero_bits(sink, gap)?;
     }
 
     Ok(())

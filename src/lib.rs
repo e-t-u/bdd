@@ -22,6 +22,7 @@ pub mod probe;
 pub mod server;
 pub mod sink;
 pub mod stream;
+pub mod stream_pattern;
 
 pub use engine::run_pipeline;
 pub use error::BddError;

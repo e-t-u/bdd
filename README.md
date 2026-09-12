@@ -2,7 +2,9 @@
 
 High-performance CLI tool and Rust library to interpret, manipulate, stream, merge, and pack arbitrary-width bitstreams.
 
-Originally created by Esa Turtiainen in Python 2 (2010), `bdd` was re-engineered in modern Rust for memory safety, 20-year maintainability, and multi-gigabit throughput with zero external C dependencies.
+Originally created by Esa Turtiainen in Python 2 (2010), 2026 `bdd` was re-engineered in modern Rust for memory safety, improved maintainability, and multi-gigabit throughput with zero external C dependencies.
+
+bdd is available as Debian and RPM packages, Rust library, Python library and C library.
 
 ![Functionality Overview](diagram.png)
 
@@ -74,8 +76,13 @@ By default:
 Every slicing and packing feature in `bdd` builds on top of this baseline. For example, if you change `--input-unit=3` without setting an output unit:
 
 ```bash
-# Extracts 3-bit values and expands each into an 8-bit byte with 5 leading zero bits:
-bdd --input-unit=3 < a > b
+# Create a stream of dense 3-bit units (top 5 bits of each byte are ignored):
+bdd --output-unit=3 < foo.8bit > foo.3bit
+
+# Extract 3-bit stream and expand each into an 8-bit byte with 5 leading zero bits:
+bdd --input-unit=3 < foo.3bit > foo.8bit
+
+# (If the top 5 bits were zeros in foo.8bit, original and round-tripped foo.8bit are identical)
 ```
 
 Because the output unit remains at its default of 8 bits, each 3-bit input unit (`xxx`) is padded on the left with five zero bits (`00000xxx`) to produce an 8-bit byte on standard output.
@@ -160,6 +167,54 @@ bdd --input-raw-unit=8 --input-offset=4 --input-unit=1 --output-integers < input
 bdd --input-raw-unit=32 --input-offset=0 --input-unit=16 < audio.raw  # Left channel
 bdd --input-raw-unit=32 --input-offset=16 --input-unit=16 < audio.raw # Right channel
 ```
+
+---
+
+### Unified Stream I/O Mapping Syntax (`bdd "<in> -> <out>"`)
+
+Instead of specifying separate flags for skips, containers, offsets, and gaps, `bdd` accepts a unified, expressive **stream I/O mapping expression** as an optional positional argument:
+
+```bash
+bdd "<input_stream> -> <output_stream>" [input_pattern] [output_pattern] [options]
+```
+
+Each stream definition uses the syntax:
+```text
+[skip :] unit_or_container [+ gap]
+```
+- **Initial Skip / Prefix (`:`):** Delimited by `:`. Skips $N$ bits on input, or emits $N$ zero bits as an initial stream prefix on output.
+- **Periodic Gap (`+`):** Appended with `+`. Defines bits skipped between input containers, or zero bits emitted between output containers.
+- **Containers & Bitfields:** Can be expressed in two complementary formats:
+  - **Form A (Container Slicing): `raw_size[offset : unit]`** — container size outside, offset and active unit inside (post-gap is computed automatically as $\text{raw} - \text{offset} - \text{unit}$).
+  - **Form B (Physical Layout Box): `[pre : unit : post]`** — explicit pre-gap, active payload, and post-gap inside the box (container size is the sum $\text{pre} + \text{unit} + \text{post}$).
+  - **Bare Unit:** A plain number or size (e.g. `8`, `3`, `188B`, `4k`).
+
+#### Real-World Recipes & Examples
+
+```bash
+# 1. Simple unit resizing (8-bit input to 3-bit output):
+bdd "8 -> 3" < foo.8bit > foo.3bit
+
+# 2. Full periodic container slicing and output framing (Form A):
+# Skip 123b, 8b container (2b offset, 4b payload, 2b post-gap), 8b gap between containers
+# -> Output 5B zero prefix, pack into 8b container (2b pre-gap, 4b payload, 2b post-gap):
+bdd "123 : 8[2:4] + 8 -> 5B : 8[2:4]" < in.bin > out.bin
+
+# 3. Same container layout using Form B (Physical Layout Box):
+bdd "123 : [2:4:2] + 8 -> 5B : [2:4:2]" < in.bin > out.bin
+
+# 4. MPEG-TS: Extract 13-bit PID from 188-byte packet (11-bit header):
+bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
+
+# 5. Output Framing: Pack raw 13-bit PIDs back into 188-byte container frames:
+bdd "13 -> 188B[11:13]" < pids.bin > framed.ts
+
+# 6. Positional Tuple Patterns:
+bdd 4U4U 8U --input-tuples --output-hex < pairs.txt
+bdd "8->8" 4U4U 8U --input-tuples --output-hex < pairs.txt
+```
+
+All CLI flags (`--input-raw-unit`, `--input-offset`, `--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`, etc.) remain fully functional and can override or complement positional arguments.
 
 ---
 
@@ -514,10 +569,12 @@ bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
 ## 7. Command Line Options Reference
 
 ```
-Usage: bdd [OPTIONS] [FILE]
+Usage: bdd [OPTIONS] [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN]
 
 Arguments:
-  [FILE]  Input file (defaults to standard input '-')
+  [STREAM_PATTERN]                 Stream I/O pattern (e.g. '8->3', '123:8[2:4]+8 -> 5B:8[2:4]', '[2:4:2] -> 4')
+  [INPUT_PATTERN]                  Input pattern for unpacking tuples (e.g. '8U', '24S', 'sync:11u,version:2u')
+  [OUTPUT_PATTERN]                 Output pattern for packing tuples (e.g. '8U', '8U,x,8U')
 
 Input Unit & Raw Unit Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
@@ -573,7 +630,11 @@ Tuple Manipulators:
 
 Output Unit & Pattern Options:
       --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats, multipliers & counter)
-      --output-unit <BITS>         Output unit size in bits (defaults to input unit size or pattern width)
+      --output-unit <BITS>         Output unit size in bits (default: 8, or pattern width)
+      --output-raw-unit <BITS>     Size of repeating raw unit / container in bits on output
+      --output-offset <BITS>       Bit offset of unit inside output raw unit [default: 0]
+      --output-gap <BITS>          Bit gap between output raw unit containers [default: 0]
+      --output-skip-bits <BITS>    Initial zero prefix bits emitted before first unit [aliases: --output-skip, --output-prefix]
   -x, --output-hex                 Output units as formatted hexadecimal strings
   -b, --output-bits                Output units as ASCII bit strings ('0' and '1')
   -i, --output-integers            Output unsigned integer per unit (one per line)
@@ -912,29 +973,29 @@ Native packages, Python modules, and C SDK archives can be built directly using 
 - **Debian / Ubuntu / Linux Mint (`.deb`)**:
   ```bash
   make deb
-  # Install: sudo apt install ./dist/bdd_0.4.0_amd64.deb
+  # Install: sudo apt install ./dist/bdd_0.5.0_amd64.deb
   ```
 - **Fedora / RHEL / CentOS / Rocky (`.rpm` for DNF)**:
   ```bash
   make rpm
-  # Install: sudo dnf install ./dist/bdd-0.4.0-1.*.rpm
+  # Install: sudo dnf install ./dist/bdd-0.5.0-1.*.rpm
   ```
 - **Python Module for Pip (`.whl` & `.tar.gz`)**:
   ```bash
   make python
-  # Install: pip install ./dist/bdd-0.4.0-py3-none-any.whl
+  # Install: pip install ./dist/bdd-0.5.0-py3-none-any.whl
   ```
 - **Standalone C Library SDK Archive (`.tar.gz`)**:
   ```bash
   make c-lib
-  # Extract: tar -xzf ./dist/bdd-c-0.4.0-linux-x86_64.tar.gz
+  # Extract: tar -xzf ./dist/bdd-c-0.5.0-linux-x86_64.tar.gz
   ```
 - **Build All Distribution Packages & Checksums**:
   ```bash
   make packages
   ```
 
-All generated distribution packages (`.deb`, `.rpm`, `.whl`, `.tar.gz`) are automatically built and published as downloadable assets on [GitHub Releases](https://github.com/e-t-u/bdd/releases) upon pushing a version tag (e.g. `v0.4.0`).
+All generated distribution packages (`.deb`, `.rpm`, `.whl`, `.tar.gz`) are automatically built and published as downloadable assets on [GitHub Releases](https://github.com/e-t-u/bdd/releases) upon pushing a version tag (e.g. `v0.5.0`).
 
 ---
 

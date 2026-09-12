@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 09:36:42 2026 -->
+<!-- CreationDate: Sat Sep 12 23:59:31 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -24,6 +24,7 @@
 <a href="#SYNOPSIS">SYNOPSIS</a><br>
 <a href="#DESCRIPTION">DESCRIPTION</a><br>
 <a href="#OPTIONS">OPTIONS</a><br>
+<a href="#Positional Pattern Arguments:">Positional Pattern Arguments:</a><br>
 <a href="#Input and output file selection:">Input and output file selection:</a><br>
 <a href="#Input Units, Skips, and Gaps">Input Units, Skips, and Gaps</a><br>
 <a href="#Raw Units &amp; Containers">Raw Units &amp; Containers</a><br>
@@ -38,7 +39,11 @@
 <a href="#Show output as human readable">Show output as human readable</a><br>
 <a href="#Stream demuxing and routing">Stream demuxing and routing</a><br>
 <a href="#Analysis, Inspection and Model Context Protocol (MCP)">Analysis, Inspection and Model Context Protocol (MCP)</a><br>
+<a href="#UNIFIED STREAM I/O MAPPING SYNTAX">UNIFIED STREAM I/O MAPPING SYNTAX</a><br>
 <a href="#EXAMPLES">EXAMPLES</a><br>
+<a href="#bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit">bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit</a><br>
+<a href="#bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin">bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin</a><br>
+<a href="#bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin">bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin</a><br>
 <a href="#bdd &lt; foo &gt; bar">bdd &lt; foo &gt; bar</a><br>
 <a href="#bdd --input-unit=3">bdd --input-unit=3</a><br>
 <a href="#bdd --input-unit=1 --output-pattern=1U1z">bdd --input-unit=1 --output-pattern=1U1z</a><br>
@@ -67,8 +72,9 @@ stream copy and modify</p>
 </h2>
 
 
-<p style="margin-left:9%; margin-top: 1em">bdd
-[OPTIONS]</p>
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
+[<i>STREAM_PATTERN</i>] [<i>INPUT_PATTERN</i>]
+[<i>OUTPUT_PATTERN</i>] [<i>OPTIONS</i>]</p>
 
 <h2>DESCRIPTION
 <a name="DESCRIPTION"></a>
@@ -112,6 +118,37 @@ streams.</p>
 <a name="OPTIONS"></a>
 </h2>
 
+
+<h3>Positional Pattern Arguments:
+<a name="Positional Pattern Arguments:"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
+supports optional positional arguments for rapid bitstream
+slicing and tuple unpacking: <i><br>
+STREAM_PATTERN</i></p>
+
+<p style="margin-left:18%;">Stream I/O mapping pattern
+defining input and output framing (e.g. &quot;8-&gt;3&quot;,
+&quot;123:8[2:4]+8 -&gt; 5B:8[2:4]&quot;, or &quot;[2:4:2]
+-&gt; 4&quot;). See <b>UNIFIED STREAM I/O MAPPING SYNTAX</b>
+below. If the first positional argument does not match a
+stream pattern (e.g. 4U4U), it is interpreted as the
+<i>INPUT_PATTERN</i>.</p>
+
+<p style="margin-left:9%;"><i>INPUT_PATTERN</i></p>
+
+<p style="margin-left:18%;">Tuple unpack pattern (e.g.
+&quot;8U&quot;, &quot;4U4U&quot;,
+&quot;sync:11u,version:2u&quot;). Equivalent to
+<b>&minus;&minus;input&minus;pattern</b>.</p>
+
+<p style="margin-left:9%;"><i>OUTPUT_PATTERN</i></p>
+
+<p style="margin-left:18%;">Tuple pack pattern (e.g.
+&quot;8U&quot;, &quot;8U,x,8U&quot;). Equivalent to
+<b>&minus;&minus;output&minus;pattern</b>.</p>
 
 <h3>Input and output file selection:
 <a name="Input and output file selection:"></a>
@@ -871,11 +908,38 @@ unit.</p>
 bits. If --output-pattern is defined, output unit size comes
 from the total size of the output pattern and --output-unit
 must not be defined. If there is neither --output-unit nor
---output-pattern, the default output unit size equals the
-input unit size (which itself defaults to 8 bits).</p>
+--output-pattern, the default output unit size is 8
+bits.</p>
 
 <p style="margin-left:18%; margin-top: 1em">The last output
 byte is filled with zeros, if needed.</p>
+
+<p style="margin-left:9%;">--output-raw-unit=BITS</p>
+
+<p style="margin-left:18%;">Size of repeating raw unit /
+container in bits on output. When specified, the active
+output unit is framed within the container at
+--output-offset, and any remaining bits (post-gap = raw_unit
+- offset - unit) are filled with zeros.</p>
+
+<p style="margin-left:9%;">--output-offset=BITS</p>
+
+<p style="margin-left:18%;">Bit offset of the active unit
+within the output raw container (default: 0). Requires
+--output-raw-unit to be specified.</p>
+
+<p style="margin-left:9%;">--output-gap=BITS</p>
+
+<p style="margin-left:18%;">Bit gap in zeros emitted
+between successive output raw unit containers (default:
+0).</p>
+
+<p style="margin-left:9%;">--output-skip-bits=BITS,
+--output-skip, --output-prefix</p>
+
+<p style="margin-left:18%;">Initial prefix of zero bits
+emitted on output before the first unit is written (default:
+0).</p>
 
 <p style="margin-left:9%;">--output-little-endian</p>
 
@@ -1211,10 +1275,140 @@ warnings are automatically deduplicated during stream
 processing, and --quiet silences them entirely for maximum
 pipeline throughput.</p>
 
+<h2>UNIFIED STREAM I/O MAPPING SYNTAX
+<a name="UNIFIED STREAM I/O MAPPING SYNTAX"></a>
+</h2>
+
+
+<p style="margin-left:9%; margin-top: 1em">Instead of
+specifying separate flags for skips, containers, offsets,
+and gaps, <b>bdd</b> accepts a unified, expressive stream
+I/O mapping expression as an optional positional
+argument:</p>
+
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
+&quot;&lt;input_stream&gt; -&gt; &lt;output_stream&gt;&quot;
+[<i>input_pattern</i>] [<i>output_pattern</i>]
+[<i>options</i>]</p>
+
+<p style="margin-left:9%; margin-top: 1em">Each stream
+specification follows the syntax:</p>
+
+<p style="margin-left:18%; margin-top: 1em">[skip :]
+unit_or_container [+ gap]</p>
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Initial Skip / Prefix (</b>:<b>):</b> Delimited by :.
+Skips <i>N</i> bits on input, or emits <i>N</i> zero bits as
+an initial stream prefix on output. Supports unit/byte
+multipliers (e.g. 123, 5B, 4k).</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Periodic Gap (</b>+<b>):</b> Appended with +. Bits
+skipped between input containers, or zero bits emitted
+between output containers.</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Form A (Container Slicing):</b> raw_size[offset :
+unit] &mdash; container size outside, offset and active unit
+inside. Post-gap is calculated automatically as <i>raw_size
+- offset - unit</i>.</p></td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Form B (Physical Layout Box):</b> [pre : unit : post]
+&mdash; explicit pre-gap, active payload, and post-gap
+inside the box. Container size is the sum <i>pre + unit +
+post</i>.</p> </td></tr>
+<tr valign="top" align="left">
+<td width="9%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Bare Unit:</b> Plain number or size (e.g. 8, 3,
+188B).</p> </td></tr>
+</table>
+
+<p style="margin-left:9%; margin-top: 1em">All flags
+(<b>&minus;&minus;input&minus;raw&minus;unit</b>,
+<b>&minus;&minus;output&minus;raw&minus;unit</b>, etc.)
+remain fully functional and can override or complement
+positional arguments.</p>
+
 <h2>EXAMPLES
 <a name="EXAMPLES"></a>
 </h2>
 
+
+<h3>bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit
+<a name="bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Packs 8-bit
+bytes into a dense stream of 3-bit units (top 5 bits
+ignored).</p>
+
+<h3>bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin
+<a name="bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Skips 123 bits,
+slices 4-bit payload from 8-bit containers (offset 2,
+post-gap 2) <br>
+with 8-bit gaps between containers, then emits 5 zero bytes
+on output and frames <br>
+each unit inside an 8-bit container (offset 2, post-gap
+2).</p>
+
+<h3>bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin
+<a name="bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Extracts 13-bit
+MPEG-TS PID fields directly from 188-byte packet
+streams.</p>
 
 <h3>bdd &lt; foo &gt; bar
 <a name="bdd &lt; foo &gt; bar"></a>

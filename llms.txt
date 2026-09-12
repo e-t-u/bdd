@@ -21,14 +21,30 @@
 ```
 
 ### Raw Unit & Stream Positioning Model
+- Positional CLI syntax: `bdd [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN] [OPTIONS]`
 - `--input-raw-unit <BITS>`: Defines total periodic chunk container (e.g. 188B MPEG-TS packet = `188*8` or `1504`).
 - `--input-offset <BITS>`: Offset in bits from container start to target payload unit.
 - `--input-unit <BITS>`: Payload bit count to extract. Default equals `--input-raw-unit` if omitted.
-- `--output-unit <BITS>`: Output bit count. Defaults to `--input-unit` if omitted.
+- `--output-unit <BITS>`: Output bit count. Defaults to 8 bits if omitted.
+- `--output-raw-unit <BITS>`: Size of repeating raw unit container in bits on output.
+- `--output-offset <BITS>`: Bit offset of unit within output raw container.
+- `--output-gap <BITS>`: Bit gap in zeros emitted between output raw units.
+- `--output-skip-bits <BITS>`: Initial zero prefix bits emitted on output before first unit (alias: `--output-skip`).
 - `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers. On seekable files, gaps are skipped with O(1) kernel seek.
 - `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
 - `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
 - Size syntax supports multipliers and SI suffixes: `1024*188B`, `4k`, `10M`, `1G`, `16*8`, `1000000*24`.
+
+### Unified Stream I/O Mapping Syntax (`bdd "<in> -> <out>"`)
+- Syntax: `[skip:] unit_or_container [+ gap] -> [prefix:] unit_or_container [+ gap]`
+- Form A (Container Slicing): `raw_size[offset:unit]` (post-gap is computed as `raw_size - offset - unit`)
+- Form B (Physical Layout Box): `[pre:unit:post]` (raw container is computed as `pre + unit + post`)
+- Bare Unit: `8`, `3`, `188B`
+- Examples:
+  - `bdd "8->3"`: Dense 3-bit stream from 8-bit bytes
+  - `bdd "123:8[2:4]+8 -> 5B:8[2:4]"`: Slicing + output framing with skip and gap
+  - `bdd "188B[11:13] -> 13"`: Slice 13-bit PID from 188-byte MPEG-TS packets
+  - `bdd 4U4U 8U --input-tuples`: Positional tuple unpack and pack patterns
 
 ---
 
