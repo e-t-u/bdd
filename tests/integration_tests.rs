@@ -1370,3 +1370,68 @@ fn test_positional_tuple_patterns() {
     let tokens_txt: Vec<&str> = stdout_txt.split_whitespace().collect();
     assert_eq!(tokens_txt, vec!["12", "34"]);
 }
+
+#[test]
+fn test_nested_pattern_parentheses() {
+    // 1. Check CLI explain-pattern with 2*(2*(u2*U))
+    let output = Command::new(BDD_BIN)
+        .args(["--explain-pattern=2*(2*(u2*U))"])
+        .output()
+        .expect("failed to run bdd explain");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Total Width: 12 bits"));
+    assert!(stdout.contains("Fields:      12"));
+
+    // 2. Unpack binary data using 2*(2*(u2*U)) into 12-field CSV tuples
+    let mut child = Command::new(BDD_BIN)
+        .args(["2*(2*(u2*U))", "--output-tuples"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().unwrap();
+        // 2 bytes = 16 bits; first 12 bits will form one tuple: 0b10110011, 0b11110000
+        stdin.write_all(&[0xB3, 0xF0]).unwrap();
+    }
+
+    let out = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(out.status.success());
+    let tuple_line = String::from_utf8(out.stdout).unwrap();
+    let first_line = tuple_line.lines().next().unwrap();
+    let fields: Vec<&str> = first_line.split(',').collect();
+    assert_eq!(fields.len(), 12);
+
+    // 3. Check 3-level arbitrary nesting: 2*(2*(2*(u2*U))) -> 24 bits, 24 fields
+    let output3 = Command::new(BDD_BIN)
+        .args(["--explain-pattern=2*(2*(2*(u2*U)))"])
+        .output()
+        .expect("failed to run bdd explain");
+    assert!(output3.status.success());
+    let stdout3 = String::from_utf8(output3.stdout).unwrap();
+    assert!(stdout3.contains("Total Width: 24 bits"));
+    assert!(stdout3.contains("Fields:      24"));
+
+    // 4. Check nested parentheses with commas: 2*(4U, 4u) -> 16 bits, 4 fields
+    let output_commas = Command::new(BDD_BIN)
+        .args(["--explain-pattern=2*(4U, 4u)"])
+        .output()
+        .expect("failed to run bdd explain");
+    assert!(output_commas.status.success());
+    let stdout_commas = String::from_utf8(output_commas.stdout).unwrap();
+    assert!(stdout_commas.contains("Total Width: 16 bits"));
+    assert!(stdout_commas.contains("Fields:      4"));
+
+    // 5. Bare parentheses without multiplier: (u2*U) -> 3 bits, 3 fields
+    let output_bare = Command::new(BDD_BIN)
+        .args(["--explain-pattern=(u2*U)"])
+        .output()
+        .expect("failed to run bdd explain");
+    assert!(output_bare.status.success());
+    let stdout_bare = String::from_utf8(output_bare.stdout).unwrap();
+    assert!(stdout_bare.contains("Total Width: 3 bits"));
+    assert!(stdout_bare.contains("Fields:      3"));
+}

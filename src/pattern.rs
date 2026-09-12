@@ -57,7 +57,34 @@ fn expand_single_token(s: &str) -> String {
     let mut out = String::new();
     let mut chars = body.chars().peekable();
     while let Some(c) = chars.next() {
-        if c.is_ascii_digit() {
+        if c == '(' {
+            let mut inner = String::new();
+            let mut depth = 1;
+            for ic in chars.by_ref() {
+                if ic == '(' {
+                    depth += 1;
+                    inner.push(ic);
+                } else if ic == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    } else {
+                        inner.push(ic);
+                    }
+                } else {
+                    inner.push(ic);
+                }
+            }
+            let expanded_inner = expand_pattern_multipliers(&inner);
+            if let Some(ref n) = name {
+                out.push_str(&format!("{}:{}", n, expanded_inner));
+            } else {
+                if !out.is_empty() && !out.ends_with(',') && expanded_inner.contains(',') {
+                    out.push(',');
+                }
+                out.push_str(&expanded_inner);
+            }
+        } else if c.is_ascii_digit() {
             let mut num_str = String::new();
             num_str.push(c);
             while let Some(&next_c) = chars.peek() {
@@ -67,8 +94,25 @@ fn expand_single_token(s: &str) -> String {
                     break;
                 }
             }
+            // Optional whitespace before '*'
+            let mut ws_before = String::new();
+            while let Some(&next_c) = chars.peek() {
+                if next_c.is_whitespace() {
+                    ws_before.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
             if chars.peek() == Some(&'*') {
                 chars.next(); // consume '*'
+                // Optional whitespace after '*'
+                while let Some(&next_c) = chars.peek() {
+                    if next_c.is_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
                 if chars.peek() == Some(&'(') {
                     chars.next(); // consume '('
                     let mut inner = String::new();
@@ -101,6 +145,9 @@ fn expand_single_token(s: &str) -> String {
                                 out.push_str(&format!("{}:{}", n, expanded_inner));
                             }
                         } else {
+                            if !out.is_empty() && !out.ends_with(',') && expanded_inner.contains(',') {
+                                out.push(',');
+                            }
                             out.push_str(&expanded_inner);
                         }
                     }
@@ -133,9 +180,10 @@ fn expand_single_token(s: &str) -> String {
                     }
                 }
             } else if let Some(ref n) = name {
-                out.push_str(&format!("{}:{}", n, num_str));
+                out.push_str(&format!("{}:{}{}", n, num_str, ws_before));
             } else {
                 out.push_str(&num_str);
+                out.push_str(&ws_before);
             }
         } else {
             out.push(c);
@@ -147,19 +195,63 @@ fn expand_single_token(s: &str) -> String {
 /// Expands repetition multipliers in pattern strings, e.g. "4*8B" -> "8B8B8B8B",
 /// "w:4*6E" -> "w_0:6E,w_1:6E,w_2:6E,w_3:6E", and "2*(4U4U)" -> "4U4U4U4U".
 pub fn expand_pattern_multipliers(s: &str) -> String {
-    if s.contains(',') || s.contains(';') || s.chars().any(|c| c.is_whitespace()) {
-        let mut expanded_tokens = Vec::new();
-        for t in s.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
-            let trimmed = t.trim();
-            if trimmed.is_empty() {
-                continue;
+    // Normalize spaces around '*' and ':'
+    let mut normalized = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '*' || c == ':' {
+            while normalized.ends_with(' ') || normalized.ends_with('\t') {
+                normalized.pop();
             }
-            expanded_tokens.push(expand_single_token(trimmed));
+            normalized.push(c);
+            i += 1;
+            while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+                i += 1;
+            }
+        } else {
+            normalized.push(c);
+            i += 1;
         }
-        expanded_tokens.join(",")
-    } else {
-        expand_single_token(s)
     }
+
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    for c in normalized.chars() {
+        if c == '(' {
+            depth += 1;
+            current.push(c);
+        } else if c == ')' {
+            if depth > 0 {
+                depth -= 1;
+            }
+            current.push(c);
+        } else if depth == 0 && (c == ',' || c == ';' || c.is_whitespace()) {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                tokens.push(trimmed.to_string());
+                current.clear();
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        tokens.push(trimmed.to_string());
+    }
+
+    if tokens.is_empty() {
+        return String::new();
+    }
+
+    let mut expanded_tokens = Vec::new();
+    for t in tokens {
+        expanded_tokens.push(expand_single_token(&t));
+    }
+    expanded_tokens.join(",")
 }
 
 /// Parse and validate an input pattern string (e.g. "2U3U5U", "sync:11u,version:2u", "32F", "4*8B", "16H", "8E").
@@ -854,6 +946,48 @@ mod tests {
         let p = parse_input_pattern("4*8B").unwrap();
         assert_eq!(p.len(), 4);
         assert_eq!(p.iter().map(|item| item.bits).sum::<usize>(), 32);
+
+        // Arbitrarily nested parentheses: 2*(2*(u2*U))
+        let nested_2x2 = "2*(2*(u2*U))";
+        assert_eq!(expand_pattern_multipliers(nested_2x2), "uUUuUUuUUuUU");
+        let p_nested = parse_input_pattern(nested_2x2).unwrap();
+        assert_eq!(p_nested.len(), 12);
+        assert_eq!(p_nested.iter().map(|item| item.bits).sum::<usize>(), 12);
+
+        // 3-level nesting: 2*(2*(2*(u2*U)))
+        let nested_3 = "2*(2*(2*(u2*U)))";
+        let p_nested3 = parse_input_pattern(nested_3).unwrap();
+        assert_eq!(p_nested3.len(), 24);
+        assert_eq!(p_nested3.iter().map(|item| item.bits).sum::<usize>(), 24);
+
+        // Nested parentheses with commas: 2*(4U, 4u)
+        let p_commas = parse_input_pattern("2*(4U, 4u)").unwrap();
+        assert_eq!(p_commas.len(), 4);
+        assert_eq!(p_commas[0].bits, 4);
+        assert_eq!(p_commas[1].bits, 4);
+        assert_eq!(p_commas[2].bits, 4);
+        assert_eq!(p_commas[3].bits, 4);
+
+        // Bare parentheses without multiplier: (u2*U)
+        let p_bare = parse_input_pattern("(u2*U)").unwrap();
+        assert_eq!(p_bare.len(), 3);
+        assert_eq!(p_bare[0].char_code, 'u');
+        assert_eq!(p_bare[1].char_code, 'U');
+        assert_eq!(p_bare[2].char_code, 'U');
+
+        // Parentheses with whitespace around operators: 2 * ( 2 * ( u 2*U ) )
+        let p_spaces = parse_input_pattern("2 * ( 2 * ( u 2*U ) )").unwrap();
+        assert_eq!(p_spaces.len(), 12);
+
+        // Unpack / pack roundtrip with 2*(2*(u2*U))
+        let unpacker = TupleUnpacker::new(nested_2x2).unwrap();
+        assert_eq!(unpacker.total_bits, 12);
+        let test_val = BigUint::from(0b101100110101u32);
+        let tuple = unpacker.unpack(test_val.clone());
+        assert_eq!(tuple.len(), 12);
+        let packer = TuplePacker::new(nested_2x2).unwrap();
+        let packed = packer.pack(tuple).unwrap();
+        assert_eq!(packed, test_val);
     }
 
     #[cfg(feature = "small-floats")]
