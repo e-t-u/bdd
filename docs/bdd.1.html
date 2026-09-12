@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 01:06:47 2026 -->
+<!-- CreationDate: Sun Sep 13 01:15:25 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -25,18 +25,18 @@
 <a href="#DESCRIPTION">DESCRIPTION</a><br>
 <a href="#OPTIONS">OPTIONS</a><br>
 <a href="#Positional Pattern Arguments:">Positional Pattern Arguments:</a><br>
-<a href="#Input and output file selection:">Input and output file selection:</a><br>
+<a href="#Input and Output File Selection">Input and Output File Selection</a><br>
 <a href="#Input Units, Skips, and Gaps">Input Units, Skips, and Gaps</a><br>
 <a href="#Raw Units &amp; Containers">Raw Units &amp; Containers</a><br>
-<a href="#Bypass bit stream input (fake inputs)">Bypass bit stream input (fake inputs)</a><br>
+<a href="#Synthetic Stream Sources (Bypass Stream Input)">Synthetic Stream Sources (Bypass Stream Input)</a><br>
 <a href="#Unpack a unit to a tuple">Unpack a unit to a tuple</a><br>
 <a href="#Bypass unit and field selection">Bypass unit and field selection</a><br>
 <a href="#Manipulate tuple">Manipulate tuple</a><br>
 <a href="#Skip a part of tuples">Skip a part of tuples</a><br>
 <a href="#Pack a tuple to a unit">Pack a tuple to a unit</a><br>
 <a href="#Collect output data stream">Collect output data stream</a><br>
-<a href="#Merge output with another data stream:">Merge output with another data stream:</a><br>
-<a href="#Show output as human readable">Show output as human readable</a><br>
+<a href="#Stream Merging &amp; Interleaving">Stream Merging &amp; Interleaving</a><br>
+<a href="#Human-Readable and Text Output Sinks">Human-Readable and Text Output Sinks</a><br>
 <a href="#Stream demuxing and routing">Stream demuxing and routing</a><br>
 <a href="#Analysis, Inspection and Model Context Protocol (MCP)">Analysis, Inspection and Model Context Protocol (MCP)</a><br>
 <a href="#UNIFIED STREAM I/O MAPPING SYNTAX">UNIFIED STREAM I/O MAPPING SYNTAX</a><br>
@@ -83,38 +83,51 @@ stream copy and modify</p>
 </h2>
 
 
-<p style="margin-left:9%; margin-top: 1em">bdd modifies
-information in bit streams (non byte-aligned).</p>
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
+(binary-dd) inspects, transforms, unpacks, manipulates,
+interleaves, and packs bitstreams with arbitrary
+(non-byte-aligned) bit precision.</p>
 
-<p style="margin-left:9%; margin-top: 1em">By default, bdd
-reads bytes from standard input and writes them to standard
-output. With options, the behaviour can be widely modified
-to handle inputs and outputs with accuracy of one bit.</p>
+<p style="margin-left:9%; margin-top: 1em">By default,
+<b>bdd</b> reads bytes from standard input and writes them
+unchanged to standard output, functioning like an exact
+8-bit copy tool. With options and patterns, its behavior can
+be extended to manipulate inputs and outputs down to
+single-bit accuracy.</p>
 
-<p style="margin-left:9%; margin-top: 1em">bdd considers
-input and output as streams of bit units. A bit unit is a
-repeatable units of constant amount of bits. Those units can
-be in the middle of the stream and the input stream can be
-infinite (like /dev/zero).</p>
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
+models input and output as continuous streams of bit units.
+A bit unit is a repeating sequence containing a constant
+number of bits. Units can start at arbitrary bit offsets, be
+spaced by periodic gaps, or reside inside repeating physical
+containers (raw units).</p>
 
-<p style="margin-left:9%; margin-top: 1em">Every unit is
-divided to bit-defined fields and fields are interpreted
-into a tuple (analogy of relational database). Tuples may
-have integers, floats and strings.</p>
+<p style="margin-left:9%; margin-top: 1em">Each unit can be
+unpacked into structured, typed fields called a <i>tuple</i>
+(analogous to a row in a relational database). Fields within
+a tuple may represent unsigned or signed integers,
+floating-point numbers (from IEEE double-precision down to
+sub-byte AI float formats), UTF-8 characters, or raw
+bytes.</p>
 
-<p style="margin-left:9%; margin-top: 1em">Tuple can be
-modified and packed again bit by bit into a unit. Units are
-written into the output bit stream.</p>
+<p style="margin-left:9%; margin-top: 1em">Tuples can be
+transformed in flight through an ordered pipeline of
+operations (arithmetic, bitwise masks, shifts, rounding,
+clamping, and conditional filtering) and repacked into
+output bit units or formatted into human- and
+machine-readable text formats (hex, bits, decimal integers,
+CSV, NDJSON, or ANSI visual dumps).</p>
 
-<p style="margin-left:9%; margin-top: 1em">There can be
-anothern input stream, merge stream. Units in the merge
-stream are output after every main input stream unit. Merge
-stream does not support division into fields.</p>
+<p style="margin-left:9%; margin-top: 1em"><b>bdd</b> also
+supports secondary merge streams, allowing data from one or
+more secondary files to be interleaved round-robin with the
+primary stream, as well as field demuxing into separate
+destination files.</p>
 
-<p style="margin-left:9%; margin-top: 1em">The name bdd
-comes from binary-dd because it is able to do much of the
-operations anyone would need in dd to handle bit
-streams.</p>
+<p style="margin-left:9%; margin-top: 1em">The name
+<b>bdd</b> comes from <i>binary-dd</i> because it performs
+bitstream-level operations analogous to what <b>dd</b>(1)
+does for block-aligned data.</p>
 
 <h2>OPTIONS
 <a name="OPTIONS"></a>
@@ -155,8 +168,8 @@ Note: when <b>&minus;&minus;input&minus;tuples</b> is used,
 input fields are parsed from commas, so a single positional
 pattern specifies the output packing pattern.</p>
 
-<h3>Input and output file selection:
-<a name="Input and output file selection:"></a>
+<h3>Input and Output File Selection
+<a name="Input and Output File Selection"></a>
 </h3>
 
 
@@ -164,20 +177,20 @@ pattern specifies the output packing pattern.</p>
 to use standard input and standard output. <br>
 --input-file=FILENAME</p>
 
-<p style="margin-left:18%;">Selects input file to used as
-input instead pipe input. Can not be used with --input-zeros
---input-ones, --input-random or --input-counter.
---input-integers and --input-tuples take their input from
-input file. Filename can also be &quot;-&quot; to describe
-pipe input (default).</p>
+<p style="margin-left:18%;">Selects input file to use
+instead of standard input pipe. Cannot be used with
+--input-zeros, --input-ones, --input-random, or
+--input-counter. --input-integers and --input-tuples take
+their input from the input file. Filename can also be
+&quot;-&quot; to specify standard input pipe (default).</p>
 
 <p style="margin-left:9%;">--output-file=FILENAME</p>
 
-<p style="margin-left:18%;">Selects output file to used as
-output instead pipe output. Filename can also be
-&quot;-&quot; to describe pipe output (default). Outuput
-file must not exist, bdd does not overwrite an existing
-file.</p>
+<p style="margin-left:18%;">Selects output file to use
+instead of standard output pipe. Filename can also be
+&quot;-&quot; to specify standard output pipe (default).
+Output file must not already exist; <b>bdd</b> will not
+overwrite an existing file without explicit redirection.</p>
 
 <h3>Input Units, Skips, and Gaps
 <a name="Input Units, Skips, and Gaps"></a>
@@ -185,8 +198,8 @@ file.</p>
 
 
 <p style="margin-left:9%; margin-top: 1em">A unit is a
-constant bit amount that repeats in the input stream. All
-stream dimensions are measured strictly in bits: <br>
+constant number of bits that repeats in the input stream.
+All stream dimensions are measured strictly in bits: <br>
 --input-unit=BITS</p>
 
 <p style="margin-left:18%;">Breaks input into active units
@@ -296,102 +309,116 @@ reads.</p>
 primary input (this is already the default whenever seeking
 is possible). Maintained for backwards compatibility.</p>
 
-<p style="margin-left:9%;">--input-reverse-bytes</p>
+<p style="margin-left:9%;">--reverse-input-bytes,
+--input-reverse-bytes</p>
 
 <p style="margin-left:18%;">Every time when a byte is read
-from input, bits are reversed. 0x01 becomes 0x80. Look
---input-little-endian for more information.</p>
+from input, its bits are reversed (0x01 becomes 0x80). See
+<b>&minus;&minus;input&minus;little&minus;endian</b> for
+details.</p>
 
-<p style="margin-left:9%;">--input-reverse-unit</p>
+<p style="margin-left:9%;">--reverse-input-units,
+--input-reverse-unit</p>
 
 <p style="margin-left:18%;">Every time when a unit is read,
-bits are reversed. Look --input-little-endian for more
-information.</p>
+its bits are reversed across the unit. See
+<b>&minus;&minus;input&minus;little&minus;endian</b> for
+details.</p>
 
 <p style="margin-left:9%;">--input-little-endian</p>
 
 <p style="margin-left:18%;">By default, the input is
-assumed to be in network byte order or in big-endian byte
-order. However, the natural byte order for most processors
-is little-endian byte order. 16-bit big-endian integer 1 in
-byte stream is 0x00 0x01 and little-endian 0x01 0x00. In
-some systems, even if integers are little-endian, floating
-point numbers and strings are in big-endian order.</p>
+assumed to be in network byte order or big-endian byte
+order. However, the natural byte order for most modern
+processors is little-endian. A 16-bit big-endian integer 1
+in a byte stream is 0x00 0x01, whereas in little-endian it
+is 0x01 0x00. In some architectures, even if integers are
+little-endian, floating-point numbers or strings may follow
+big-endian order.</p>
 
-<p style="margin-left:18%; margin-top: 1em">Unit is
+<p style="margin-left:18%; margin-top: 1em">The unit is
 translated as an integer assuming that the least significant
-bit is the first one. To implement this as generic as
-possible, this is actually a synonym for combination
---input-reverse-bytes and --input-reverse-unit. If we read
-16-bit integer 1, in little-endian input stream it is 0x01
-0x00. With --input-reverse-bytes it turns to 0x80 0x00 and
-with --input-reverse-unit it turns to 0x00 0x01. By these
-two steps, the operation has a meaningful interpretation
-even in non-byte-aligned cases.</p>
+bit is first. To implement this as generically as possible,
+this option is equivalent to combining
+<b>&minus;&minus;reverse&minus;input&minus;bytes</b> and
+<b>&minus;&minus;reverse&minus;input&minus;units</b>. If we
+read the 16-bit integer 1 from a little-endian stream, its
+byte representation is 0x01 0x00. With
+<b>&minus;&minus;reverse&minus;input&minus;bytes</b> it
+becomes 0x80 0x00, and with
+<b>&minus;&minus;reverse&minus;input&minus;units</b> it
+turns into 0x00 0x01. By these two steps, the operation
+maintains a meaningful, consistent interpretation even for
+non-byte-aligned units.</p>
 
 <p style="margin-left:18%; margin-top: 1em">After
---input-little-endian, the content is usually read as a
-big-endian number in --input-pattern!</p>
+<b>&minus;&minus;input&minus;little&minus;endian</b>, fields
+in <b>&minus;&minus;input&minus;pattern</b> are normally
+read using uppercase big-endian pattern codes.</p>
 
-<h3>Bypass bit stream input (fake inputs)
-<a name="Bypass bit stream input (fake inputs)"></a>
+<h3>Synthetic Stream Sources (Bypass Stream Input)
+<a name="Synthetic Stream Sources (Bypass Stream Input)"></a>
 </h3>
 
 
-<p style="margin-left:9%; margin-top: 1em">Instead of the
-file input, the input can be one of these fake inputs. You
-can use either file input or one of these fake inputs. The
---count option specifies how many units the fake input
-produces. If --count is omitted, fake inputs stream
-indefinitely until standard output pipe breaks or the
-process is terminated.</p>
+<p style="margin-left:9%; margin-top: 1em">Instead of
+reading from a file or pipe, <b>bdd</b> can generate
+synthetic bitstreams directly. The
+<b>&minus;&minus;count</b> option specifies how many units
+the synthetic source produces. If <b>&minus;&minus;count</b>
+is omitted (or set to 0), synthetic streams run indefinitely
+until standard output pipe breaks or the process is
+terminated.</p>
 
-<p style="margin-left:9%; margin-top: 1em">Values of fake
-inputs are truncated to the input unit size. For example, if
-you use --input-counter with input unit size 8 and output
-unit size 9, the topmost bit of the output is always
-zero.</p>
+<p style="margin-left:9%; margin-top: 1em">Values of
+synthetic inputs are truncated to the input unit size. For
+example, if you use <b>&minus;&minus;input&minus;counter</b>
+with input unit size 8 and output unit size 9, the topmost
+bit of the output is always zero.</p>
 
-<p style="margin-left:9%; margin-top: 1em">If a fake input
-is used, the standard input is not opened at all for input,
-and standard input can be used with --merge-file.</p>
+<p style="margin-left:9%; margin-top: 1em">When a synthetic
+input is used, standard input is not opened for the primary
+stream, allowing standard input to be used with
+<b>&minus;&minus;merge&minus;file=&minus;</b>.</p>
 
-<p style="margin-left:9%; margin-top: 1em">None of the fake
-inputs does support reversing bits, initial skips or gap
-operations. --input-random, --input-counter and
---input-integers support --skip (also others allow it, but
-it does nothing as it would not affect the output). <br>
+<p style="margin-left:9%; margin-top: 1em">Synthetic inputs
+do not support reversing bits, initial bit skips, or gap
+operations. <b>&minus;&minus;input&minus;random</b>,
+<b>&minus;&minus;input&minus;counter</b>, and
+<b>&minus;&minus;input&minus;integers</b> support
+<b>&minus;&minus;skip</b> to start from an initial offset or
+value. <br>
 --input-zeros</p>
 
-<p style="margin-left:18%;">All the input units are
-zeros.</p>
+<p style="margin-left:18%;">Generate an endless stream of
+zero bits.</p>
 
 <p style="margin-left:9%;">--input-ones</p>
 
-<p style="margin-left:18%;">Like --input-zeros but all the
-bits of the input unit are ones.</p>
+<p style="margin-left:18%;">Generate an endless stream of
+one bits.</p>
 
 <p style="margin-left:9%;">--input-random</p>
 
-<p style="margin-left:18%;">Like --input-zeros but all the
-input bits are random (from /dev/urandom).</p>
+<p style="margin-left:18%;">Generate random bits from
+/dev/urandom (cryptographically strong OS randomness).</p>
 
 <p style="margin-left:9%;">--input-counter</p>
 
-<p style="margin-left:18%;">Like --input-zeros, but input
-is units, every one with one bigger value than the previous.
-Counter value is cut to input unit size. Can not be reversed
-but --skip can be used to start from a specific number. If
---skip=N, the first counter value will be N.</p>
+<p style="margin-left:18%;">Generate sequential counter
+numbers (0, 1, 2, ...), incrementing by 1 per unit. Counter
+values are masked to the input unit size. If
+<b>&minus;&minus;skip=N</b> is specified, the counter starts
+at <i>N</i>.</p>
 
 <p style="margin-left:9%;">--input-integers</p>
 
 <p style="margin-left:18%;">Instead of a bit stream, input
-is text, 10-base unsigned integers that are separated with
-newline characters. Whitespace around number is allowed and
-empty lines are skipped. Can not be used with any other unit
-selection argument but can be used with --skip and --count
-to read only a part of the file.</p>
+is text, 10-base unsigned integers separated by newlines.
+Whitespace around numbers is ignored and empty lines are
+skipped. Cannot be combined with bit stream unit selection,
+but can be used with <b>&minus;&minus;skip</b> and
+<b>&minus;&minus;count</b>.</p>
 
 <h3>Unpack a unit to a tuple
 <a name="Unpack a unit to a tuple"></a>
@@ -895,10 +922,10 @@ giving &rsquo;0001&rsquo; or 1 and the bit representation of
 -1 is &rsquo;1111&rsquo;.</p>
 
 <p style="margin-left:18%; margin-top: 1em">If tuples are
-used (--input-pattern or --input-tuples), but there is is no
+used (--input-pattern or --input-tuples), but there is no
 --output-pattern option, the first field in the tuple is
 used directly as the output unit. The first field of the
-tuple must be unsigned integer if it is used as an output
+tuple must be an unsigned integer if it is used as an output
 unit.</p>
 
 <h3>Collect output data stream
@@ -966,38 +993,45 @@ emitted on output before the first unit is written (default:
 <p style="margin-left:9%;">--output-little-endian</p>
 
 <p style="margin-left:18%;">Unit is written to the output
-stream least significant byte first. The default is the
-network byte order or big-endian byte order where the most
-significant byte is written first. Actually
---output-little-endian is a combination of
---output-reverse-unit and --output-reverse-bytes and as
-such, those options can not be used with
---output-little-endian. Look --input-little-endian for more
-discussion.</p>
+stream least significant byte first. The default is network
+byte order or big-endian byte order where the most
+significant byte is written first.
+<b>&minus;&minus;output&minus;little&minus;endian</b> is a
+combination of
+<b>&minus;&minus;reverse&minus;output&minus;units</b> and
+<b>&minus;&minus;reverse&minus;output&minus;bytes</b>. See
+<b>&minus;&minus;input&minus;little&minus;endian</b> for
+details.</p>
 
-<p style="margin-left:9%;">--output-reverse-unit</p>
+<p style="margin-left:9%;">--reverse-output-units,
+--output-reverse-unit</p>
 
 <p style="margin-left:18%;">Reverses bits in the output
-unit. Look --output-little-endian for more information.</p>
+unit. See
+<b>&minus;&minus;output&minus;little&minus;endian</b> for
+details.</p>
 
-<p style="margin-left:9%;">--output-reverse-bytes</p>
+<p style="margin-left:9%;">--reverse-output-bytes,
+--output-reverse-bytes</p>
 
 <p style="margin-left:18%;">Reverses bits of every written
-byte. Look --output-little-endian for more information.</p>
+byte. See
+<b>&minus;&minus;output&minus;little&minus;endian</b> for
+details.</p>
 
-<h3>Merge output with another data stream:
-<a name="Merge output with another data stream:"></a>
+<h3>Stream Merging &amp; Interleaving
+<a name="Stream Merging &amp; Interleaving"></a>
 </h3>
 
 
 <p style="margin-left:9%; margin-top: 1em">Units of the
-merge file are written to the output after every normal
-output unit. Output is finished when the normal output is
-finished. Last merge unit is written after the last output
-unit so that as many merge units as normal units are
-written. It is an error if the merge file does not have
-enough units but it can contain more units than the normal
-input file and the extra units are ignored.</p>
+merge file are written to the output after every primary
+output unit. Processing terminates when the primary output
+stream finishes. A final merge unit is written after the
+last primary output unit, maintaining an equal count of
+primary and merge units. It is an error if the merge file
+does not contain enough units, but it may contain extra
+units, which are ignored.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Merge unit is
 defined like the normal input unit. Merge unit is written to
@@ -1106,8 +1140,8 @@ is reversed.</p>
 <p style="margin-left:18%;">Every unit read from merge file
 is reversed.</p>
 
-<h3>Show output as human readable
-<a name="Show output as human readable"></a>
+<h3>Human-Readable and Text Output Sinks
+<a name="Human-Readable and Text Output Sinks"></a>
 </h3>
 
 
@@ -1121,48 +1155,49 @@ with --input-tuples</p>
 <p style="margin-left:9%;">--output-integers</p>
 
 <p style="margin-left:18%;">Replace bit output with
-human-readable output of units as integers This output is
-readable with --input-integers</p>
+human-readable output of units as decimal integers (one per
+line). This output is readable with --input-integers</p>
 
 <p style="margin-left:18%; margin-top: 1em">If merge file
-is used, the main unit and the merge unit is printed
+is used, the main unit and the merge unit are printed
 separately as two integers (possibly with different unit
-size).</p>
+sizes).</p>
 
 <p style="margin-left:18%; margin-top: 1em">The integer is
-truncated to the unit size but reversing bits does not
-affect to the integer output.</p>
+truncated to the unit size, and bit reversals do not affect
+the decimal integer output.</p>
 
 <p style="margin-left:9%;">--output-hex</p>
 
 <p style="margin-left:18%;">Replace bit output with
-human-readable output of units as hex numbers.</p>
+human-readable output of units as hexadecimal numbers.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Units are
-written as they would be written to the bit stream except
-that --output-little-endian, --output-reverse-bytes and
---output-reverse-unit do not have effect to the hex
-output.</p>
+formatted as they would be written to the bit stream, except
+that --output-little-endian, --output-reverse-bytes, and
+--output-reverse-unit do not affect hex output.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Output unit
-size affects the number as it affects in the bit output. If
-output unit size is 3 bits, the number 8 is printed as hex
-0. The hex number has as many digits as needed to represent
-the full unit but topmost zero bits are not necessarily a
-part of the output unit. Units from the merge file are
-written with their own output unit so that they may have
-different amount of digits.</p>
+size affects the number as it affects bit output. If output
+unit size is 3 bits, the number 8 is printed as hex 0. The
+hex number has as many digits as needed to represent the
+full unit, but topmost zero bits are not necessarily a part
+of the output unit. Units from the merge file are written
+with their own output unit so that they may have a different
+number of digits.</p>
 
 <p style="margin-left:18%; margin-top: 1em">Output is
-divided to lines so that in one line there is 1, 2, 4, 8, 16
-or 32 units separated with spaces. The line length is always
-between 40 and 80 characters.</p>
+divided into lines formatted so that each line contains 1,
+2, 4, 8, 16, or 32 units separated by spaces. The line
+length is kept between 40 and 80 characters.</p>
 
 <p style="margin-left:9%;">--output-bits</p>
 
 <p style="margin-left:18%;">Replace bit output with
-human-readable output of units as bits. Look --output-hex
-for more information.</p>
+human-readable output of units as ASCII bit strings
+(&rsquo;0&rsquo; and &rsquo;1&rsquo;). See
+<b>&minus;&minus;output&minus;hex</b> for formatting
+details.</p>
 
 <p style="margin-left:9%;">--output-json</p>
 
@@ -1555,7 +1590,7 @@ file.</p>
 
 <p style="margin-left:9%; margin-top: 1em">None known in
 the current release. Please report issues at
-https://github.com/turtiainen/bdd.</p>
+https://github.com/e-t-u/bdd.</p>
 
 <h2>AUTHOR
 <a name="AUTHOR"></a>

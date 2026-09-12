@@ -56,7 +56,7 @@ Most Unix tools (`dd`, `hexdump`, `od`, standard shell pipes) operate strictly o
 
 ---
 
-## 1. Anatomy of a Bit Stream
+## 1. Anatomy of a Bit Stream: Units, Skips, and Gaps
 
 ### The Default Baseline: 8-Bit Streaming
 
@@ -130,16 +130,17 @@ In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. In
   bdd --input-skip-bits=7 --input-unit=1 --input-gap=7 --output-unit=1 < input.bin
   ```
 
-#### Fast $O(1)$ Filesystem Seeking vs. Sequential Streaming
+#### The Next Challenge: Physical Containers in Real-World Data
 
-When skipping initial data with `--input-skip-bits` or `--input-skip-units`, or skipping periodic gaps between records (`--input-gap` and raw unit container post-gaps), `bdd` automatically performs an **$O(1)$ filesystem seek** whenever the input is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of reading gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps directly across offsets and periodic gaps in microseconds.
+The simple unit model works when an entire file is a uniform sequence of identical units. But in real-world binary formats (telemetry, network packets, audio words, video frames), active fields don't float freely in an empty void—they sit inside fixed physical containers: bytes (8 bits), half-words (16 bits), words (32 bits), audio stereo frames (32 bits), or MPEG-TS packets (188 bytes).
 
-If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or socket), `bdd` seamlessly falls back to streaming sequential reads, discarding skipped bytes without failing or requiring separate flags. To explicitly disable seeking and force sequential stream consumption across all inputs, pass **`--no-seek`** (or `--input-no-seek`, `--merge-no-seek`).
+If you want bits 3 and 4 of every byte, the simple unit model forces you to calculate an initial skip of 2 bits, an active unit of 2 bits, and a trailing gap of 4 bits to reach the next byte. Worse: if you later need bit 5 instead, you must manually recalculate both the initial skip (4 bits) and the trailing gap (3 bits).
 
+**What is missing?** A way to declare the fixed outer container size once, and simply point to the active field inside it. This is solved in Chapter 2.
 
 ---
 
-### Raw Units & Containers (`--input-raw-unit` and `--input-offset`)
+## 2. Containers & Raw Units: Solving the Offset Problem
 
 In structured binary files, active fields are rarely isolated in a continuous stream; instead, they reside inside fixed-size physical containers: bytes (8 bits), half-words (16 bits), words (32 bits), audio stereo frames (32 bits), or network headers.
 
@@ -179,9 +180,15 @@ bdd --input-raw-unit=32 --input-offset=0 --input-unit=16 < audio.raw  # Left cha
 bdd --input-raw-unit=32 --input-offset=16 --input-unit=16 < audio.raw # Right channel
 ```
 
+#### The Next Challenge: Command-Line Verbosity & Symmetrical Framing
+
+Declaring containers with `--input-raw-unit` and `--input-offset` eliminates mental arithmetic. But typing out `--input-raw-unit=8 --input-offset=2 --input-unit=4 --input-gap=8 --output-raw-unit=8 --output-offset=2 ...` is verbose, repetitive, and cumbersome to type interactively. Furthermore, while incoming containers are sliced cleanly, framing the *output* stream into structured containers required configuring four separate output flags.
+
+**What is missing?** A visual, concise shorthand notation that expresses the entire input container slicing and output framing transformation in a single, intuitive argument. This is solved in Chapter 3.
+
 ---
 
-### Unified Stream I/O Mapping Syntax (`bdd "<in> -> <out>"`)
+## 3. Unified Stream I/O Mapping: Solving Command-Line Verbosity
 
 Instead of specifying separate flags for skips, containers, offsets, and gaps, `bdd` accepts a unified, expressive **stream I/O mapping expression** as an optional positional argument:
 
@@ -229,51 +236,17 @@ bdd 4U4U --input-tuples --output-hex < pairs.txt
 
 All CLI flags (`--input-raw-unit`, `--input-offset`, `--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`, etc.) remain fully functional and can override or complement positional arguments.
 
----
+#### The Next Challenge: Multi-Field Structured Records
 
-### Large Streams, Gigabyte Skipping & Size Suffixes
+With the unified stream mapping syntax, slicing containers and framing output is fast, expressive, and concise. But every unit we extract—whether 4 bits, 16 bits, or 32 bits—is still treated as a single monolithic block of bits or an opaque integer.
 
-Can `bdd` skip over gigabytes of data on the command line? **Yes, without limit:**
+In real-world data, a 16-bit or 32-bit payload is almost never just one number. A 32-bit packet payload might contain a 1-bit boolean flag, a 3-bit status opcode, a 12-bit ADC sensor reading, and a 16-bit floating-point weight. With only units and containers, extracting those four fields would require running four separate passes over the file with different offsets.
 
-- **Full 64-Bit Architecture (`u64`)**: All skips, offsets, gaps, units, and record counts are represented internally as 64-bit unsigned integers. `bdd` can represent bit offsets up to $2^{64}-1 \approx 1.84 \times 10^{19}$ bits, which equals **2.3 Exabytes** ($2,305,843,009$ Gigabytes).
-- **Filesystem Seek Limits**: On seekable files, Linux `lseek64` supports offsets up to $2^{63}-1$ bytes = **9.22 Exabytes**, executed in $O(1)$ constant time (microseconds) without memory overhead.
-- **Human-Friendly Size Suffixes**: You do not need to calculate zeroes or bit multiplications manually. All numeric arguments accept standard scale suffixes:
-  - **Binary multiples (powers of 1024)**: `K`, `M`, `G`, `T`, `P`, `E` (or `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, `Ei`).
-  - **Decimal multiples (powers of 1000)**: `KB`, `MB`, `GB`, `TB`, `PB`, `EB`.
-  - **Byte-scaled bit skips**: On bit options (`--input-skip-bits`, `--merge-skip-bits`), specifying `B` (e.g. `10GiB`, `4GB`, `100B`) automatically multiplies bytes by 8 bits.
-- **Multiplication Expressions**: Numbers on the command line never run out or require manual mental calculations. All size and count options support multiplication expressions using `*` or `x`:
-  - **Unit-stride skipping**: Skip 1,000,000 24-bit units directly: `--input-skip-bits=1000000*24` (or `--input-skip-bits=1000*1000*24` or `--input-skip-bits=1M*24`).
-  - **2D/3D dimensions and frame strides**: Easily express multi-dimensional buffers: `--input-skip-bits=1920x1080*24` or `--input-skip-bits="1920 * 1080 * 3B"`.
-  - **Sizing units and offsets**: Express byte multiples: `--input-unit=3*8` (24-bit unit) or `--input-offset=2*8` (16-bit offset).
-  - **Scaled counts and repeats**: `--count=1000*10`, `--input-repeat=10*5`.
-
-```bash
-# Skip 1,000,000 24-bit units directly in bits:
-bdd --input-file=samples.bin --input-skip-bits=1000000*24 --output-hex
-
-# Skip a 1080p 24-bit uncompressed RGB frame buffer:
-bdd --input-file=video.raw --input-skip-bits=1920x1080*24 --count=100 --output-hex
-
-# Instantly seek 10 GiB into a file and extract 4 bytes in hex:
-bdd --input-file=large_disk.img --input-skip-bits=10GiB --count=4 --output-hex
-
-# Skip 10 million 8-bit units:
-bdd --input-file=stream.bin --input-unit=8 --input-skip-units=10M < stream.bin
-
-# Process at most 500k records:
-bdd --input-tuples --count=500k < records.csv
-```
-
-### Unit Sizing and Alignment Rules
-
-- **Default Unit Size**: As established above, both input unit size and output unit size default to 8 bits (`bdd < a > b` copies bytes unchanged).
-- **Expansion (Output > Input)**: If the output unit is larger than the input unit, the value is treated as an integer and the left (most significant) bits are padded with zeros.
-- **Truncation (Output < Input)**: If the output unit is smaller than the input unit, the left (most significant) bits are truncated.
-- **Stream Termination**: If the total bits written to an output byte stream are not a multiple of 8, the missing least-significant bits of the final byte are padded with zeros.
+**What is missing?** A way to unpack a single bit unit into multiple distinct, strongly-typed fields in a single pass. This is solved in Chapter 4.
 
 ---
 
-## 2. The Tuple Concept & Pattern Grammar
+## 4. The Tuple Concept & Pattern Grammar: Multi-Field Unpacking
 
 Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a unit into named fields called a **Tuple** (analogous to a structured row in a relational database):
 
@@ -386,9 +359,21 @@ bdd --input-pattern=4E --output-pattern=32F < model_fp4.bin > unpacked_fp32.bin
 bdd --input-pattern=32F --round=0,floor --output-pattern=8E < in.bin > out.bin
 ```
 
+#### The Next Challenge: In-Flight Data Transformation
+
+Pattern strings allow extracting structured multi-field tuples `(flag, opcode, reading, weight)` in a single pass. But real-world binary data is rarely in the exact format needed for downstream consumers:
+- A raw sensor reading may require calibration arithmetic (e.g. multiply by 2 and add 10).
+- An out-of-range sensor value may need bounding or clamping (saturation or wrapping).
+- Protocol opcodes may require bitwise masking (`AND`, `XOR`, `OR`, `NOT`).
+- Fields may need reordering, dropping, or selective filtering based on a predicate.
+
+Under conventional Unix workflows, you would have to pipe raw binary into custom Python or C scripts to perform these simple transformations.
+
+**What is missing?** A fast, built-in pipeline to manipulate, calculate, clamp, and filter tuple fields directly on the command line. This is solved in Chapter 5.
+
 ---
 
-## 3. Flexible Pipeline & Tuple Manipulation
+## 5. Flexible Pipeline & Tuple Manipulation: Transforming Data in Flight
 
 Once unpacked into a tuple, fields can be transformed using pipeline manipulators executed in the exact order specified on the command line. Fields are referenced by index starting from `0` (or negative index from end):
 
@@ -444,9 +429,17 @@ Explanation:
 4. `--remove-right=0,6` shifts right by 6 bits, leaving the 7th bit (MSB of magnitude).
 5. `--output-unit=1` outputs the single bit.
 
+#### The Next Challenge: Visualization, Pipeline Sinks & Test Data
+
+We can now slice, unpack, and manipulate bitstreams in flight. But where does the output go? If `bdd` only writes raw binary bytes, inspecting unaligned fields or verifying single-bit transformations on a terminal is difficult.
+
+Furthermore, how do you pipe structured tuples into standard Unix tools like `jq`, `awk`, Python, or relational databases? And what if you don't have an input file at all, but need to generate synthetic bitstreams (sequential counters, cryptographically strong random noise, endless zeros) to test an algorithm, or ingest comma-separated text files to pack custom binary files?
+
+**What is missing?** Diverse human-readable and machine-readable output sinks, synthetic stream generators, and text tuple ingestion. This is solved in Chapter 6.
+
 ---
 
-## 4. Synthetic ("Fake") Streams & Text Formats
+## 6. Sinks, Synthetic Streams & Text Formats: Interfacing with the World
 
 `bdd` can synthesize bitstreams without requiring input files, and output in human-readable or script-friendly formats:
 
@@ -497,9 +490,92 @@ printf "1,2\n" | bdd --input-tuples --output-pattern='BB' --output-hex
 printf "1.0\n2.0\n" | bdd --input-tuples --output-pattern=64D > doubles.bin
 ```
 
+#### The Next Challenge: Multi-Stream Coordination
+
+So far, all operations have acted on a single input stream, producing a single output stream. But real-world data pipelines rarely operate in isolation.
+
+Consider audio processing (interleaving Left and Right channels into stereo), system telemetry (multiplexing a hardware timestamp counter into an existing sensor feed), or packet processing (splitting multiplexed transport streams into separate audio, video, and subtitle files). If you have two independent binary streams, how do you interleave them into one? And conversely, how do you split a multi-field tuple into dedicated destination files without running multiple passes?
+
+**What is missing?** Symmetrical multi-stream coordination: interleaving secondary streams round-robin into primary data, and demuxing tuple fields into separate files. This is solved in Chapter 7.
+
 ---
 
-## 5. De-mystifying Bit Reversals
+## 7. Stream Merging, Interleaving & Demuxing: Multi-Channel Coordination
+
+When processing multi-channel systems, `bdd` provides symmetrical stream merging (combining multiple streams into one) and field demuxing (routing fields to separate destination files or pipes).
+
+### Stream Merging & Round-Robin Interleaving
+
+The merge stream reads a secondary file and interleaves its data into the primary stream:
+
+```text
+ Primary Stream Units:  [ Unit 0 ]                            [ Unit 1 ]
+                             │                                    │
+ Merge 1 Stream Units:       │       [ M1_0 ]                     │       [ M1_1 ]
+                             │          │                         │          │
+ Merge 2 Stream Units:       │          │       [ M2_0 ]          │          │       [ M2_1 ]
+                             ▼          ▼          ▼              ▼          ▼          ▼
+ Interleaved Output:    [ Unit 0 ]  [ M1_0 ]   [ M2_0 ]      [ Unit 1 ]  [ M1_1 ]   [ M2_1 ]
+```
+
+- **`--merge-file=PATH`**: Interleave data from secondary files (can be specified multiple times for N-way round-robin merge, `"-"` for stdin).
+- **`--merge-files=PATHS`**: Comma- or space-separated list of merge files to interleave round-robin.
+- **`--merge-unit=BITS`**: Size of merge units in bits (default: 8).
+- **`--merge-copy-first=BITS`**: Copies an initial bit header/preamble from the merge file *before* starting the interleaved loop.
+- **`--drop-partial-eof`** (aliases: `--drop-trailing-bits`, `--no-pad-eof`): Discards incomplete trailing bits at EOF instead of zero-padding them into a synthetic extra unit.
+- **`--merge-drop-partial-eof`**: Discards incomplete trailing bits at EOF in the merge stream.
+
+#### Example: Hex Dump with Interleaved Memory Addresses
+
+Interleave a 12-bit linear address counter with actual data bytes from `/etc/passwd`:
+
+```bash
+bdd --input-counter --count=16 --input-unit=12 --output-unit=12 --merge-file=/etc/passwd --output-hex
+```
+
+Output:
+```
+000 72 001 6f 002 6f 003 74 004 3a 005 78 006 3a 007 30
+008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a
+```
+
+#### Example: Multi-File Round-Robin Interleaving
+
+Interleave primary stream units with units from two independent secondary streams:
+
+```bash
+bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
+    --merge-file=ch1.bin --merge-file=ch2.bin --output-hex
+# or equivalently:
+bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
+    --merge-files=ch1.bin,ch2.bin --output-hex
+```
+
+### Channel Demuxing & Splitting
+
+When processing multiplexed packet formats or interleaved bitstreams (e.g. audio + video, header + payload), `bdd` can demux fields into independent files or pipes:
+
+```bash
+# Split interleaved 16-bit audio and 32-bit video into separate streams:
+bdd --input-pattern=16B32B \
+    --demux 0:audio.raw \
+    --demux 1:video.raw < input.bin
+
+# Alternatively, using --demux-files shorthand:
+bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin
+```
+
+#### The Next Challenge: Endianness and Bit-Order Reversals
+
+Now we can slice containers, unpack tuples, transform values, and coordinate multiple streams. But what happens when bitstreams originate from different hardware architectures or transmission protocols?
+
+A microcontroller transmitting over SPI or UART often sends the least significant bit (LSB) first, while network protocols and standard file formats expect most significant bit (MSB) first. Little-endian and big-endian integers swap bytes, but what if bits within each byte, or bits across an arbitrary 12-bit unit, need to be reversed? Attempting to reverse bits using ad-hoc shifts or bitwise operations in shell scripts leads to pervasive confusion and subtle bugs.
+
+**What is missing?** A clean, layered architecture that isolates bit reversals into predictable stages. This is solved in Chapter 8.
+
+---
+
+## 8. De-mystifying Bit Reversals: Taming Endianness and Bit Order
 
 Reversing bits in binary processing can easily become confusing. `bdd` cleanly isolates bit reversals into four distinct operational layers:
 
@@ -528,58 +604,291 @@ Reversing bits in binary processing can easily become confusing. `bdd` cleanly i
 - **`--input-little-endian`**: Shorthand combining `--reverse-input-bytes` and `--reverse-input-units`.
 - **`--output-little-endian`**: Shorthand combining `--reverse-output-bytes` and `--reverse-output-units`.
 
+#### The Next Challenge: Gigabyte Skips, Hardware Seeking & Large Dimensions
+
+Our operations are precise down to the single bit. But how does this scale when working with multi-gigabyte disk images, massive uncompressed 4K/8K video frames, or high-throughput satellite telemetry?
+
+Does skipping 10 GB into a file require reading 10 billion bytes through RAM? And how do you comfortably express large dimensions like `1920x1080*24` or 10 GiB on the command line without writing out twelve trailing zeros?
+
+**What is missing?** Fast $O(1)$ hardware filesystem seeking, an exabyte-scale 64-bit architecture, size suffixes (`GiB`, `MB`, `B`), and multiplication expressions (`1920x1080*24`). This is solved in Chapter 9.
+
 ---
 
-## 6. Stream Merging & Interleaving
+## 9. Exabyte Scale, Fast Hardware Seeking & Size Expressions
 
-The merge stream reads a secondary file and interleaves its data into the primary stream:
+Can `bdd` skip over gigabytes of data on the command line? **Yes, without limit:**
 
-```text
- Primary Stream Units:  [ Unit 0 ]                            [ Unit 1 ]
-                             │                                    │
- Merge 1 Stream Units:       │       [ M1_0 ]                     │       [ M1_1 ]
-                             │          │                         │          │
- Merge 2 Stream Units:       │          │       [ M2_0 ]          │          │       [ M2_1 ]
-                             ▼          ▼          ▼              ▼          ▼          ▼
- Interleaved Output:    [ Unit 0 ]  [ M1_0 ]   [ M2_0 ]      [ Unit 1 ]  [ M1_1 ]   [ M2_1 ]
-```
-
-- **`--merge-file=PATH`**: Interleave data from secondary files (can be specified multiple times for N-way round-robin merge, `"-"` for stdin).
-- **`--merge-files=PATHS`**: Comma- or space-separated list of merge files to interleave round-robin.
-- **`--merge-unit=BITS`**: Size of merge units in bits (default: 8).
-- **`--merge-copy-first=BITS`**: Copies an initial bit header/preamble from the merge file *before* starting the interleaved loop.
-- **`--drop-partial-eof`** (aliases: `--drop-trailing-bits`, `--no-pad-eof`): Discards incomplete trailing bits at EOF instead of zero-padding them into a synthetic extra unit.
-- **`--merge-drop-partial-eof`**: Discards incomplete trailing bits at EOF in the merge stream.
-
-### Example: Hex Dump with Interleaved Memory Addresses
-
-Interleave a 12-bit linear address counter with actual data bytes from `/etc/passwd`:
+- **Full 64-Bit Architecture (`u64`)**: All skips, offsets, gaps, units, and record counts are represented internally as 64-bit unsigned integers. `bdd` can represent bit offsets up to $2^{64}-1 \approx 1.84 \times 10^{19}$ bits, which equals **2.3 Exabytes** ($2,305,843,009$ Gigabytes).
+- **Filesystem Seek Limits**: On seekable files, Linux `lseek64` supports offsets up to $2^{63}-1$ bytes = **9.22 Exabytes**, executed in $O(1)$ constant time (microseconds) without memory overhead.
+- **Human-Friendly Size Suffixes**: You do not need to calculate zeroes or bit multiplications manually. All numeric arguments accept standard scale suffixes:
+  - **Binary multiples (powers of 1024)**: `K`, `M`, `G`, `T`, `P`, `E` (or `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, `Ei`).
+  - **Decimal multiples (powers of 1000)**: `KB`, `MB`, `GB`, `TB`, `PB`, `EB`.
+  - **Byte-scaled bit skips**: On bit options (`--input-skip-bits`, `--merge-skip-bits`), specifying `B` (e.g. `10GiB`, `4GB`, `100B`) automatically multiplies bytes by 8 bits.
+- **Multiplication Expressions**: Numbers on the command line never run out or require manual mental calculations. All size and count options support multiplication expressions using `*` or `x`:
+  - **Unit-stride skipping**: Skip 1,000,000 24-bit units directly: `--input-skip-bits=1000000*24` (or `--input-skip-bits=1000*1000*24` or `--input-skip-bits=1M*24`).
+  - **2D/3D dimensions and frame strides**: Easily express multi-dimensional buffers: `--input-skip-bits=1920x1080*24` or `--input-skip-bits="1920 * 1080 * 3B"`.
+  - **Sizing units and offsets**: Express byte multiples: `--input-unit=3*8` (24-bit unit) or `--input-offset=2*8` (16-bit offset).
+  - **Scaled counts and repeats**: `--count=1000*10`, `--input-repeat=10*5`.
 
 ```bash
-bdd --input-counter --count=16 --input-unit=12 --output-unit=12 --merge-file=/etc/passwd --output-hex
+# Skip 1,000,000 24-bit units directly in bits:
+bdd --input-file=samples.bin --input-skip-bits=1000000*24 --output-hex
+
+# Skip a 1080p 24-bit uncompressed RGB frame buffer:
+bdd --input-file=video.raw --input-skip-bits=1920x1080*24 --count=100 --output-hex
+
+# Instantly seek 10 GiB into a file and extract 4 bytes in hex:
+bdd --input-file=large_disk.img --input-skip-bits=10GiB --count=4 --output-hex
+
+# Skip 10 million 8-bit units:
+bdd --input-file=stream.bin --input-unit=8 --input-skip-units=10M < stream.bin
+
+# Process at most 500k records:
+bdd --input-tuples --count=500k < records.csv
 ```
 
+### Fast Hardware Seeking vs Streaming Fallback
+
+Whenever the input stream is a seekable regular file or file descriptor, `bdd` automatically invokes $O(1)$ filesystem `lseek64` to skip over initial skips, gaps, and raw unit post-gaps. This allows skipping past 50 GB of data in microseconds without consuming disk I/O bandwidth or RAM.
+
+If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or network socket), `bdd` automatically falls back to sequential streaming reads, discarding skipped bits seamlessly. Seeking can be explicitly disabled on seekable files using `--no-seek` (or `--input-no-seek`, `--merge-no-seek`) to benchmark pure stream throughput.
+
+#### The Next Challenge: Discovery & Inspection of Unknown Formats
+
+Everything so far assumes you already know the exact schema, stride, and byte layout of your binary stream.
+
+But what if you encounter an unfamiliar proprietary file format, a corrupted firmware image, or an unknown radio capture? How do you discover its periodic stride, byte distribution, or Shannon entropy without guessing? And in modern workflows, how can autonomous AI coding agents, reverse engineers, or visual analysts interact with `bdd` through standard protocols or interactive web tools?
+
+**What is missing?** Automated binary probing, Shannon entropy analysis, schema explanation, standard presets, Model Context Protocol (MCP) server support, and an interactive Web GUI. This is solved in Chapter 10.
+
+---
+
+## 10. AI Ergonomics, Binary Inspection & Web GUI
+
+`bdd` provides native primitives for autonomous AI coding agents, reverse engineers, and pipeline automation:
+
+### Built-in Format Presets (`--preset`, `--list-presets`)
+Instead of manually calculating complex bit offsets, standard protocol and AI weight presets configure input patterns, unit widths, and field names in one step:
+```bash
+# List all 13 standard presets:
+bdd --list-presets
+```
+Standard presets include:
+- `mp3-header` (MPEG Audio Frame Header, 32 bits)
+- `mpeg-ts` (MPEG Transport Stream Header, 32 bits from 188B packet)
+- `wav-header` (RIFF WAV Header Identifier, 96 bits)
+- `jpeg-sof0` (JPEG Start of Frame 0, 80 bits)
+- `h264-nal` (H.264 / AVC NAL Unit Header, 8 bits)
+- `nvfp4` (Dual packed NVIDIA NVFP4 E2M1 weights, 8 bits)
+- `fp6-e3m2` (Quad packed FP6 E3M2 AI weights, 24 bits)
+- `fp8-e4m3` (OCP FP8 E4M3 AI weight, 8 bits)
+- `fp8-e5m2` (OCP FP8 E5M2 AI weight, 8 bits)
+- `bf16` (Bfloat16 Brain Floating Point, 16 bits)
+- `fp16` (IEEE 754 Half-Precision Float, 16 bits)
+- `ipv4-header` (IPv4 Packet Header, 160 bits / 20 bytes)
+- `udp-header` (UDP Datagram Header, 64 bits / 8 bytes)
+- `tcp-header` (TCP Segment Header with discrete sub-byte flags, 160 bits / 20 bytes)
+- `riscv-r-type` (RISC-V 32-bit R-type Instruction, 32 bits)
+
+### Keyed JSON Objects (`--json-object`, `--json-fields`)
+Pair named patterns or presets with `--json-object` to emit newline-delimited JSON dictionaries where keys match field names:
+```bash
+bdd --input-file stream.ts --input-raw-unit 188B --preset mpeg-ts --json-object --count 3
+```
 Output:
+```json
+{"afc":1,"cc":0,"pid":0,"priority":0,"pusi":0,"scrambling":0,"sync":71,"tei":0}
+{"afc":1,"cc":1,"pid":17,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
+{"afc":1,"cc":2,"pid":256,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
 ```
-000 72 001 6f 002 6f 003 74 004 3a 005 78 006 3a 007 30
-008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a
-```
 
-### Example: Multi-File Round-Robin Interleaving
-
-Interleave primary stream units with units from two independent secondary streams:
-
+### Pattern Explainer (`--explain-pattern`)
+Examine bit ranges, byte alignments, offsets, and field types without running a processing job:
 ```bash
-bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
-    --merge-file=ch1.bin --merge-file=ch2.bin --output-hex
-# or equivalently:
-bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
-    --merge-files=ch1.bin,ch2.bin --output-hex
+bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
+# Machine-readable JSON output for AI toolchains:
+bdd --explain-pattern "sync:11u,version:2u" --output-json
 ```
+
+### Binary Prober (`--probe`)
+Inspect unknown binary blobs without prior schema knowledge. Computes Shannon entropy ($H = -\sum p_i \log_2 p_i$), byte class distributions, periodic stride autocorrelation across offsets 1..512 bytes (detecting MPEG-TS, 24-bit audio, or fixed-stride telemetry), and extracts printable ASCII strings:
+```bash
+bdd --probe payload.bin
+# Full JSON metrics:
+bdd --probe payload.bin --output-json
+```
+
+### Model Context Protocol (MCP) Server (`--mcp`)
+`bdd` includes a native JSON-RPC 2.0 stdio MCP server for agent integration:
+```bash
+bdd --mcp
+```
+Registered MCP tools:
+- `bdd_slice`: Slices a file or hex string by pattern/preset and outputs text or JSON.
+- `bdd_probe`: Analyzes entropy, periodic strides, and format heuristics.
+- `bdd_explain_pattern`: Explains schema bit offsets and field types.
+- `bdd_list_presets`: Returns available protocol presets.
+
+### Interactive Web Application (`--serve`)
+`bdd` embeds a complete, zero-dependency browser application directly into the binary:
+```bash
+bdd --serve            # Launches web UI at http://localhost:7788
+bdd --serve 8080       # Custom port (aliases: --web, --gui)
+# Or via make targets:
+make web               # Compiles and runs ./bdd --serve
+make web-py            # Standalone Python backend (python3 web/server.py)
+```
+
+**Key Features:**
+- **File Upload & Drag-and-Drop**: Upload binary blobs, capture files, or sample datasets.
+- **Protocol Presets**: 1-click loading for MPEG-TS, MP3 Header, NVFP4, FP8, WAV, RGB565, and more.
+- **Live Visual Bit Breakdown**: Color-coded field layout (uint, int, float, char, discard, counter) with exact bit offsets and byte boundaries.
+- **Real-Time Command Generator**: Generates equivalent copy-pasteable `bdd` CLI commands as you tune options.
+- **Multi-Sink Results Inspector**: Switch seamlessly between Formatted JSON, Hex Dump, Color Matrix, CSV, Raw Bits, and Binary Download.
+- **Binary Prober in Browser**: Run entropy, byte class, and periodic stride autocorrelation with one click.
+
+### Agent Documentation (`llms.txt` & Agent Skill)
+- **[`llms.txt`](llms.txt)**: High-density reference tailored for LLM context windows.
+- **Agent Skill**: Available at `~/.agents/skills/bdd/SKILL.md`.
+
+#### The Next Challenge: Direct Programmatic Integration
+
+The CLI, interactive Web GUI, and MCP server cover exploration, scripts, and autonomous AI agents. But what if you need to embed `bdd`'s ultra-fast bitstream engine directly into your own high-performance C, C++, or Python applications without spawning shell subprocesses?
+
+**What is missing?** Clean, native programmatic C-ABI headers and zero-dependency Python wrappers. This is solved in Chapter 11.
 
 ---
 
-## 7. Command Line Options Reference
+## 11. Programmatic Interfaces: C API and Python SDK
+
+`bdd` exports clean C-ABI symbols in `libbdd.so` and includes an official C header ([`include/bdd.h`](include/bdd.h)) and a zero-dependency Python wrapper ([`python/bdd.py`](python/bdd.py)):
+
+### Python (`ctypes` & `pyproject.toml`)
+
+```python
+from bdd import Bdd
+
+b = Bdd()
+
+# Fast hardware bit-reversal:
+assert b.reverse_bits(0x0F, 8) == 0xF0
+
+# Unpack bitfields into Python tuple:
+fields = b.unpack("4U4U", 0xA5)   # -> (10, 5)
+
+# Pack Python tuple into raw integer:
+unit = b.pack("4U4U", (10, 5))    # -> 0xA5
+
+# Native AI float conversion (FP16, BF16, FP8, FP4):
+val = b.decode_f16(0x3C00)        # -> 1.0
+bits = b.encode_f16(1.0)          # -> 0x3C00
+```
+
+### C / C++ API
+
+```c
+#include "bdd.h"
+#include <stdio.h>
+
+int main() {
+    uint64_t fields[2];
+    bdd_unpack_u64("4U4U", 0xA5, fields, 2);
+    printf("Field 0: %lu, Field 1: %lu\n", fields[0], fields[1]); // 10, 5
+    return 0;
+}
+```
+
+#### The Next Challenge: Engine Architecture & Performance Guarantees
+
+How does `bdd` achieve multi-gigabit throughput across arbitrary non-byte-aligned boundaries? What are the architectural guarantees regarding UTF-8 string integrity, zero-overhead diagnostic logging, and bignum arithmetic?
+
+**What is missing?** Detailed performance benchmarks, architectural invariants, and UTF-8 stream processing analysis. This is documented in Chapter 12.
+
+---
+
+## 12. Architecture, Performance & Benchmarks
+
+`bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
+
+### Throughput Benchmarks
+
+Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
+
+| Operation | Total Volume | Throughput (bits/s) | Throughput (Bytes/s) | Notes |
+|---|---|---|---|---|
+| **Hardware 64-bit Bit Reversal** | 128 Mbits | **16.00 Gbps** | 2,000 MB/s | Direct CPU `u64::reverse_bits()` |
+| **Bignum 1024-bit Packing/Unpacking** | 10.2 Mbits | **5.27 Gbps** | 658.6 MB/s | Large-block bignum bitfield packing |
+| **Bignum 256-bit Packing/Unpacking** | 12.8 Mbits | **1.90 Gbps** | 237.2 MB/s | SHA-256 size field packing/unpacking |
+| **Synthetic 8-bit Linear Stream** | 16.0 Mbits | **234.5 Mbps** | 29.3 MB/s | Continuous bit generation & sink flush |
+| **1-bit Single-Bit Resolution Stream** | 0.5 Mbits | **43.3 Mbps** | 5.4 MB/s | Single-bit slice accumulation & packing |
+| **Bignum 1024-bit Bit Reversal** | 5.1 Mbits | **39.4 Mbps** | 4.9 MB/s | Full arbitrary-precision bit reversal |
+| **Unaligned 3-bit to 8-bit Extraction** | 3.0 Mbits | **39.0 Mbps** | 4.9 MB/s | Cross-byte boundary accumulation |
+| **Tuple Pipeline (`2U3U3U` -> Rearrange)** | 2.0 Mbits | **29.7 Mbps** | 3.7 MB/s | Multi-field unpack, reorder & repack |
+
+### UTF-8 Stream Processing & Architectural Study
+
+For an in-depth analysis of UTF-8 bitstream hazards, byte-alignment constraints, continuation header preservation, and Unicode scalar value processing in `bdd`, consult the technical report:
+* [`docs/utf8_study.md`](docs/utf8_study.md)
+
+### Codebase Organization
+
+The Rust implementation is organized cleanly into modular crates:
+
+```
+src/
+├── lib.rs          # Public library crate interface
+├── main.rs         # Thin CLI wrapper & early dispatcher
+├── error.rs        # Strongly-typed BddError hierarchy
+├── diag.rs         # High-throughput warning deduplication & diagnostic reporting
+├── counter.rs      # Unit and skip counting logic
+├── field.rs        # Arbitrary-precision Field enum & hardware bit-reversals
+├── float_types.rs  # AI/GPU float codecs (FP16, BF16, FP8 E4M3/E5M2, FP6, FP4)
+├── ffi.rs          # C-ABI export symbols for native integration
+├── pattern.rs      # Grammar parser, multipliers, TupleUnpacker & TuplePacker
+├── stream.rs       # Stream generators (File, Counter, Zeros, Ones, Random, Tuples)
+├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV, NDJSON, ANSI Visual)
+├── manipulator.rs  # Ordered pipeline transformations (Arithmetic, Bitwise, Filter)
+├── preset.rs       # Standard protocol & AI float presets (mp3, ts, wav, nvfp4, etc.)
+├── explain.rs      # Pattern bit layout, alignment & schema analysis
+├── probe.rs        # Shannon entropy, periodic stride autocorrelation & byte classes
+├── mcp.rs          # Native JSON-RPC 2.0 Model Context Protocol (MCP) server
+├── server.rs       # Embedded zero-dependency HTTP server & web app dispatcher
+├── cli.rs          # Clap CLI definition & validation rules
+└── engine.rs       # End-to-end pipeline execution orchestrator
+include/
+└── bdd.h           # C/C++ API header
+python/
+├── __init__.py     # Python package root
+└── bdd.py          # Zero-dependency Python ctypes wrapper
+web/
+├── index.html      # Responsive browser single-page application UI
+├── style.css       # Dark-slate styling & color-coded bit pattern layouts
+├── app.js          # Interactive JavaScript client & preset engine
+└── server.py       # Standalone Python HTTP server
+package/
+├── build_deb.sh    # Builds Debian / Ubuntu (.deb) packages with dpkg-deb
+├── build_rpm.sh    # Builds Fedora / RHEL (.rpm) packages for DNF with rpmbuild
+├── build_all.sh    # Builds all distribution packages and generates SHA256SUMS
+└── README.md       # Packaging documentation and install instructions
+pyproject.toml      # Standard Python package configuration
+llms.txt            # High-density agent & LLM reference card
+```
+
+### Key Design Principles
+
+1. **Strict Type Safety**: All errors flow through `BddError`. Functions return `Result<T, BddError>` instead of panicking or calling `std::process::exit`.
+2. **Fast-Path Bit Reversal**: Sub-64-bit integer bit reversals execute via direct hardware `u64::reverse_bits()`, falling back to `BigUint` bit arithmetic only when necessary.
+3. **Byte-Level String Integrity**: The `C` and `c` pattern types store raw bytes internally (`Field::Bytes`) rather than lossy UTF-8 conversions, guaranteeing bit-perfect roundtrips.
+4. **Automated Verification**: Integrated test runner runs native Rust unit tests, bignum tests, and legacy golden-file integration tests.
+5. **Zero I/O Diagnostic Bottlenecks**: Diagnostic warnings during stream processing are deduplicated with $O(1)$ hashing, printing on first encounter and summarizing at EOF, or completely silenced via `-q` / `--quiet` to prevent `stderr` I/O serialization from bottlenecking multi-gigabit throughput.
+
+#### The Complete Command Reference
+
+Having explored all bitstream concepts, physical containers, pattern tuples, pipeline transformations, multi-stream coordination, bit reversals, fast hardware seeking, AI inspection tools, and programmatic APIs, Chapter 13 provides the comprehensive reference manual for all command-line options.
+
+---
+
+## 13. Command Line Options Reference
 
 ```
 Usage: bdd [OPTIONS] [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN]
@@ -690,236 +999,13 @@ General:
   -V, --version                    Print version
 ```
 
----
+#### Building, Verifying and Distributing
 
-## 8. AI Ergonomics, Binary Inspection & Model Context Protocol (MCP)
-
-`bdd` provides native primitives for autonomous AI coding agents, reverse engineers, and pipeline automation:
-
-### Built-in Format Presets (`--preset`, `--list-presets`)
-Instead of manually calculating complex bit offsets, standard protocol and AI weight presets configure input patterns, unit widths, and field names in one step:
-```bash
-# List all 13 standard presets:
-bdd --list-presets
-```
-Standard presets include:
-- `mp3-header` (MPEG Audio Frame Header, 32 bits)
-- `mpeg-ts` (MPEG Transport Stream Header, 32 bits from 188B packet)
-- `wav-header` (RIFF WAV Header Identifier, 96 bits)
-- `jpeg-sof0` (JPEG Start of Frame 0, 80 bits)
-- `h264-nal` (H.264 / AVC NAL Unit Header, 8 bits)
-- `nvfp4` (Dual packed NVIDIA NVFP4 E2M1 weights, 8 bits)
-- `fp6-e3m2` (Quad packed FP6 E3M2 AI weights, 24 bits)
-- `fp8-e4m3` (OCP FP8 E4M3 AI weight, 8 bits)
-- `fp8-e5m2` (OCP FP8 E5M2 AI weight, 8 bits)
-- `bf16` (Bfloat16 Brain Floating Point, 16 bits)
-- `fp16` (IEEE 754 Half-Precision Float, 16 bits)
-- `ipv4-header` (IPv4 Packet Header, 160 bits / 20 bytes)
-- `udp-header` (UDP Datagram Header, 64 bits / 8 bytes)
-- `tcp-header` (TCP Segment Header with discrete sub-byte flags, 160 bits / 20 bytes)
-- `riscv-r-type` (RISC-V 32-bit R-type Instruction, 32 bits)
-
-### Keyed JSON Objects (`--json-object`, `--json-fields`)
-Pair named patterns or presets with `--json-object` to emit newline-delimited JSON dictionaries where keys match field names:
-```bash
-bdd --input-file stream.ts --input-raw-unit 188B --preset mpeg-ts --json-object --count 3
-```
-Output:
-```json
-{"afc":1,"cc":0,"pid":0,"priority":0,"pusi":0,"scrambling":0,"sync":71,"tei":0}
-{"afc":1,"cc":1,"pid":17,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
-{"afc":1,"cc":2,"pid":256,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
-```
-
-### Pattern Explainer (`--explain-pattern`)
-Examine bit ranges, byte alignments, offsets, and field types without running a processing job:
-```bash
-bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
-# Machine-readable JSON output for AI toolchains:
-bdd --explain-pattern "sync:11u,version:2u" --output-json
-```
-
-### Binary Prober (`--probe`)
-Inspect unknown binary blobs without prior schema knowledge. Computes Shannon entropy ($H = -\sum p_i \log_2 p_i$), byte class distributions, periodic stride autocorrelation across offsets 1..512 bytes (detecting MPEG-TS, 24-bit audio, or fixed-stride telemetry), and extracts printable ASCII strings:
-```bash
-bdd --probe payload.bin
-# Full JSON metrics:
-bdd --probe payload.bin --output-json
-```
-
-### Model Context Protocol (MCP) Server (`--mcp`)
-`bdd` includes a native JSON-RPC 2.0 stdio MCP server for agent integration:
-```bash
-bdd --mcp
-```
-Registered MCP tools:
-- `bdd_slice`: Slices a file or hex string by pattern/preset and outputs text or JSON.
-- `bdd_probe`: Analyzes entropy, periodic strides, and format heuristics.
-- `bdd_explain_pattern`: Explains schema bit offsets and field types.
-- `bdd_list_presets`: Returns available protocol presets.
-
-### Interactive Web Application (`--serve`)
-`bdd` embeds a complete, zero-dependency browser application directly into the binary:
-```bash
-bdd --serve            # Launches web UI at http://localhost:7788
-bdd --serve 8080       # Custom port (aliases: --web, --gui)
-# Or via make targets:
-make web               # Compiles and runs ./bdd --serve
-make web-py            # Standalone Python backend (python3 web/server.py)
-```
-
-**Key Features:**
-- **File Upload & Drag-and-Drop**: Upload binary blobs, capture files, or sample datasets.
-- **Protocol Presets**: 1-click loading for MPEG-TS, MP3 Header, NVFP4, FP8, WAV, RGB565, and more.
-- **Live Visual Bit Breakdown**: Color-coded field layout (uint, int, float, char, discard, counter) with exact bit offsets and byte boundaries.
-- **Real-Time Command Generator**: Generates equivalent copy-pasteable `bdd` CLI commands as you tune options.
-- **Multi-Sink Results Inspector**: Switch seamlessly between Formatted JSON, Hex Dump, Color Matrix, CSV, Raw Bits, and Binary Download.
-- **Binary Prober in Browser**: Run entropy, byte class, and periodic stride autocorrelation with one click.
-
-### Agent Documentation (`llms.txt` & Agent Skill)
-- **[`llms.txt`](llms.txt)**: High-density reference tailored for LLM context windows.
-- **Agent Skill**: Available at `~/.agents/skills/bdd/SKILL.md`.
+For developers extending `bdd`, compiling lean embedded binaries, or packaging for Linux distributions, Chapter 14 details the verification test suite, modular feature flags, documentation compiler, and release tooling.
 
 ---
 
-## 9. Channel Demuxing & Splitting
-
-When processing multiplexed packet formats or interleaved bitstreams (e.g. audio + video, header + payload), `bdd` can demux fields into independent files or pipes:
-
-```bash
-# Split interleaved 16-bit audio and 32-bit video into separate streams:
-bdd --input-pattern=16B32B \
-    --demux 0:audio.raw \
-    --demux 1:video.raw < input.bin
-
-# Alternatively, using --demux-files shorthand:
-bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin
-```
-
----
-
-## 10. Programmatic Interfaces (C Header & Python)
-
-`bdd` exports clean C-ABI symbols in `libbdd.so` and includes an official C header ([`include/bdd.h`](include/bdd.h)) and a zero-dependency Python wrapper ([`python/bdd.py`](python/bdd.py)):
-
-### Python (`ctypes` & `pyproject.toml`)
-
-```python
-from bdd import Bdd
-
-b = Bdd()
-
-# Fast hardware bit-reversal:
-assert b.reverse_bits(0x0F, 8) == 0xF0
-
-# Unpack bitfields into Python tuple:
-fields = b.unpack("4U4U", 0xA5)   # -> (10, 5)
-
-# Pack Python tuple into raw integer:
-unit = b.pack("4U4U", (10, 5))    # -> 0xA5
-
-# Native AI float conversion (FP16, BF16, FP8, FP4):
-val = b.decode_f16(0x3C00)        # -> 1.0
-bits = b.encode_f16(1.0)          # -> 0x3C00
-```
-
-### C / C++ API
-
-```c
-#include "bdd.h"
-#include <stdio.h>
-
-int main() {
-    uint64_t fields[2];
-    bdd_unpack_u64("4U4U", 0xA5, fields, 2);
-    printf("Field 0: %lu, Field 1: %lu\n", fields[0], fields[1]); // 10, 5
-    return 0;
-}
-```
-
----
-
-## 11. UTF-8 Stream Processing & Architectural Study
-
-For an in-depth analysis of UTF-8 bitstream hazards, byte-alignment constraints, continuation header preservation, and Unicode scalar value processing in `bdd`, consult the technical report:
-* [`docs/utf8_study.md`](docs/utf8_study.md)
-
----
-
-## 12. Performance & Throughput Benchmarks
-
-`bdd` achieves high throughput across arbitrary bit boundaries, balancing hardware register acceleration for sub-64-bit units with arbitrary-precision arithmetic for large bignum fields.
-
-Measured via `make bench` (`benches/throughput.rs`) on Linux x86_64:
-
-| Operation | Total Volume | Throughput (bits/s) | Throughput (Bytes/s) | Notes |
-|---|---|---|---|---|
-| **Hardware 64-bit Bit Reversal** | 128 Mbits | **16.00 Gbps** | 2,000 MB/s | Direct CPU `u64::reverse_bits()` |
-| **Bignum 1024-bit Packing/Unpacking** | 10.2 Mbits | **5.27 Gbps** | 658.6 MB/s | Large-block bignum bitfield packing |
-| **Bignum 256-bit Packing/Unpacking** | 12.8 Mbits | **1.90 Gbps** | 237.2 MB/s | SHA-256 size field packing/unpacking |
-| **Synthetic 8-bit Linear Stream** | 16.0 Mbits | **234.5 Mbps** | 29.3 MB/s | Continuous bit generation & sink flush |
-| **1-bit Single-Bit Resolution Stream** | 0.5 Mbits | **43.3 Mbps** | 5.4 MB/s | Single-bit slice accumulation & packing |
-| **Bignum 1024-bit Bit Reversal** | 5.1 Mbits | **39.4 Mbps** | 4.9 MB/s | Full arbitrary-precision bit reversal |
-| **Unaligned 3-bit to 8-bit Extraction** | 3.0 Mbits | **39.0 Mbps** | 4.9 MB/s | Cross-byte boundary accumulation |
-| **Tuple Pipeline (`2U3U3U` -> Rearrange)** | 2.0 Mbits | **29.7 Mbps** | 3.7 MB/s | Multi-field unpack, reorder & repack |
-
----
-
-## 13. Architecture & Codebase Design
-
-The Rust implementation is organized cleanly into modular crates:
-
-```
-src/
-├── lib.rs          # Public library crate interface
-├── main.rs         # Thin CLI wrapper & early dispatcher
-├── error.rs        # Strongly-typed BddError hierarchy
-├── diag.rs         # High-throughput warning deduplication & diagnostic reporting
-├── counter.rs      # Unit and skip counting logic
-├── field.rs        # Arbitrary-precision Field enum & hardware bit-reversals
-├── float_types.rs  # AI/GPU float codecs (FP16, BF16, FP8 E4M3/E5M2, FP6, FP4)
-├── ffi.rs          # C-ABI export symbols for native integration
-├── pattern.rs      # Grammar parser, multipliers, TupleUnpacker & TuplePacker
-├── stream.rs       # Stream generators (File, Counter, Zeros, Ones, Random, Tuples)
-├── sink.rs         # Output writers (Binary, Hex, Bit, Integer, CSV, NDJSON, ANSI Visual)
-├── manipulator.rs  # Ordered pipeline transformations (Arithmetic, Bitwise, Filter)
-├── preset.rs       # Standard protocol & AI float presets (mp3, ts, wav, nvfp4, etc.)
-├── explain.rs      # Pattern bit layout, alignment & schema analysis
-├── probe.rs        # Shannon entropy, periodic stride autocorrelation & byte classes
-├── mcp.rs          # Native JSON-RPC 2.0 Model Context Protocol (MCP) server
-├── server.rs       # Embedded zero-dependency HTTP server & web app dispatcher
-├── cli.rs          # Clap CLI definition & validation rules
-└── engine.rs       # End-to-end pipeline execution orchestrator
-include/
-└── bdd.h           # C/C++ API header
-python/
-├── __init__.py     # Python package root
-└── bdd.py          # Zero-dependency Python ctypes wrapper
-web/
-├── index.html      # Responsive browser single-page application UI
-├── style.css       # Dark-slate styling & color-coded bit pattern layouts
-├── app.js          # Interactive JavaScript client & preset engine
-└── server.py       # Standalone Python HTTP server
-package/
-├── build_deb.sh    # Builds Debian / Ubuntu (.deb) packages with dpkg-deb
-├── build_rpm.sh    # Builds Fedora / RHEL (.rpm) packages for DNF with rpmbuild
-├── build_all.sh    # Builds all distribution packages and generates SHA256SUMS
-└── README.md       # Packaging documentation and install instructions
-pyproject.toml      # Standard Python package configuration
-llms.txt            # High-density agent & LLM reference card
-```
-
-### Key Design Principles
-
-1. **Strict Type Safety**: All errors flow through `BddError`. Functions return `Result<T, BddError>` instead of panicking or calling `std::process::exit`.
-2. **Fast-Path Bit Reversal**: Sub-64-bit integer bit reversals execute via direct hardware `u64::reverse_bits()`, falling back to `BigUint` bit arithmetic only when necessary.
-3. **Byte-Level String Integrity**: The `C` and `c` pattern types store raw bytes internally (`Field::Bytes`) rather than lossy UTF-8 conversions, guaranteeing bit-perfect roundtrips.
-4. **Automated Verification**: Integrated test runner runs native Rust unit tests, bignum tests, and legacy golden-file integration tests.
-5. **Zero I/O Diagnostic Bottlenecks**: Diagnostic warnings during stream processing are deduplicated with $O(1)$ hashing, printing on first encounter and summarizing at EOF, or completely silenced via `-q` / `--quiet` to prevent `stderr` I/O serialization from bottlenecking multi-gigabit throughput.
-
----
-
-## 14. Development, Testing & Documentation
+## 14. Development, Testing, Packaging & Releases
 
 Run the test suite:
 

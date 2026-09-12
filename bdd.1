@@ -11,30 +11,19 @@ bdd \- Bit stream copy and modify
 [\fISTREAM_PATTERN\fR] [\fIINPUT_PATTERN\fR] [\fIOUTPUT_PATTERN\fR] [\fIOPTIONS\fR]
 
 .SH DESCRIPTION
-bdd  modifies information in bit streams (non byte-aligned).
+\fBbdd\fR (binary-dd) inspects, transforms, unpacks, manipulates, interleaves, and packs bitstreams with arbitrary (non-byte-aligned) bit precision.
 
-By default, bdd reads bytes from standard input and writes them to 
-standard output. With options, the behaviour can be widely modified
-to handle inputs and outputs with accuracy of one bit.
+By default, \fBbdd\fR reads bytes from standard input and writes them unchanged to standard output, functioning like an exact 8-bit copy tool. With options and patterns, its behavior can be extended to manipulate inputs and outputs down to single-bit accuracy.
 
-bdd considers input and output as streams of bit units. A bit unit is
-a repeatable units of constant amount of bits. Those units can be in
-the middle of the stream and the input stream can be infinite (like
-/dev/zero).
+\fBbdd\fR models input and output as continuous streams of bit units. A bit unit is a repeating sequence containing a constant number of bits. Units can start at arbitrary bit offsets, be spaced by periodic gaps, or reside inside repeating physical containers (raw units).
 
-Every unit is divided to bit-defined fields and fields are interpreted
-into a tuple (analogy of relational database). Tuples may have integers,
-floats and strings.
+Each unit can be unpacked into structured, typed fields called a \fItuple\fR (analogous to a row in a relational database). Fields within a tuple may represent unsigned or signed integers, floating-point numbers (from IEEE double-precision down to sub-byte AI float formats), UTF-8 characters, or raw bytes.
 
-Tuple can be modified and packed again bit by bit into a unit.
-Units are written into the output bit stream.
+Tuples can be transformed in flight through an ordered pipeline of operations (arithmetic, bitwise masks, shifts, rounding, clamping, and conditional filtering) and repacked into output bit units or formatted into human- and machine-readable text formats (hex, bits, decimal integers, CSV, NDJSON, or ANSI visual dumps).
 
-There can be anothern input stream, merge stream. Units in the merge
-stream are output after every main input stream unit. Merge stream does
-not support division into fields.
+\fBbdd\fR also supports secondary merge streams, allowing data from one or more secondary files to be interleaved round-robin with the primary stream, as well as field demuxing into separate destination files.
 
-The name bdd comes from binary-dd because it is able to do much of
-the operations anyone would need in dd to handle bit streams.
+The name \fBbdd\fR comes from \fIbinary-dd\fR because it performs bitstream-level operations analogous to what \fBdd\fR(1) does for block-aligned data.
 
 .SH OPTIONS
 
@@ -54,26 +43,26 @@ Tuple unpack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"sync:11u,version:
 \fIOUTPUT_PATTERN\fR
 Tuple pack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"8U,x,8U"\fR). Equivalent to \fB\-\-output\-pattern\fR. Note: when \fB\-\-input\-tuples\fR is used, input fields are parsed from commas, so a single positional pattern specifies the output packing pattern.
 
-.SS Input and output file selection:
+.SS Input and Output File Selection
 
 The default is to use standard input and standard output.
 
 .TP
 --input-file=FILENAME
-Selects input file to used as input instead pipe input. Can not be
-used with --input-zeros --input-ones, --input-random or --input-counter.
---input-integers and --input-tuples take their input from input file.
-Filename can also be "-" to describe pipe input (default).
+Selects input file to use instead of standard input pipe. Cannot be
+used with --input-zeros, --input-ones, --input-random, or --input-counter.
+--input-integers and --input-tuples take their input from the input file.
+Filename can also be "-" to specify standard input pipe (default).
 
 .TP
 --output-file=FILENAME
-Selects output file to used as output instead pipe output. Filename can
-also be "-" to describe pipe output (default). Outuput file must not exist,
-bdd does not overwrite an existing file.
+Selects output file to use instead of standard output pipe. Filename can
+also be "-" to specify standard output pipe (default). Output file must not already exist;
+\fBbdd\fR will not overwrite an existing file without explicit redirection.
 
 .SS Input Units, Skips, and Gaps
 
-A unit is a constant bit amount that repeats in the input stream. All stream dimensions are measured strictly in bits:
+A unit is a constant number of bits that repeats in the input stream. All stream dimensions are measured strictly in bits:
 
 .TP
 --input-unit=BITS
@@ -142,75 +131,64 @@ Disable seeking specifically on the primary input stream, forcing sequential str
 Explicitly enable seeking on primary input (this is already the default whenever seeking is possible). Maintained for backwards compatibility.
 
 .TP
---input-reverse-bytes
-Every time when a byte is read from input, bits are reversed. 0x01 becomes 0x80.
-Look --input-little-endian for more information.
+--reverse-input-bytes, --input-reverse-bytes
+Every time when a byte is read from input, its bits are reversed (0x01 becomes 0x80).
+See \fB\-\-input\-little\-endian\fR for details.
 
 .TP
---input-reverse-unit
-Every time when a unit is read, bits are reversed. Look --input-little-endian
-for more information.
+--reverse-input-units, --input-reverse-unit
+Every time when a unit is read, its bits are reversed across the unit.
+See \fB\-\-input\-little\-endian\fR for details.
 
 .TP
 --input-little-endian
-By default, the input is assumed to be in network byte order or in big-endian byte
-order. However, the natural byte order for most processors is little-endian byte order.
-16-bit big-endian integer 1 in byte stream is 0x00 0x01 and little-endian 0x01 0x00.
-In some systems, even if integers are little-endian, floating point numbers and strings
-are in big-endian order.
+By default, the input is assumed to be in network byte order or big-endian byte
+order. However, the natural byte order for most modern processors is little-endian.
+A 16-bit big-endian integer 1 in a byte stream is \f(CR0x00 0x01\fR, whereas in little-endian it is \f(CR0x01 0x00\fR.
+In some architectures, even if integers are little-endian, floating-point numbers or strings may follow big-endian order.
 
-Unit is translated as an integer assuming that the least significant bit is the first one.
-To implement this as generic as possible, this is actually a synonym for combination
---input-reverse-bytes and --input-reverse-unit. If we read 16-bit integer 1, in little-endian
-input stream it is 0x01 0x00. With --input-reverse-bytes it turns to 0x80 0x00 and
-with --input-reverse-unit it turns to 0x00 0x01. By these two steps, the operation
-has a meaningful interpretation even in non-byte-aligned cases.
+The unit is translated as an integer assuming that the least significant bit is first.
+To implement this as generically as possible, this option is equivalent to combining
+\fB\-\-reverse\-input\-bytes\fR and \fB\-\-reverse\-input\-units\fR. If we read the 16-bit integer 1 from a little-endian stream, its byte representation is \f(CR0x01 0x00\fR. With \fB\-\-reverse\-input\-bytes\fR it becomes \f(CR0x80 0x00\fR, and with \fB\-\-reverse\-input\-units\fR it turns into \f(CR0x00 0x01\fR. By these two steps, the operation maintains a meaningful, consistent interpretation even for non-byte-aligned units.
 
-After --input-little-endian, the content is usually read as a big-endian number in 
---input-pattern!
+After \fB\-\-input\-little\-endian\fR, fields in \fB\-\-input\-pattern\fR are normally read using uppercase big-endian pattern codes.
 
-.SS Bypass bit stream input (fake inputs)
+.SS Synthetic Stream Sources (Bypass Stream Input)
 
-Instead of the file input, the input can be one of these fake inputs. You can use 
-either file input or one of these fake inputs.
-The --count option specifies how many units the fake input produces. If --count is omitted, fake inputs stream indefinitely until standard output pipe breaks or the process is terminated.
+Instead of reading from a file or pipe, \fBbdd\fR can generate synthetic bitstreams directly.
+The \fB\-\-count\fR option specifies how many units the synthetic source produces. If \fB\-\-count\fR is omitted (or set to 0), synthetic streams run indefinitely until standard output pipe breaks or the process is terminated.
 
-Values of fake inputs are truncated to the input unit size. For example, if you use
---input-counter with input unit size 8 and output unit size 9, the topmost bit of the
-output is always zero.
+Values of synthetic inputs are truncated to the input unit size. For example, if you use
+\fB\-\-input\-counter\fR with input unit size 8 and output unit size 9, the topmost bit of the output is always zero.
 
-If a fake input is used, the standard input is
-not opened at all for input, and standard input can be used with --merge-file.
+When a synthetic input is used, standard input is not opened for the primary stream, allowing standard input to be used with \fB\-\-merge\-file=\-\fR.
 
-None of the fake inputs does support reversing bits, initial skips or gap operations.
---input-random, --input-counter and --input-integers support --skip (also others
-allow it, but it does nothing as it would not affect the output).
+Synthetic inputs do not support reversing bits, initial bit skips, or gap operations.
+\fB\-\-input\-random\fR, \fB\-\-input\-counter\fR, and \fB\-\-input\-integers\fR support \fB\-\-skip\fR to start from an initial offset or value.
 
 .TP
 --input-zeros
-All the input units are zeros.
+Generate an endless stream of zero bits.
 
 .TP
 --input-ones
-Like --input-zeros but all the bits of the input unit are ones.
+Generate an endless stream of one bits.
 
 .TP
 --input-random
-Like --input-zeros but all the input bits are random (from /dev/urandom).
+Generate random bits from /dev/urandom (cryptographically strong OS randomness).
 
 .TP
 --input-counter
-Like --input-zeros, but input is units, every one with one bigger value than the previous.
-Counter value is cut to input unit size.
-Can not be reversed but --skip can be used to start from a specific number.
-If --skip=N, the first counter value will be N.
+Generate sequential counter numbers (0, 1, 2, ...), incrementing by 1 per unit.
+Counter values are masked to the input unit size.
+If \fB\-\-skip=N\fR is specified, the counter starts at \fIN\fR.
 
 .TP
 --input-integers
-Instead of a bit stream, input is text, 10-base unsigned integers that are separated
-with newline characters. Whitespace around number is allowed and empty lines are skipped.
-Can not be used with any other unit selection argument but can be used
-with --skip and --count to read only a part of the file.
+Instead of a bit stream, input is text, 10-base unsigned integers separated
+by newlines. Whitespace around numbers is ignored and empty lines are skipped.
+Cannot be combined with bit stream unit selection, but can be used with \fB\-\-skip\fR and \fB\-\-count\fR.
 
 .SS Unpack a unit to a tuple
 
@@ -521,9 +499,9 @@ because 17 is first truncated to 4 bits giving '0001' or 1
 and the bit representation of -1 is '1111'.
 
 If tuples are used (--input-pattern or --input-tuples), but
-there is is no --output-pattern option, the first field
+there is no --output-pattern option, the first field
 in the tuple is used directly as the output unit.
-The first field of the tuple must be unsigned
+The first field of the tuple must be an unsigned
 integer if it is used as an output unit.
 
 .SS Collect output data stream
@@ -563,32 +541,30 @@ Initial prefix of zero bits emitted on output before the first unit is written (
 .TP
 --output-little-endian
 Unit is written to the output stream least significant byte first.
-The default is the network byte order or big-endian byte order
+The default is network byte order or big-endian byte order
 where the most significant byte is written first.
-Actually --output-little-endian is a combination of
---output-reverse-unit and --output-reverse-bytes and as such,
-those options can not be used with --output-little-endian.
-Look --input-little-endian for more discussion.
+\fB\-\-output\-little\-endian\fR is a combination of
+\fB\-\-reverse\-output\-units\fR and \fB\-\-reverse\-output\-bytes\fR.
+See \fB\-\-input\-little\-endian\fR for details.
 
 .TP
---output-reverse-unit
+--reverse-output-units, --output-reverse-unit
 Reverses bits in the output unit.
-Look --output-little-endian for more information.
+See \fB\-\-output\-little\-endian\fR for details.
 
 .TP
---output-reverse-bytes
+--reverse-output-bytes, --output-reverse-bytes
 Reverses bits of every written byte.
-Look --output-little-endian for more information.
+See \fB\-\-output\-little\-endian\fR for details.
 
-.SS Merge output with another data stream:
+.SS Stream Merging & Interleaving
 
 Units of the merge file are written to the output after every
-normal output unit. Output is finished when the normal output
-is finished. Last merge unit is written after the last output
-unit so that as many merge units as normal units are written.
-It is an error if the merge file does not have enough units
-but it can contain more units than the normal input file and
-the extra units are ignored.
+primary output unit. Processing terminates when the primary output
+stream finishes. A final merge unit is written after the last primary output
+unit, maintaining an equal count of primary and merge units.
+It is an error if the merge file does not contain enough units,
+but it may contain extra units, which are ignored.
 
 Merge unit is defined like the normal input unit. Merge unit
 is written to the output with the same unit size as it has
@@ -673,7 +649,7 @@ Every byte read from merge file is reversed.
 Every unit read from merge file is reversed.
 
 
-.SS Show output as human readable
+.SS Human-Readable and Text Output Sinks
 
 .TP
 --output-tuples
@@ -682,39 +658,38 @@ This output is readable with --input-tuples
 
 .TP
 --output-integers
-Replace bit output with human-readable output of units as integers
+Replace bit output with human-readable output of units as decimal integers (one per line).
 This output is readable with --input-integers
 
-If merge file is used, the main unit and the merge unit is printed
-separately as two integers (possibly with different unit size).
+If merge file is used, the main unit and the merge unit are printed
+separately as two integers (possibly with different unit sizes).
 
-The integer is truncated to the unit size but reversing bits
-does not affect to the integer output.
+The integer is truncated to the unit size, and bit reversals
+do not affect the decimal integer output.
 
 .TP
 --output-hex
-Replace bit output with human-readable output of units as hex
-numbers.
+Replace bit output with human-readable output of units as hexadecimal numbers.
 
-Units are written as they would be written to the bit stream
-except that --output-little-endian, --output-reverse-bytes and
---output-reverse-unit do not have effect to the hex output.
+Units are formatted as they would be written to the bit stream,
+except that --output-little-endian, --output-reverse-bytes, and
+--output-reverse-unit do not affect hex output.
 
-Output unit size affects the number as it affects in the bit output.
+Output unit size affects the number as it affects bit output.
 If output unit size is 3 bits, the number 8 is printed as hex 0.
 The hex number has as many digits as needed to represent the full
-unit but topmost zero bits are not necessarily a part of the output unit.
+unit, but topmost zero bits are not necessarily a part of the output unit.
 Units from the merge file are written with their own output unit
-so that they may have different amount of digits.
+so that they may have a different number of digits.
 
-Output is divided to lines so that in one line there is 1,
-2, 4, 8, 16 or 32 units separated with spaces. The line length
-is always between 40 and 80 characters.
+Output is divided into lines formatted so that each line contains 1,
+2, 4, 8, 16, or 32 units separated by spaces. The line length
+is kept between 40 and 80 characters.
 
 .TP
 --output-bits
-Replace bit output with human-readable output of units as bits.
-Look --output-hex for more information.
+Replace bit output with human-readable output of units as ASCII bit strings ('0' and '1').
+See \fB\-\-output\-hex\fR for formatting details.
 
 .TP
 --output-json
@@ -878,7 +853,7 @@ C-ABI shared library header file.
 dd(1)
 
 .SH BUGS
-None known in the current release. Please report issues at https://github.com/turtiainen/bdd.
+None known in the current release. Please report issues at https://github.com/e-t-u/bdd.
 
 .SH AUTHOR
 Esa Turtiainen (esa<at>turtiainen<dot>eu)
