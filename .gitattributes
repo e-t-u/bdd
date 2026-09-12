@@ -1,2 +1,67 @@
-# verify that github classifies bdd as Python
-bdd linguist-language=Python
+# Auto-detect text files and normalize line endings to LF across all platforms
+* text=auto eol=lf
+
+## Source code (with language-specific diff drivers)
+*.rs                text eol=lf diff=rust
+*.c                 text eol=lf diff=cpp
+*.h                 text eol=lf diff=cpp
+*.py                text eol=lf diff=python
+*.sh                text eol=lf
+*.js                text eol=lf
+*.html              text eol=lf diff=html
+*.css               text eol=lf
+*.svg               text eol=lf
+
+## Configuration & Data formats
+*.toml              text eol=lf
+*.json              text eol=lf
+*.yml               text eol=lf
+*.yaml              text eol=lf
+*.csv               text eol=lf
+*.txt               text eol=lf
+*.1                 text eol=lf
+Makefile            text eol=lf
+*.mk                text eol=lf
+.gitignore          text eol=lf
+.gitattributes      text eol=lf
+LICENSE             text eol=lf
+
+## Documentation
+*.md                text eol=lf
+
+## Binary Documents
+*.pdf               binary
+*.odp               binary
+*.odt               binary
+*.ods               binary
+*.doc               binary
+*.docx              binary
+
+## Images & Media
+*.png               binary
+*.jpg               binary
+*.jpeg              binary
+*.gif               binary
+*.ico               binary
+*.mp3               binary
+*.wav               binary
+*.ts                binary
+*.mp4               binary
+*.h264              binary
+*.264               binary
+
+## Binary Test Data & AI Model Weights
+*.bin               binary
+*.dat               binary
+*.raw               binary
+*.safetensors       binary
+*.gguf              binary
+
+## Compiled Binaries & Libraries
+*.so                binary
+*.dylib             binary
+*.dll               binary
+*.a                 binary
+*.o                 binary
+*.rlib              binary
+*.pyc               binary
