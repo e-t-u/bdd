@@ -1,7 +1,6 @@
 /**
- * Defense First Business Plan - Master PDF Renderer with Callout Alert Styling & Base64 Image Embedding
+ * bdd - Master Documentation PDF Renderer with Callout Alert Styling & Base64 Image Embedding
  * Engine: Headless Chromium (Puppeteer) + KaTeX (Vector Math) + Mermaid.js (DOM Diagrams)
- * Designed by Lead Visual Designer & Brand Identity Specialist
  */
 
 const fs = require('fs');
