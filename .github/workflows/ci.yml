@@ -54,4 +54,5 @@ jobs:
             dist/*.rpm
             dist/*.tar.gz
             dist/*.whl
+            dist/*.crate
             dist/SHA256SUMS

@@ -28,15 +28,19 @@ echo -e "\n==> Step 4: Building C Library SDK (.tar.gz)..."
 echo -e "\n==> Step 5: Building Python packages (Wheel & Sdist)..."
 "${SCRIPT_DIR}/build_python.sh"
 
-echo -e "\n==> Step 6: Generating SHA256 Checksums..."
+echo -e "\n==> Step 6: Building Cargo Crate (.crate)..."
+cargo package --allow-dirty --manifest-path "${REPO_ROOT}/Cargo.toml"
+cp "${REPO_ROOT}/target/package/"*.crate "${DIST_DIR}/"
+
+echo -e "\n==> Step 7: Generating SHA256 Checksums..."
 cd "${DIST_DIR}"
-sha256sum *.deb *.rpm *.tar.gz *.whl > SHA256SUMS
+sha256sum *.deb *.rpm *.tar.gz *.whl *.crate > SHA256SUMS
 
 echo -e "\n================================================================="
 echo " Packaging Completed Successfully!"
 echo " Output directory: ${DIST_DIR}"
 echo "================================================================="
-ls -lh *.deb *.rpm *.tar.gz *.whl SHA256SUMS
+ls -lh *.deb *.rpm *.tar.gz *.whl *.crate SHA256SUMS
 
 echo -e "\nSHA256 Checksums:"
 cat SHA256SUMS

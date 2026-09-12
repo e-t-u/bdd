@@ -1184,29 +1184,41 @@ Native packages, Python modules, and C SDK archives can be built directly using 
 - **Debian / Ubuntu / Linux Mint (`.deb`)**:
   ```bash
   make deb
-  # Install: sudo apt install ./dist/bdd_0.5.0_amd64.deb
+  # Install: sudo apt install ./dist/bdd_0.5.1_amd64.deb
   ```
 - **Fedora / RHEL / CentOS / Rocky (`.rpm` for DNF)**:
   ```bash
   make rpm
-  # Install: sudo dnf install ./dist/bdd-0.5.0-1.*.rpm
+  # Install: sudo dnf install ./dist/bdd-0.5.1-1.*.rpm
+  ```
+- **Cargo Crate (`.crate` for Rust projects)**:
+  ```toml
+  # In your Cargo.toml:
+  [dependencies]
+  bdd = { git = "https://github.com/e-t-u/bdd.git", tag = "v0.5.1" }
+  ```
+  ```bash
+  # Or install CLI directly via cargo:
+  cargo install --git https://github.com/e-t-u/bdd.git --tag v0.5.1
+  # Or install from release .crate asset:
+  cargo install ./dist/bdd-0.5.1.crate
   ```
 - **Python Module for Pip (`.whl` & `.tar.gz`)**:
   ```bash
   make python
-  # Install: pip install ./dist/bdd-0.5.0-py3-none-any.whl
+  # Install: pip install ./dist/bdd-0.5.1-py3-none-any.whl
   ```
 - **Standalone C Library SDK Archive (`.tar.gz`)**:
   ```bash
   make c-lib
-  # Extract: tar -xzf ./dist/bdd-c-0.5.0-linux-x86_64.tar.gz
+  # Extract: tar -xzf ./dist/bdd-c-0.5.1-linux-x86_64.tar.gz
   ```
 - **Build All Distribution Packages & Checksums**:
   ```bash
   make packages
   ```
 
-All generated distribution packages (`.deb`, `.rpm`, `.whl`, `.tar.gz`) are automatically built and published as downloadable assets on [GitHub Releases](https://github.com/e-t-u/bdd/releases) upon pushing a version tag (e.g. `v0.5.0`).
+All generated distribution packages (`.deb`, `.rpm`, `.whl`, `.crate`, `.tar.gz`) are automatically built and published as downloadable assets on [GitHub Releases](https://github.com/e-t-u/bdd/releases) upon pushing a version tag (e.g. `v0.5.1`).
 
 ---
 

@@ -5,6 +5,18 @@ edition = "2021"
 description = "Command line tool to interpret, manipulate, merge and create bit streams"
 authors = ["Esa Turtiainen"]
 license = "GPL-3.0"
+repository = "https://github.com/e-t-u/bdd"
+homepage = "https://github.com/e-t-u/bdd"
+documentation = "https://github.com/e-t-u/bdd#readme"
+readme = "README.md"
+keywords = ["bitstream", "binary", "slicer", "transcoder", "parser"]
+categories = ["command-line-utilities", "parsing", "encoding"]
+exclude = [
+    "docs/Presentation.odp",
+    "docs/Presentation.pdf",
+    "legacy/*",
+    "dist/*",
+]
 
 [lib]
 name = "bdd"

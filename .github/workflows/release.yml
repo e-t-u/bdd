@@ -46,6 +46,7 @@ jobs:
             dist/*.rpm
             dist/*.tar.gz
             dist/*.whl
+            dist/*.crate
             dist/SHA256SUMS
 
       - name: Create GitHub Release & Upload Assets
@@ -57,5 +58,6 @@ jobs:
             dist/*.rpm
             dist/*.tar.gz
             dist/*.whl
+            dist/*.crate
             dist/SHA256SUMS
           generate_release_notes: true

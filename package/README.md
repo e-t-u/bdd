@@ -3,6 +3,7 @@
 Scripts to generate native distribution packages and SDK archives for `bdd`:
 - **Debian / Ubuntu / Linux Mint**: `.deb` packages (installed via `dpkg -i` or `apt install`)
 - **Fedora / RHEL / CentOS / AlmaLinux**: `.rpm` packages (installed via `dnf install` or `rpm -i`)
+- **Cargo Crate (Rust)**: `.crate` package and git source dependency (`bdd = { git = "..." }`)
 - **C Library SDK**: Standalone tarball (`bdd-c-*.tar.gz`) with headers, shared & static libraries, pkg-config, examples, and Makefile
 - **Python Package (Pip)**: Wheel (`.whl`) and source distribution (`.tar.gz`) with bundled native library
 
@@ -80,17 +81,31 @@ All generated packages and checksum files are written to `dist/`:
 
 ### On Fedora / RHEL / CentOS / Rocky (DNF / RPM)
 ```bash
-sudo dnf install ./dist/bdd-0.5.0-1.*.rpm
+sudo dnf install ./dist/bdd-0.5.1-1.*.rpm
 ```
 
 ### On Debian / Ubuntu / Mint (APT / DPKG)
 ```bash
-sudo apt install ./dist/bdd_0.5.0_*.deb
+sudo apt install ./dist/bdd_0.5.1_*.deb
+```
+
+### Cargo Crate (Rust)
+```bash
+# Install binary CLI via Cargo from GitHub:
+cargo install --git https://github.com/e-t-u/bdd.git --tag v0.5.1
+
+# Or install from downloaded .crate release asset:
+cargo install ./dist/bdd-0.5.1.crate
+```
+In your Rust project's `Cargo.toml`:
+```toml
+[dependencies]
+bdd = { git = "https://github.com/e-t-u/bdd.git", tag = "v0.5.1" }
 ```
 
 ### Python (Pip)
 ```bash
-pip install ./dist/bdd-0.5.0-py3-none-any.whl
+pip install ./dist/bdd-0.5.1-py3-none-any.whl
 ```
 ```python
 from bdd import Bdd
@@ -100,8 +115,8 @@ print(b.decode_f16(0x3c00))  # 1.0
 
 ### C Library SDK
 ```bash
-tar -xzf dist/bdd-c-0.5.0-linux-x86_64.tar.gz
-cd bdd-c-0.5.0-linux-x86_64/examples
+tar -xzf dist/bdd-c-0.5.1-linux-x86_64.tar.gz
+cd bdd-c-0.5.1-linux-x86_64/examples
 make
 ./decode_network
 ```
