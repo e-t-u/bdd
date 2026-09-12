@@ -8,16 +8,30 @@ import ctypes
 import os
 
 def _find_lib():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(pkg_dir)
     candidates = [
+        # 1. Bundled in package (installed via wheel)
+        os.path.join(pkg_dir, "libbdd.so"),
+        os.path.join(pkg_dir, "libbdd.dylib"),
+        os.path.join(pkg_dir, "bdd.dll"),
+        # 2. Local cargo target build paths (development tree)
         os.path.join(base_dir, "target", "release", "libbdd.so"),
         os.path.join(base_dir, "target", "debug", "libbdd.so"),
         os.path.join(base_dir, "target", "release", "libbdd.dylib"),
         os.path.join(base_dir, "target", "release", "bdd.dll"),
+        # 3. Standard Linux / Unix system locations
+        "/usr/local/lib/libbdd.so",
+        "/usr/lib/libbdd.so",
+        "/usr/lib64/libbdd.so",
     ]
     for c in candidates:
         if os.path.exists(c):
             return c
+    import ctypes.util
+    found = ctypes.util.find_library("bdd")
+    if found:
+        return found
     return "libbdd.so"
 
 class Bdd:

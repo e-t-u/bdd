@@ -5,6 +5,7 @@
 
 pub mod cli;
 pub mod counter;
+pub mod diag;
 pub mod engine;
 pub mod error;
 pub mod explain;

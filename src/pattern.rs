@@ -260,7 +260,10 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
             return Err(BddError::InvalidInputBitLength(c, 8));
         }
         if "Cc".contains(c) && item.bits % 8 != 0 {
-            eprintln!("Number of bits for input pattern {} should be n*8 bits", c);
+            crate::diag::warn(format!(
+                "Number of bits for input pattern {} should be n*8 bits",
+                c
+            ));
         }
     }
 
@@ -350,7 +353,10 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
             return Err(BddError::InvalidOutputBitLength(c, 8));
         }
         if "Cc".contains(c) && item.bits % 8 != 0 {
-            eprintln!("Number of bits for output pattern {} should be n*8 bits", c);
+            crate::diag::warn(format!(
+                "Number of bits for output pattern {} should be n*8 bits",
+                c
+            ));
         }
     }
 

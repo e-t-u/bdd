@@ -642,7 +642,10 @@ fn test_mcp_server_protocol() {
     assert_eq!(lines.len(), 4);
 
     // Line 1: initialize
-    assert!(lines[0].contains(&format!("\"serverInfo\":{{\"name\":\"bdd-mcp\",\"version\":\"{}\"}}", env!("CARGO_PKG_VERSION"))));
+    assert!(lines[0].contains(&format!(
+        "\"serverInfo\":{{\"name\":\"bdd-mcp\",\"version\":\"{}\"}}",
+        env!("CARGO_PKG_VERSION")
+    )));
     // Line 2: tools/list
     assert!(lines[1].contains("\"name\":\"bdd_slice\""));
     assert!(lines[1].contains("\"name\":\"bdd_probe\""));
@@ -1050,6 +1053,95 @@ fn test_web_server_embedded() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn test_warning_deduplication_and_summary() {
+    let output = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=10",
+            "--input-unit=8",
+            "--rearrange=10",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd with missing rearrange field");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.trim(), "00 00 00 00 00 00 00 00 00 00");
+
+    // The initial warning was printed
+    assert!(stderr.contains("Field 10 mentioned in --rearrange missing"));
+    // The EOF summary was printed
+    assert!(stderr
+        .contains("[bdd] Warning: 'Field 10 mentioned in --rearrange missing' repeated 10 times"));
+    assert!(stderr.contains("[bdd] Warning: 'No fields to output, assumed 0' repeated 10 times"));
+
+    // Ensure it wasn't printed 10 times individually (1 initial + 1 in summary quote = 2)
+    let rearrange_mentions = stderr
+        .matches("Field 10 mentioned in --rearrange missing")
+        .count();
+    assert_eq!(rearrange_mentions, 2);
+}
+
+#[test]
+fn test_quiet_flag_suppresses_warnings_and_summary() {
+    for quiet_flag in ["-q", "--quiet"] {
+        let output = Command::new(BDD_BIN)
+            .args([
+                "--input-counter",
+                "--count=10",
+                "--input-unit=8",
+                "--rearrange=10",
+                "--output-hex",
+                quiet_flag,
+            ])
+            .output()
+            .expect("failed to run bdd with quiet flag");
+
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.is_empty(),
+            "stderr should be completely empty with {}, got: {}",
+            quiet_flag,
+            stderr
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(stdout.trim(), "00 00 00 00 00 00 00 00 00 00");
+    }
+}
+
+#[test]
+fn test_stream_warning_deduplication() {
+    let mut child = Command::new(BDD_BIN)
+        .args([
+            "--input-integers",
+            "--count=5",
+            "--input-unit=8",
+            "--output-hex",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"bad\nbad\nbad\nbad\nbad\n").unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Non-integer 'bad' interpreted as zero"));
+    assert!(
+        stderr.contains("[bdd] Warning: 'Non-integer 'bad' interpreted as zero' repeated 5 times")
+    );
 }
 
 #[cfg(not(feature = "server"))]

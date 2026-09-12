@@ -11,10 +11,6 @@ This document consolidates high-value feature improvements, API additions, and a
 - **Target Behavior**: Quoted numbers must be strictly preserved as raw ASCII string bytes (`"5"` $\rightarrow$ ASCII `0x35` / `53`), while unquoted numbers (`5`) are parsed as numeric values (`0x05`).
 - **Reference**: Resolves the note in `test/test.sh:151` (`echo -en "\"5\"" | ./bdd --input-tuples --output-hex` should output `35`).
 
-### 1.2 Warning Deduplication on High-Throughput Streams
-- **Current Behavior**: Diagnostic warnings (such as `"No fields to output, assumed 0"` or missing tuple field notices) are printed to `stderr` on every single record.
-- **Target Behavior**: On multi-gigabyte or streaming inputs, emit the warning on the first occurrence and summarize suppressed warnings at EOF (e.g. `"[bdd] Warning: 'No fields to output' repeated 1,420,512 times"`), or provide `--quiet` / `-q` to suppress non-fatal warnings completely. This prevents `stderr` flooding from bottlenecking multi-gigabit throughput.
-
 ---
 
 ## 2. Pattern Engine & Data Types
@@ -71,3 +67,5 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **No trailing whitespace in hex/bit dumps**: Terminal sinks cleanly separate tokens without trailing line spaces.
 - [x] **Multi-file round-robin merge**: Interleaving primary input with multiple secondary files via repeatable `--merge-file` and comma-separated `--merge-files`.
 - [x] **Multi-gigabit Rust engine**: High-performance engine achieving 16 Gbps bit reversal and multi-gigabit streaming throughput.
+- [x] **Warning deduplication & quiet mode on high-throughput streams**: Diagnostic warnings printed only on first occurrence during stream processing; deduplicated warning summary emitted at EOF. Added `-q` / `--quiet` flag to completely suppress non-fatal warnings and summaries for maximum pipeline throughput.
+

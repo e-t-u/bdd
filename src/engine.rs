@@ -30,10 +30,22 @@ pub fn run_pipeline_to_writer<W: Write + 'static>(
     run_pipeline_internal(config, Some(Box::new(writer)))
 }
 
+struct DiagnosticGuard;
+
+impl Drop for DiagnosticGuard {
+    fn drop(&mut self) {
+        crate::diag::flush_summary();
+    }
+}
+
 fn run_pipeline_internal(
     config: ValidatedConfig,
     custom_writer: Option<Box<dyn Write>>,
 ) -> Result<(), BddError> {
+    crate::diag::set_quiet(config.quiet);
+    crate::diag::reset();
+    let _diag_guard = DiagnosticGuard;
+
     let unpacker = if let Some(ref p) = config.input_pattern {
         Some(TupleUnpacker::new(p)?)
     } else {
@@ -299,7 +311,7 @@ fn run_pipeline_internal(
                 } else if !tuple.is_empty() {
                     tuple[0].as_biguint()
                 } else {
-                    eprintln!("No fields to output, assumed 0");
+                    crate::diag::warn("No fields to output, assumed 0");
                     BigUint::zero()
                 };
                 if let Some(ref mut sink) = unit_sink {
@@ -316,7 +328,7 @@ fn run_pipeline_internal(
                         }
                     }
                     None => {
-                        eprintln!("Premature end of merge file");
+                        crate::diag::warn("Premature end of merge file");
                         premature_eof = true;
                         break;
                     }
@@ -414,7 +426,7 @@ fn run_pipeline_internal(
                 } else if !tuple.is_empty() {
                     tuple[0].as_biguint()
                 } else {
-                    eprintln!("No fields to output, assumed 0");
+                    crate::diag::warn("No fields to output, assumed 0");
                     BigUint::zero()
                 };
                 if let Some(ref mut sink) = unit_sink {
@@ -432,7 +444,7 @@ fn run_pipeline_internal(
                         }
                     }
                     None => {
-                        eprintln!("Premature end of merge file");
+                        crate::diag::warn("Premature end of merge file");
                         premature_eof = true;
                         break;
                     }

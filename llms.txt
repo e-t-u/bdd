@@ -140,6 +140,11 @@ Specify `--count <N>` only when bounded generation is desired.
 - `--drop-partial-eof` (aliases: `--drop-trailing-bits`, `--no-pad-eof`): Discards trailing incomplete bits at EOF instead of zero-padding.
 - `--input-assert-aligned`: Returns an error if EOF does not fall on an exact unit boundary.
 
+### Diagnostic Warning Deduplication & Quiet Mode
+- Warnings (missing tuple fields, non-integer stream values, stream truncation) print once immediately to `stderr` and are suppressed during streaming.
+- At EOF, a summary of repeated warnings is emitted (e.g. `[bdd] Warning: '...' repeated 10,000 times`).
+- `-q` / `--quiet`: Completely silences non-fatal warnings and summaries on `stderr` to eliminate I/O overhead on high-throughput streams.
+
 ---
 
 ## 7. Multi-File Round-Robin Merging (N-way Interleaving)

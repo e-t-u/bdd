@@ -36,6 +36,23 @@ strip "${RPM_TOPDIR}/SOURCES/bdd" 2>/dev/null || true
 install -m 0755 "${REPO_ROOT}/target/release/libbdd.so" "${RPM_TOPDIR}/SOURCES/libbdd.so"
 strip "${RPM_TOPDIR}/SOURCES/libbdd.so" 2>/dev/null || true
 
+if [ -f "${REPO_ROOT}/target/release/libbdd.a" ]; then
+    install -m 0644 "${REPO_ROOT}/target/release/libbdd.a" "${RPM_TOPDIR}/SOURCES/libbdd.a"
+fi
+
+cat << _EOF_PC_ > "${RPM_TOPDIR}/SOURCES/bdd.pc"
+prefix=%{_prefix}
+exec_prefix=%{_exec_prefix}
+libdir=%{_libdir}
+includedir=%{_includedir}
+
+Name: bdd
+Description: High-performance bitstream slicing, transcoding, and inspection library
+Version: ${VERSION}
+Libs: -L\${libdir} -lbdd
+Cflags: -I\${includedir}
+_EOF_PC_
+
 install -m 0644 "${REPO_ROOT}/include/bdd.h" "${RPM_TOPDIR}/SOURCES/bdd.h"
 
 if [ -f "${REPO_ROOT}/bdd.1" ]; then
@@ -71,7 +88,7 @@ sub-byte AI model weights (NVFP4, FP6, FP8, BF16), and network/multimedia protoc
 %install
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
-mkdir -p %{buildroot}%{_libdir}
+mkdir -p %{buildroot}%{_libdir}/pkgconfig
 mkdir -p %{buildroot}%{_includedir}
 mkdir -p %{buildroot}%{_mandir}/man1
 mkdir -p %{buildroot}%{_docdir}/%{name}
@@ -79,6 +96,10 @@ mkdir -p %{buildroot}%{_licensedir}/%{name}
 
 install -m 0755 %{_sourcedir}/bdd %{buildroot}%{_bindir}/bdd
 install -m 0755 %{_sourcedir}/libbdd.so %{buildroot}%{_libdir}/libbdd.so
+if [ -f %{_sourcedir}/libbdd.a ]; then
+    install -m 0644 %{_sourcedir}/libbdd.a %{buildroot}%{_libdir}/libbdd.a
+fi
+install -m 0644 %{_sourcedir}/bdd.pc %{buildroot}%{_libdir}/pkgconfig/bdd.pc
 install -m 0644 %{_sourcedir}/bdd.h %{buildroot}%{_includedir}/bdd.h
 if [ -f %{_sourcedir}/bdd.1.gz ]; then
     install -m 0644 %{_sourcedir}/bdd.1.gz %{buildroot}%{_mandir}/man1/bdd.1.gz
@@ -98,6 +119,8 @@ fi
 %license %{_licensedir}/%{name}/LICENSE
 %{_bindir}/bdd
 %{_libdir}/libbdd.so
+%{_libdir}/libbdd.a
+%{_libdir}/pkgconfig/bdd.pc
 %{_includedir}/bdd.h
 %{_mandir}/man1/bdd.1*
 %doc %{_docdir}/%{name}/README.md

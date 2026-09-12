@@ -167,7 +167,10 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
         ("GET", "/api/status") => {
-            let status_json = format!(r#"{{"status":"ok","version":"{}"}}"#, env!("CARGO_PKG_VERSION"));
+            let status_json = format!(
+                r#"{{"status":"ok","version":"{}"}}"#,
+                env!("CARGO_PKG_VERSION")
+            );
             send_response(
                 &stream,
                 "200 OK",

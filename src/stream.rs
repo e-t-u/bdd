@@ -581,12 +581,18 @@ impl<R: BufRead> UnitStream for IntegerInputStream<R> {
                     let bi = match trimmed.parse::<BigInt>() {
                         Ok(i) => i,
                         Err(_) => {
-                            eprintln!("Non-integer '{}' interpreted as zero", trimmed);
+                            crate::diag::warn(format!(
+                                "Non-integer '{}' interpreted as zero",
+                                trimmed
+                            ));
                             BigInt::zero()
                         }
                     };
                     let val = if bi.is_negative() {
-                        eprintln!("Negative integer '{}' interpreted as positive", trimmed);
+                        crate::diag::warn(format!(
+                            "Negative integer '{}' interpreted as positive",
+                            trimmed
+                        ));
                         bi.abs().to_biguint().unwrap_or_default()
                     } else {
                         bi.to_biguint().unwrap_or_default()

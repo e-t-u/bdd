@@ -611,6 +611,7 @@ Merge Options:
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)
 
 General:
+  -q, --quiet                      Silence non-fatal warnings and diagnostic summaries
   -h, --help                       Print help
   -V, --version                    Print version
 ```
@@ -799,6 +800,7 @@ src/
 ├── lib.rs          # Public library crate interface
 ├── main.rs         # Thin CLI wrapper & early dispatcher
 ├── error.rs        # Strongly-typed BddError hierarchy
+├── diag.rs         # High-throughput warning deduplication & diagnostic reporting
 ├── counter.rs      # Unit and skip counting logic
 ├── field.rs        # Arbitrary-precision Field enum & hardware bit-reversals
 ├── float_types.rs  # AI/GPU float codecs (FP16, BF16, FP8 E4M3/E5M2, FP6, FP4)
@@ -839,6 +841,7 @@ llms.txt            # High-density agent & LLM reference card
 2. **Fast-Path Bit Reversal**: Sub-64-bit integer bit reversals execute via direct hardware `u64::reverse_bits()`, falling back to `BigUint` bit arithmetic only when necessary.
 3. **Byte-Level String Integrity**: The `C` and `c` pattern types store raw bytes internally (`Field::Bytes`) rather than lossy UTF-8 conversions, guaranteeing bit-perfect roundtrips.
 4. **Automated Verification**: Integrated test runner runs native Rust unit tests, bignum tests, and legacy golden-file integration tests.
+5. **Zero I/O Diagnostic Bottlenecks**: Diagnostic warnings during stream processing are deduplicated with $O(1)$ hashing, printing on first encounter and summarizing at EOF, or completely silenced via `-q` / `--quiet` to prevent `stderr` I/O serialization from bottlenecking multi-gigabit throughput.
 
 ---
 
@@ -902,9 +905,9 @@ To regenerate all documentation artifacts in one command:
 make docs
 ```
 
-### Linux Distribution Packages (DEB & RPM / DNF)
+### Distribution Packages & Releases
 
-Native packages can be built directly using the included packaging suite:
+Native packages, Python modules, and C SDK archives can be built directly using the included packaging suite:
 
 - **Debian / Ubuntu / Linux Mint (`.deb`)**:
   ```bash
@@ -916,12 +919,22 @@ Native packages can be built directly using the included packaging suite:
   make rpm
   # Install: sudo dnf install ./dist/bdd-0.4.0-1.*.rpm
   ```
-- **Build All Packages with Checksums**:
+- **Python Module for Pip (`.whl` & `.tar.gz`)**:
+  ```bash
+  make python
+  # Install: pip install ./dist/bdd-0.4.0-py3-none-any.whl
+  ```
+- **Standalone C Library SDK Archive (`.tar.gz`)**:
+  ```bash
+  make c-lib
+  # Extract: tar -xzf ./dist/bdd-c-0.4.0-linux-x86_64.tar.gz
+  ```
+- **Build All Distribution Packages & Checksums**:
   ```bash
   make packages
   ```
 
-All generated packages (`.deb` and `.rpm`) install the executable `/usr/bin/bdd`, shared C library `/usr/lib/libbdd.so` (or `/usr/lib64/libbdd.so`), C header `/usr/include/bdd.h`, manual pages, and documentation, triggering `ldconfig` automatically upon installation.
+All generated distribution packages (`.deb`, `.rpm`, `.whl`, `.tar.gz`) are automatically built and published as downloadable assets on [GitHub Releases](https://github.com/e-t-u/bdd/releases) upon pushing a version tag (e.g. `v0.4.0`).
 
 ---
 

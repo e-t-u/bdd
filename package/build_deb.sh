@@ -39,6 +39,7 @@ rm -rf "${STAGING_DIR}"
 mkdir -p "${STAGING_DIR}/DEBIAN"
 mkdir -p "${STAGING_DIR}/usr/bin"
 mkdir -p "${STAGING_DIR}/usr/lib"
+mkdir -p "${STAGING_DIR}/usr/lib/pkgconfig"
 mkdir -p "${STAGING_DIR}/usr/include"
 mkdir -p "${STAGING_DIR}/usr/share/man/man1"
 mkdir -p "${STAGING_DIR}/usr/share/doc/bdd"
@@ -50,8 +51,27 @@ strip "${STAGING_DIR}/usr/bin/bdd" 2>/dev/null || true
 install -m 0755 "${REPO_ROOT}/target/release/libbdd.so" "${STAGING_DIR}/usr/lib/libbdd.so"
 strip "${STAGING_DIR}/usr/lib/libbdd.so" 2>/dev/null || true
 
+if [ -f "${REPO_ROOT}/target/release/libbdd.a" ]; then
+    install -m 0644 "${REPO_ROOT}/target/release/libbdd.a" "${STAGING_DIR}/usr/lib/libbdd.a"
+fi
+
 # Install C header
 install -m 0644 "${REPO_ROOT}/include/bdd.h" "${STAGING_DIR}/usr/include/bdd.h"
+
+# Install pkg-config file
+cat << _EOF_PC_ > "${STAGING_DIR}/usr/lib/pkgconfig/bdd.pc"
+prefix=/usr
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: bdd
+Description: High-performance bitstream slicing, transcoding, and inspection library
+Version: ${VERSION}
+Libs: -L\${libdir} -lbdd
+Cflags: -I\${includedir}
+_EOF_PC_
+chmod 0644 "${STAGING_DIR}/usr/lib/pkgconfig/bdd.pc"
 
 # Install compressed man page
 if [ -f "${REPO_ROOT}/bdd.1" ]; then

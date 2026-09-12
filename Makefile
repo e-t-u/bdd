@@ -61,6 +61,12 @@ deb: release
 rpm: release
 	./package/build_rpm.sh
 
+c-lib: release
+	./package/build_c_lib.sh
+
+python: release
+	./package/build_python.sh
+
 packages: release
 	./package/build_all.sh
 

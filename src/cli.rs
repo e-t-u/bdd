@@ -226,6 +226,10 @@ pub struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "7788", visible_aliases = ["web", "gui"])]
     pub serve: Option<u16>,
 
+    /// Suppress non-fatal diagnostic warnings and deduplication summaries
+    #[arg(short = 'q', long = "quiet", default_value_t = false)]
+    pub quiet: bool,
+
     // Demux and looping options
     #[arg(long)]
     pub demux: Vec<String>,
@@ -353,6 +357,7 @@ pub struct ValidatedConfig {
     pub demux: Vec<String>,
     pub demux_files: Option<String>,
     pub input_repeat: usize,
+    pub quiet: bool,
     pub merge_file: Option<String>,
     pub merge_files: Vec<String>,
     pub merge_unit: Option<usize>,
@@ -594,14 +599,14 @@ fn parse_number_argument(
         Some(s) => {
             let s_trim = s.trim();
             if s_trim.starts_with('-') {
-                eprintln!("{} value must be a positive integer", option_name);
+                crate::diag::warn(format!("{} value must be a positive integer", option_name));
                 match default {
                     Some(d) => {
-                        eprintln!("Assumed {}={}", option_name, d);
+                        crate::diag::warn(format!("Assumed {}={}", option_name, d));
                         Ok(Some(d))
                     }
                     None => {
-                        eprintln!("Assumed {}=None", option_name);
+                        crate::diag::warn(format!("Assumed {}=None", option_name));
                         Ok(None)
                     }
                 }
@@ -615,6 +620,8 @@ fn parse_number_argument(
 
 /// Validate CLI flags against legacy exclusivity rules and calculate effective options.
 pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
+    crate::diag::set_quiet(cli.quiet);
+
     if let Some(ref preset_name) = cli.preset {
         if let Some(preset) = crate::preset::find_preset(preset_name) {
             if cli.input_pattern.is_none() {
@@ -922,8 +929,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
 
     if cli.input_little_endian {
         if cli.input_reverse_bytes || cli.input_reverse_unit {
-            eprintln!(
-                "--input-little-endian overwrites --input-reverse-bytes and --input-reverse-unit"
+            crate::diag::warn(
+                "--input-little-endian overwrites --input-reverse-bytes and --input-reverse-unit",
             );
         }
         cli.input_reverse_bytes = true;
@@ -932,7 +939,9 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
 
     if cli.output_little_endian {
         if cli.output_reverse_bytes || cli.output_reverse_unit {
-            eprintln!("--output-little-endian overwrites --output-reverse-bytes and --output-reverse-unit");
+            crate::diag::warn(
+                "--output-little-endian overwrites --output-reverse-bytes and --output-reverse-unit",
+            );
         }
         cli.output_reverse_bytes = true;
         cli.output_reverse_unit = true;
@@ -940,8 +949,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
 
     if cli.merge_little_endian {
         if cli.merge_reverse_bytes || cli.merge_reverse_unit {
-            eprintln!(
-                "--merge-little-endian overwrites --merge-reverse-bytes and --merge-reverse-unit"
+            crate::diag::warn(
+                "--merge-little-endian overwrites --merge-reverse-bytes and --merge-reverse-unit",
             );
         }
         cli.merge_reverse_bytes = true;
@@ -949,7 +958,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
 
     if cli.input_file == "-" && cli.input_use_seek {
-        eprintln!("Standard input does not allow seek.--input-use-seek disabled");
+        crate::diag::warn("Standard input does not allow seek.--input-use-seek disabled");
         cli.input_use_seek = false;
     }
 
@@ -1019,6 +1028,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         demux: cli.demux,
         demux_files: cli.demux_files,
         input_repeat,
+        quiet: cli.quiet,
         merge_file: all_merge_files.first().cloned(),
         merge_files: all_merge_files,
         merge_unit: resolved_merge_unit,

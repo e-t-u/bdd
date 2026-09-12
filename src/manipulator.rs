@@ -66,7 +66,7 @@ impl TupleManipulator for RearrangeManipulator {
             if let Some(idx) = resolve_index(tuple.len(), f) {
                 out.push(tuple[idx].clone());
             } else {
-                eprintln!("Field {} mentioned in --rearrange missing", f);
+                crate::diag::warn(format!("Field {} mentioned in --rearrange missing", f));
             }
         }
         Some(out)
@@ -274,7 +274,7 @@ impl TupleManipulator for RoundManipulator {
         let idx = match resolve_index(tuple.len(), self.field) {
             Some(i) => i,
             None => {
-                eprintln!("Field {} mentioned in --round missing", self.field);
+                crate::diag::warn(format!("Field {} mentioned in --round missing", self.field));
                 return Some(tuple);
             }
         };
@@ -404,7 +404,10 @@ impl TupleManipulator for RemoveRightManipulator {
             let val = bi >> self.parameter;
             set_bigint_field(&mut tuple, idx, val);
         } else {
-            eprintln!("Field {} mentioned in --remove-right missing", self.field);
+            crate::diag::warn(format!(
+                "Field {} mentioned in --remove-right missing",
+                self.field
+            ));
         }
         Some(tuple)
     }
@@ -418,9 +421,9 @@ pub struct XorManipulator {
 
 impl XorManipulator {
     pub fn new(arg: &str) -> Result<Self, BddError> {
-        let (field, parameter) = parse_fp(arg, "--xor")?;
         // If not hex/binary and positive, bdd treats it as "number of bits to invert (from right)"
         // If hex/binary or negative, it is the mask directly.
+        let (field, parameter) = parse_fp(arg, "--xor")?;
         let mask = if !arg.contains("0x") && !arg.contains("0b") && parameter > BigInt::zero() {
             let bits = parameter.to_usize().unwrap_or(0);
             (BigInt::one() << bits) - BigInt::one()
@@ -438,7 +441,7 @@ impl TupleManipulator for XorManipulator {
             let val = bi ^ &self.mask;
             set_bigint_field(&mut tuple, idx, val);
         } else {
-            eprintln!("Field {} mentioned in --xor missing", self.field);
+            crate::diag::warn(format!("Field {} mentioned in --xor missing", self.field));
         }
         Some(tuple)
     }
@@ -463,7 +466,7 @@ impl TupleManipulator for AbsManipulator {
             let val = bi.abs();
             tuple[idx] = Field::UInt(val.to_biguint().unwrap_or_default());
         } else {
-            eprintln!("Field {} mentioned in --abs missing", self.field);
+            crate::diag::warn(format!("Field {} mentioned in --abs missing", self.field));
         }
         Some(tuple)
     }
@@ -488,7 +491,7 @@ impl TupleManipulator for SignManipulator {
             let val = if bi.is_negative() { 1u32 } else { 0u32 };
             tuple[idx] = Field::UInt(val.into());
         } else {
-            eprintln!("Field {} mentioned in --sign missing", self.field);
+            crate::diag::warn(format!("Field {} mentioned in --sign missing", self.field));
         }
         Some(tuple)
     }
@@ -698,7 +701,7 @@ impl TupleManipulator for DivManipulator {
         if let Some(idx) = resolve_index(tuple.len(), self.field) {
             let bi = tuple[idx].as_bigint();
             if self.parameter.is_zero() {
-                eprintln!("Division by zero in --div on field {}", self.field);
+                crate::diag::warn(format!("Division by zero in --div on field {}", self.field));
                 set_bigint_field(&mut tuple, idx, BigInt::zero());
             } else {
                 let val = bi / &self.parameter;

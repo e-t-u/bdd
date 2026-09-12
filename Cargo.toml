@@ -8,7 +8,7 @@ license = "GPL-3.0"
 
 [lib]
 name = "bdd"
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

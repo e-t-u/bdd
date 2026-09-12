@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-packages:
-    name: Build DEB & RPM Packages
+    name: Build All Distribution Packages
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -30,6 +30,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Build All Distribution Packages
         run: |
           ./package/build_all.sh
@@ -41,6 +44,8 @@ jobs:
           path: |
             dist/*.deb
             dist/*.rpm
+            dist/*.tar.gz
+            dist/*.whl
             dist/SHA256SUMS
 
       - name: Create GitHub Release & Upload Assets
@@ -50,5 +55,7 @@ jobs:
           files: |
             dist/*.deb
             dist/*.rpm
+            dist/*.tar.gz
+            dist/*.whl
             dist/SHA256SUMS
           generate_release_notes: true

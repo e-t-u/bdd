@@ -729,6 +729,14 @@ Deeply inspect the input file (or standard input if omitted). Computes Shannon e
 --mcp
 Run native JSON-RPC 2.0 Model Context Protocol (MCP) server over standard input and standard output. Exposes four tools for AI agent pair programming, binary reverse engineering, and pipeline automation: \fBbdd_slice\fR (extract, transcode, and slice bitstreams into text or JSON), \fBbdd_probe\fR (probing binary blobs for entropy and periodicity), \fBbdd_explain_pattern\fR (inspecting schema bit layouts), and \fBbdd_list_presets\fR (cataloging built-in protocols).
 
+.TP
+--serve[=PORT], --web, --gui
+Launch the interactive Web UI application server (default port 7788). Allows exploring bit layouts, running slicing pipelines, visualizing hex dumps, and testing presets directly in any modern web browser.
+
+.TP
+-q, --quiet
+Quiet mode. Suppress non-fatal diagnostic warnings (such as missing tuple fields or stream conversion notices) and the EOF warning summary. Diagnostic warnings are automatically deduplicated during stream processing, and --quiet silences them entirely for maximum pipeline throughput.
+
 .SH EXAMPLES
 
 .SS bdd < foo > bar
