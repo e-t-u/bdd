@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 23:59:31 2026 -->
+<!-- CreationDate: Sun Sep 13 01:03:42 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -44,6 +44,8 @@
 <a href="#bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit">bdd 8 -&gt; 3 &lt; foo.8bit &gt; foo.3bit</a><br>
 <a href="#bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin">bdd 123:8[2:4]+8 -&gt; 5B:8[2:4] &lt; in.bin &gt; out.bin</a><br>
 <a href="#bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin">bdd 188B[11:13] -&gt; 13 &lt; broadcast.ts &gt; pids.bin</a><br>
+<a href="#bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin">bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin</a><br>
+<a href="#bdd 4U4U --input-tuples --output-hex &lt; pairs.txt">bdd 4U4U --input-tuples --output-hex &lt; pairs.txt</a><br>
 <a href="#bdd &lt; foo &gt; bar">bdd &lt; foo &gt; bar</a><br>
 <a href="#bdd --input-unit=3">bdd --input-unit=3</a><br>
 <a href="#bdd --input-unit=1 --output-pattern=1U1z">bdd --input-unit=1 --output-pattern=1U1z</a><br>
@@ -147,8 +149,11 @@ stream pattern (e.g. 4U4U), it is interpreted as the
 <p style="margin-left:9%;"><i>OUTPUT_PATTERN</i></p>
 
 <p style="margin-left:18%;">Tuple pack pattern (e.g.
-&quot;8U&quot;, &quot;8U,x,8U&quot;). Equivalent to
-<b>&minus;&minus;output&minus;pattern</b>.</p>
+&quot;8U&quot;, &quot;4U4U&quot;, &quot;8U,x,8U&quot;).
+Equivalent to <b>&minus;&minus;output&minus;pattern</b>.
+Note: when <b>&minus;&minus;input&minus;tuples</b> is used,
+input fields are parsed from commas, so a single positional
+pattern specifies the output packing pattern.</p>
 
 <h3>Input and output file selection:
 <a name="Input and output file selection:"></a>
@@ -1409,6 +1414,24 @@ each unit inside an 8-bit container (offset 2, post-gap
 <p style="margin-left:9%; margin-top: 1em">Extracts 13-bit
 MPEG-TS PID fields directly from 188-byte packet
 streams.</p>
+
+<h3>bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin
+<a name="bdd 4U4U 4U4U --rearrange=1,0 &lt; in.bin &gt; out.bin"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Unpack each
+binary byte into two 4-bit nibbles, swap fields, and repack
+into bytes.</p>
+
+<h3>bdd 4U4U --input-tuples --output-hex &lt; pairs.txt
+<a name="bdd 4U4U --input-tuples --output-hex &lt; pairs.txt"></a>
+</h3>
+
+
+<p style="margin-left:9%; margin-top: 1em">Read
+comma-separated text pairs (&quot;1,2&quot;), pack each pair
+into an 8-bit byte.</p>
 
 <h3>bdd &lt; foo &gt; bar
 <a name="bdd &lt; foo &gt; bar"></a>

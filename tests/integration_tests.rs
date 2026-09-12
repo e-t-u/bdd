@@ -1325,8 +1325,9 @@ fn test_stream_io_pattern_container_forms() {
 
 #[test]
 fn test_positional_tuple_patterns() {
-    let mut child = Command::new(BDD_BIN)
-        .args(["4U4U", "8U", "--input-tuples", "--output-hex"])
+    // 1. Pure binary bitstream: unpack two 4-bit nibbles from each byte, swap fields, repack:
+    let mut child_bin = Command::new(BDD_BIN)
+        .args(["4U4U", "4U4U", "--rearrange=1,0", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -1334,14 +1335,38 @@ fn test_positional_tuple_patterns() {
 
     {
         use std::io::Write;
-        let stdin = child.stdin.as_mut().unwrap();
+        let stdin = child_bin.stdin.as_mut().unwrap();
+        stdin.write_all(&[0x12, 0x34]).unwrap();
+    }
+
+    let out_bin = child_bin
+        .wait_with_output()
+        .expect("failed to wait for bdd");
+    assert!(out_bin.status.success());
+    let stdout_bin = String::from_utf8(out_bin.stdout).unwrap();
+    let tokens_bin: Vec<&str> = stdout_bin.split_whitespace().collect();
+    assert_eq!(tokens_bin, vec!["21", "43"]);
+
+    // 2. Text tuples: pack comma-separated pairs ("1,2") into two 4-bit nibbles per byte (0x12):
+    let mut child_txt = Command::new(BDD_BIN)
+        .args(["4U4U", "--input-tuples", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        use std::io::Write;
+        let stdin = child_txt.stdin.as_mut().unwrap();
         writeln!(stdin, "1,2").unwrap();
         writeln!(stdin, "3,4").unwrap();
     }
 
-    let out = child.wait_with_output().expect("failed to wait for bdd");
-    assert!(out.status.success());
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let tokens: Vec<&str> = stdout.split_whitespace().collect();
-    assert_eq!(tokens, vec!["01", "03"]);
+    let out_txt = child_txt
+        .wait_with_output()
+        .expect("failed to wait for bdd");
+    assert!(out_txt.status.success());
+    let stdout_txt = String::from_utf8(out_txt.stdout).unwrap();
+    let tokens_txt: Vec<&str> = stdout_txt.split_whitespace().collect();
+    assert_eq!(tokens_txt, vec!["12", "34"]);
 }

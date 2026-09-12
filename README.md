@@ -209,9 +209,11 @@ bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
 # 5. Output Framing: Pack raw 13-bit PIDs back into 188-byte container frames:
 bdd "13 -> 188B[11:13]" < pids.bin > framed.ts
 
-# 6. Positional Tuple Patterns:
-bdd 4U4U 8U --input-tuples --output-hex < pairs.txt
-bdd "8->8" 4U4U 8U --input-tuples --output-hex < pairs.txt
+# 6. Positional Tuple Patterns (Unpack two 4-bit nibbles from each byte, swap fields, repack):
+bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
+
+# 7. Positional Output Pattern with Text Tuples (Pack comma-separated "1,2" pairs into 1 byte):
+bdd 4U4U --input-tuples --output-hex < pairs.txt
 ```
 
 All CLI flags (`--input-raw-unit`, `--input-offset`, `--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`, etc.) remain fully functional and can override or complement positional arguments.

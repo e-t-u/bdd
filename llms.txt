@@ -43,8 +43,8 @@
 - Examples:
   - `bdd "8->3"`: Dense 3-bit stream from 8-bit bytes
   - `bdd "123:8[2:4]+8 -> 5B:8[2:4]"`: Slicing + output framing with skip and gap
-  - `bdd "188B[11:13] -> 13"`: Slice 13-bit PID from 188-byte MPEG-TS packets
-  - `bdd 4U4U 8U --input-tuples`: Positional tuple unpack and pack patterns
+  - `bdd 4U4U 4U4U --rearrange=1,0`: Positional tuple unpack and pack patterns
+  - `bdd 4U4U --input-tuples --output-hex`: Pack comma-separated text pairs into 8-bit bytes
 
 ---
 

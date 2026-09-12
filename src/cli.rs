@@ -724,6 +724,16 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
+    // When reading text tuples (--input-tuples), the input is already divided into fields by commas.
+    // If only one positional tuple pattern was provided, it specifies the output packing pattern.
+    if cli.input_tuples
+        && pos_in_pat.is_some()
+        && pos_out_pat.is_none()
+        && cli.output_pattern.is_none()
+    {
+        pos_out_pat = pos_in_pat.take();
+    }
+
     if cli.input_pattern.is_none() && pos_in_pat.is_some() {
         cli.input_pattern = pos_in_pat;
     }

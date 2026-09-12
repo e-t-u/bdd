@@ -52,7 +52,7 @@ Tuple unpack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"sync:11u,version:
 
 .TP
 \fIOUTPUT_PATTERN\fR
-Tuple pack pattern (e.g. \f(CR"8U"\fR, \f(CR"8U,x,8U"\fR). Equivalent to \fB\-\-output\-pattern\fR.
+Tuple pack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"8U,x,8U"\fR). Equivalent to \fB\-\-output\-pattern\fR. Note: when \fB\-\-input\-tuples\fR is used, input fields are parsed from commas, so a single positional pattern specifies the output packing pattern.
 
 .SS Input and output file selection:
 
@@ -816,6 +816,14 @@ All flags (\fB\-\-input\-raw\-unit\fR, \fB\-\-output\-raw\-unit\fR, etc.) remain
 .SS bdd "188B[11:13] -> 13" < broadcast.ts > pids.bin
 
     Extracts 13-bit MPEG-TS PID fields directly from 188-byte packet streams.
+
+.SS bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
+
+    Unpack each binary byte into two 4-bit nibbles, swap fields, and repack into bytes.
+
+.SS bdd 4U4U --input-tuples --output-hex < pairs.txt
+
+    Read comma-separated text pairs ("1,2"), pack each pair into an 8-bit byte.
 
 .SS bdd < foo > bar
 
