@@ -34,7 +34,7 @@ class BddHttpHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/status":
-            self.send_json(200, {"status": "ok", "version": "0.3.0", "backend": "python-bridge"})
+            self.send_json(200, {"status": "ok", "version": "0.4.0", "backend": "python-bridge"})
             return
         elif self.path == "/api/presets":
             cmd = [BDD_BIN, "--list-presets"]

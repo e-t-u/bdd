@@ -642,7 +642,7 @@ fn test_mcp_server_protocol() {
     assert_eq!(lines.len(), 4);
 
     // Line 1: initialize
-    assert!(lines[0].contains("\"serverInfo\":{\"name\":\"bdd-mcp\",\"version\":\"0.3.0\"}"));
+    assert!(lines[0].contains(&format!("\"serverInfo\":{{\"name\":\"bdd-mcp\",\"version\":\"{}\"}}", env!("CARGO_PKG_VERSION"))));
     // Line 2: tools/list
     assert!(lines[1].contains("\"name\":\"bdd_slice\""));
     assert!(lines[1].contains("\"name\":\"bdd_probe\""));

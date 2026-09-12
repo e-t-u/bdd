@@ -26,12 +26,6 @@ This document consolidates high-value feature improvements, API additions, and a
   - Pass through pipelines without numeric arithmetic coercion.
   - Formatted cleanly as raw bit sequences in binary streams or bit-accurate hex in JSON/CSV.
 
-### 2.2 Host / Native Endianness Specifier (`@` or `--host-endian`)
-- **Motivation**: Decoding native C structs, kernel trace buffers, or shared-memory IPC dumps requires knowing the host architecture's byte order.
-- **Specification**:
-  - Support `@` modifier in pattern strings (matching Python `struct` syntax) to specify host-native byte order (little-endian on x86_64 and AArch64).
-  - Alternatively, provide a global CLI flag `--host-endian` / `--native-endian`.
-
 ---
 
 ## 3. CLI & Output Ergonomics
@@ -53,7 +47,16 @@ This document consolidates high-value feature improvements, API additions, and a
 
 ---
 
-## 4. Completed Features (Migrated from Legacy TODO)
+## 4. Low Priority & Exploratory Enhancements
+
+### 4.1 Native Endianness Specifier
+- **Priority**: Low. Modern platforms (x86_64, AArch64, RISC-V) are almost uniformly little-endian, and Rust already detects native endianness at compile time for internal optimizations.
+- **Concept**: In addition to `U` (big-endian) and `u` (little-endian), a third variant for "native endianness" might be needed to decode host C structs, kernel trace buffers, or shared-memory IPC dumps portably across architectures.
+- **Notation Challenge**: Finding a concise notation is difficult because casing (`U` vs `u`, `F` vs `f`) already distinguishes big-endian from little-endian. Potential options include a prefix modifier like `@` (matching Python `struct`), a symbol modifier, or a CLI flag (`--native-endian`).
+
+---
+
+## 5. Completed Features (Migrated from Legacy TODO)
 
 The following items from the original 2010 `docs/TODO` scratchpad have been implemented and verified in modern `bdd` (v0.3.0):
 

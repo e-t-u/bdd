@@ -5,7 +5,7 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "bdd",
-    version = "0.3.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Unix command line program to handle bit streams"
 )]
 pub struct Cli {

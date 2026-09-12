@@ -62,7 +62,7 @@ pub fn run_mcp_server() -> Result<(), BddError> {
                         },
                         "serverInfo": {
                             "name": "bdd-mcp",
-                            "version": "0.3.0"
+                            "version": env!("CARGO_PKG_VERSION")
                         }
                     }
                 });

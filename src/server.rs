@@ -167,11 +167,12 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
         ("GET", "/api/status") => {
+            let status_json = format!(r#"{{"status":"ok","version":"{}"}}"#, env!("CARGO_PKG_VERSION"));
             send_response(
                 &stream,
                 "200 OK",
                 "application/json",
-                br#"{"status":"ok","version":"0.3.0"}"#,
+                status_json.as_bytes(),
             );
         }
         ("GET", "/api/presets") => {

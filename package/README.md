@@ -63,10 +63,10 @@ All generated packages and checksum files are written to `dist/`:
 
 ### On Fedora / RHEL / CentOS / Rocky (DNF / RPM)
 ```bash
-sudo dnf install ./dist/bdd-0.3.0-1.*.rpm
+sudo dnf install ./dist/bdd-0.4.0-1.*.rpm
 ```
 
 ### On Debian / Ubuntu / Mint (APT / DPKG)
 ```bash
-sudo apt install ./dist/bdd_0.3.0_*.deb
+sudo apt install ./dist/bdd_0.4.0_*.deb
 ```

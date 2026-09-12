@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/dist"
 
 mkdir -p "${DIST_DIR}"
+rm -rf "${DIST_DIR:?}"/*
 
 echo "#################################################################"
 echo "# Building All Distribution Packages for bdd"

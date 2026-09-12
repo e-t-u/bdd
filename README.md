@@ -909,12 +909,12 @@ Native packages can be built directly using the included packaging suite:
 - **Debian / Ubuntu / Linux Mint (`.deb`)**:
   ```bash
   make deb
-  # Install: sudo apt install ./dist/bdd_0.3.0_amd64.deb
+  # Install: sudo apt install ./dist/bdd_0.4.0_amd64.deb
   ```
 - **Fedora / RHEL / CentOS / Rocky (`.rpm` for DNF)**:
   ```bash
   make rpm
-  # Install: sudo dnf install ./dist/bdd-0.3.0-1.*.rpm
+  # Install: sudo dnf install ./dist/bdd-0.4.0-1.*.rpm
   ```
 - **Build All Packages with Checksums**:
   ```bash
