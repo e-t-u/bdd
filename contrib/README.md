@@ -99,10 +99,21 @@ MPEG-TS uses repeating 188-byte containers (1504 bits). The 4-byte header contai
 
 ### 3. WAV / RIFF Audio & Multi-Channel Demuxing
 - **Stereo Demuxing**:
-  Skip the 44-byte RIFF header, frame into 32-bit stereo pairs (two 16-bit signed PCM samples), and demux into two independent mono audio files in a single pass:
+  Skip the 44-byte RIFF header, frame into 32-bit stereo pairs (two 16-bit signed PCM samples), and demux into two independent mono audio files in a single pass (redirect stdout to `/dev/null` to discard the primary pass-through stream):
   ```bash
   bdd "44B:32 -> 32" 16S16S --input-little-endian \
-      --demux-files="left.raw,right.raw" < sample.wav
+      --demux-files="left.raw,right.raw" < sample.wav > /dev/null
+  ```
+- **Playing Raw Demuxed Channels with FFmpeg**:
+  Raw PCM streams lack container headers, so specify sample format (`-f s16le`), rate (`-ar 44100`), and channel count (`-ac 1`):
+  ```bash
+  # Play left and right channels:
+  ffplay -f s16le -ar 44100 -ac 1 -autoexit left.raw
+  ffplay -f s16le -ar 44100 -ac 1 -autoexit right.raw
+
+  # Or convert directly to standard playable WAV files:
+  ffmpeg -f s16le -ar 44100 -ac 1 -i left.raw left.wav
+  ffmpeg -f s16le -ar 44100 -ac 1 -i right.raw right.wav
   ```
 - **24-bit PCM Downsampling via Container Slicing**:
   Directly slice the most significant 16 bits (`[0:16]`) of each 24-bit PCM sample without needing manual arithmetic shifts:

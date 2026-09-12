@@ -49,7 +49,7 @@ jq -r '
 '
 
 echo -e "\n--- Step 2: Demuxing Interleaved 16-bit Stereo into Mono Channels ---"
-echo "Command: bdd \"44B:32 -> 32\" 16S16S --input-little-endian --demux-files=left.raw,right.raw"
+echo "Command: bdd \"44B:32 -> 32\" 16S16S --input-little-endian --demux-files=left.raw,right.raw > /dev/null"
 "${BDD}" --input-file="${SAMPLE_WAV}" \
         "44B:32 -> 32" \
         "16S16S" \
@@ -61,6 +61,12 @@ echo "Left Channel first 5 signed samples (440 Hz wave):"
 
 echo "Right Channel first 5 signed samples (880 Hz wave):"
 "${BDD}" --input-file="${TMP_DIR}/right.raw" 16S --count=5 --output-tuples
+
+echo -e "\nTip: Play or convert raw PCM channels using ffmpeg / ffplay:"
+echo "  ffplay -f s16le -ar 44100 -ac 1 -autoexit ${TMP_DIR}/left.raw"
+echo "  ffplay -f s16le -ar 44100 -ac 1 -autoexit ${TMP_DIR}/right.raw"
+echo "  ffmpeg -f s16le -ar 44100 -ac 1 -i ${TMP_DIR}/left.raw left.wav"
+echo "  ffmpeg -f s16le -ar 44100 -ac 1 -i ${TMP_DIR}/right.raw right.wav"
 
 echo -e "\n--- Step 3: Slicing Studio 24-bit PCM Audio to 16-bit Audio ---"
 echo "Original 24-bit Signed Samples:"

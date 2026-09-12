@@ -559,10 +559,10 @@ When processing multiplexed packet formats or interleaved bitstreams (e.g. audio
 # Split interleaved 16-bit audio and 32-bit video into separate streams:
 bdd --input-pattern=16B32B \
     --demux 0:audio.raw \
-    --demux 1:video.raw < input.bin
+    --demux 1:video.raw < input.bin > /dev/null
 
 # Alternatively, using --demux-files shorthand:
-bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin
+bdd --input-pattern=16B32B --demux-files=audio.raw,video.raw < input.bin > /dev/null
 ```
 
 #### The Next Challenge: Endianness and Bit-Order Reversals
