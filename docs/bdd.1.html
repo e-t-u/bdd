@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 07:09:31 2026 -->
+<!-- CreationDate: Sat Sep 12 07:29:17 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -186,7 +186,10 @@ rather than reading and discarding data from disk (see
 
 <p style="margin-left:18%;">Number of bits skipped after
 reading each unit. When --input-raw-unit is set, defines the
-gap in bits between successive raw units (default: 0).</p>
+gap in bits between successive raw units (default: 0). On
+seekable files or file descriptors, --input-gap and raw unit
+post-gaps automatically seek directly over gap bytes in O(1)
+time without buffering.</p>
 
 <h3>Raw Units &amp; Containers
 <a name="Raw Units &amp; Containers"></a>
@@ -425,14 +428,28 @@ msb) <br>
 4e - d - NVIDIA Blackwell / OCP FP4 E2M1 (4-bit AI float,
 lsb) <br>
 c - s - field is unicode UTF-8 character string <br>
-C - s - same, lsb first</p>
+C - s - same, lsb first <br>
+k - i - auto-incrementing unit counter or unsigned integer
+(lsb) <br>
+K - i - auto-incrementing unit counter or unsigned integer
+(msb)</p>
+
+<p style="margin-left:9%; margin-top: 1em">Bit widths in
+pattern specifications are optional. Omitting the bit count
+applies natural defaults: <i>B</i> defaults to 8 bits,
+<i>F</i>/<i>f</i> to 32 bits, <i>D</i>/<i>d</i> to 64 bits,
+<i>H</i>/<i>h</i>/<i>Y</i>/<i>y</i> to 16 bits,
+<i>E</i>/<i>e</i>/<i>Q</i>/<i>q</i>/<i>C</i>/<i>c</i>/<i>K</i>/<i>k</i>
+to 8 bits, <i>m</i> to 4 bits, and single-bit types
+<i>U</i>/<i>u</i>/<i>S</i>/<i>s</i>/<i>x</i>/<i>X</i>/<i>z</i>/<i>o</i>/<i>r</i>
+default to 1 bit.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Patterns also
 support repetition multipliers in the format
 <i>COUNT*SPEC</i> or <i>COUNT*(SPEC1 SPEC2 ...)</i>. For
-example, 4*8B expands to four 8-bit unsigned bytes, and
-2*(4U4u) expands to 4U4u4U4u. Patterns also support named
-fields in the format <i>name:SPEC</i> or
+example, 4*8B or 4*B expands to four 8-bit unsigned bytes,
+and 2*(4U4u) expands to 4U4u4U4u. Patterns also support
+named fields in the format <i>name:SPEC</i> or
 <i>name:COUNT*SPEC</i> (e.g. sync:11u,version:2u or w:4*6E
 which expands to w_0:6E,w_1:6E,w_2:6E,w_3:6E). Field names
 automatically label JSON object keys with --json-object and
@@ -531,7 +548,8 @@ and their internal representations are:</p>
 (signed bignums) <br>
 Floats (translated as IEEE 754 64-bit floating point
 numbers) <br>
-Strings (UTF-8)</p>
+Strings (UTF-8, enclosed in quotes like &quot;123&quot; to
+prevent numeric coercion)</p>
 
 <h3>Manipulate tuple
 <a name="Manipulate tuple"></a>
@@ -796,16 +814,20 @@ exceptions:</p>
 zero <br>
 o - fill with one <br>
 r - fill with random (from /dev/urandom) <br>
-x - can not be used in the output pattern</p>
+x - consume and discard one field from the tuple without
+emitting bits <br>
+k - emit auto-incrementing sequence counter (lsb first) <br>
+K - emit auto-incrementing sequence counter (msb first)</p>
 
 <p style="margin-left:18%; margin-top: 1em">Also in the
 output-pattern, lowercase letters turn the bit order
 reversed. Look --input-pattern for more information.</p>
 
-<p style="margin-left:18%; margin-top: 1em">z, o and r do
-not consume fields from the tuple. m and M consume two
-fields from the tuple and convert them to one 2&rsquo;s
-complement bit unit.</p>
+<p style="margin-left:18%; margin-top: 1em">z, o, r, k and
+K do not consume fields from the tuple. x and X consume one
+field from the tuple and discard it without emitting bits. m
+and M consume two fields from the tuple and convert them to
+one 2&rsquo;s complement bit unit.</p>
 
 <p style="margin-left:18%; margin-top: 1em">If signed value
 is too big to a signed field, the magnitude is first
@@ -833,8 +855,8 @@ unit.</p>
 bits. If --output-pattern is defined, output unit size comes
 from the total size of the output pattern and --output-unit
 must not be defined. If there is neither --output-unit nor
---output-pattern, the default output unit size is 8
-bits.</p>
+--output-pattern, the default output unit size equals the
+input unit size (which itself defaults to 8 bits).</p>
 
 <p style="margin-left:18%; margin-top: 1em">The last output
 byte is filled with zeros, if needed.</p>

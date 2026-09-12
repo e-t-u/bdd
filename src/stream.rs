@@ -268,6 +268,64 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
         }
     }
 
+    pub fn skip_gap(&mut self, gap: u64) {
+        if gap == 0 {
+            return;
+        }
+
+        if (self.bits_in_buffer as u64) >= gap {
+            self.bits_in_buffer -= gap as usize;
+            let mask = if self.bits_in_buffer > 0 {
+                (BigUint::one() << self.bits_in_buffer) - 1u32
+            } else {
+                BigUint::zero()
+            };
+            self.buffer &= mask;
+            return;
+        }
+
+        let remaining_gap = gap - (self.bits_in_buffer as u64);
+        self.bits_in_buffer = 0;
+        self.buffer = BigUint::zero();
+
+        let gap_bytes = remaining_gap / 8;
+        let rem_bits = (remaining_gap % 8) as usize;
+
+        if gap_bytes > 0 {
+            let mut remaining = gap_bytes;
+            if self.config.seek_allowed {
+                if let Ok(true) = self.reader.try_seek(gap_bytes) {
+                    remaining = 0;
+                }
+            }
+            if remaining > 0 {
+                let mut discard = [0u8; 65536];
+                while remaining > 0 {
+                    let to_read = (remaining.min(discard.len() as u64)) as usize;
+                    match self.reader.read(&mut discard[..to_read]) {
+                        Ok(0) | Err(_) => {
+                            self.eof = true;
+                            return;
+                        }
+                        Ok(n) => {
+                            remaining -= n as u64;
+                        }
+                    }
+                }
+            }
+        }
+
+        if rem_bits > 0 {
+            let b = self.read_byte();
+            if self.eof {
+                return;
+            }
+            self.bits_in_buffer = 8 - rem_bits;
+            let mask = (BigUint::one() << self.bits_in_buffer) - 1u32;
+            self.buffer = BigUint::from(b) & mask;
+        }
+    }
+
     pub fn read_bits(&mut self, bits: usize) -> BigUint {
         while self.bits_in_buffer < bits {
             let b = self.read_byte();
@@ -327,7 +385,7 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
             };
             self.buffer &= mask;
 
-            if self.bits_in_buffer == 0 {
+            if self.bits_in_buffer == 0 && self.config.gap == 0 {
                 let b = self.read_byte();
                 if self.eof {
                     if included {
@@ -343,33 +401,16 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 self.bits_in_buffer = 8;
             }
 
-            while (self.bits_in_buffer as u64) < self.config.gap {
-                let b = self.read_byte();
-                self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
-                self.bits_in_buffer += 8;
+            if self.config.gap > 0 {
+                self.skip_gap(self.config.gap);
             }
-            self.bits_in_buffer -= self.config.gap as usize;
-            let mask = if self.bits_in_buffer > 0 {
-                (BigUint::one() << self.bits_in_buffer) - 1u32
-            } else {
-                BigUint::zero()
-            };
-            self.buffer &= mask;
 
-            if self.bits_in_buffer == 0 {
+            if self.bits_in_buffer == 0 && !self.eof {
                 let b = self.read_byte();
-                if self.eof {
-                    if included {
-                        if self.config.reverse_unit {
-                            unit = reverse_bits(&unit, self.config.unit_size);
-                        }
-                        return Ok(Some(unit));
-                    } else {
-                        return Ok(None);
-                    }
+                if !self.eof {
+                    self.buffer = BigUint::from(b);
+                    self.bits_in_buffer = 8;
                 }
-                self.buffer = BigUint::from(b);
-                self.bits_in_buffer = 8;
             }
 
             if included {
@@ -551,6 +592,70 @@ impl<R: BufRead> UnitStream for IntegerInputStream<R> {
     }
 }
 
+/// Parses a comma-separated tuple line, distinguishing quoted strings from raw unquoted numbers.
+pub fn parse_csv_tuple_line(line: &str) -> Vec<(String, bool)> {
+    let mut fields = Vec::new();
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    while i < n {
+        // Skip leading whitespace (except newlines)
+        while i < n && chars[i].is_whitespace() && chars[i] != '\n' && chars[i] != '\r' {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            i += 1;
+            let mut buf = String::new();
+            while i < n {
+                if chars[i] == quote {
+                    if i + 1 < n && chars[i + 1] == quote {
+                        buf.push(quote);
+                        i += 2;
+                    } else {
+                        i += 1;
+                        break;
+                    }
+                } else if chars[i] == '\\' && i + 1 < n && chars[i + 1] == quote {
+                    buf.push(quote);
+                    i += 2;
+                } else {
+                    buf.push(chars[i]);
+                    i += 1;
+                }
+            }
+            while i < n && chars[i] != ',' {
+                i += 1;
+            }
+            if i < n && chars[i] == ',' {
+                i += 1;
+            }
+            fields.push((buf, true));
+        } else {
+            let mut buf = String::new();
+            while i < n && chars[i] != ',' {
+                buf.push(chars[i]);
+                i += 1;
+            }
+            if i < n && chars[i] == ',' {
+                i += 1;
+            }
+            fields.push((buf.trim().to_string(), false));
+        }
+    }
+
+    if !line.is_empty() && line.trim_end().ends_with(',') {
+        fields.push((String::new(), false));
+    }
+
+    fields
+}
+
 pub struct TupleDirectInput<R> {
     reader: R,
     counter: Counter,
@@ -580,27 +685,21 @@ impl<R: BufRead> TupleDirectInput<R> {
                     if !self.counter.included() {
                         continue;
                     }
-                    let mut rdr = csv::ReaderBuilder::new()
-                        .has_headers(false)
-                        .flexible(true)
-                        .trim(csv::Trim::All)
-                        .from_reader(trimmed.as_bytes());
-
+                    let parsed_fields = parse_csv_tuple_line(trimmed);
                     let mut tuple = Vec::new();
-                    if let Some(Ok(record)) = rdr.records().next() {
-                        for field_str in record.iter() {
-                            let f_trim = field_str.trim();
-                            if let Ok(bi) = f_trim.parse::<BigInt>() {
-                                if bi.is_negative() {
-                                    tuple.push(Field::Int(bi));
-                                } else {
-                                    tuple.push(Field::UInt(bi.to_biguint().unwrap()));
-                                }
-                            } else if let Ok(fl) = f_trim.parse::<f64>() {
-                                tuple.push(Field::Float(fl));
+                    for (field_str, is_quoted) in parsed_fields {
+                        if is_quoted {
+                            tuple.push(Field::Bytes(field_str.into_bytes()));
+                        } else if let Ok(bi) = field_str.parse::<BigInt>() {
+                            if bi.is_negative() {
+                                tuple.push(Field::Int(bi));
                             } else {
-                                tuple.push(Field::Bytes(field_str.as_bytes().to_vec()));
+                                tuple.push(Field::UInt(bi.to_biguint().unwrap()));
                             }
+                        } else if let Ok(fl) = field_str.parse::<f64>() {
+                            tuple.push(Field::Float(fl));
+                        } else {
+                            tuple.push(Field::Bytes(field_str.into_bytes()));
                         }
                     }
                     return Ok(Some(tuple));

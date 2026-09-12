@@ -85,6 +85,7 @@ If both skip-bits and skip-units are defined, both skips are performed.
 --input-gap=BITS
 Number of bits skipped after reading each unit.
 When --input-raw-unit is set, defines the gap in bits between successive raw units (default: 0).
+On seekable files or file descriptors, --input-gap and raw unit post-gaps automatically seek directly over gap bytes in O(1) time without buffering.
 
 .SS Raw Units & Containers
 
@@ -281,9 +282,15 @@ necessary and it makes sense to output them to the bit stream:
     c - s  - field is unicode UTF-8 character string
 .br
     C - s  - same, lsb first
+.br
+    k - i  - auto-incrementing unit counter or unsigned integer (lsb)
+.br
+    K - i  - auto-incrementing unit counter or unsigned integer (msb)
+.PP
+Bit widths in pattern specifications are optional. Omitting the bit count applies natural defaults: \fIB\fR defaults to 8 bits, \fIF\fR/\fIf\fR to 32 bits, \fID\fR/\fId\fR to 64 bits, \fIH\fR/\fIh\fR/\fIY\fR/\fIy\fR to 16 bits, \fIE\fR/\fIe\fR/\fIQ\fR/\fIq\fR/\fIC\fR/\fIc\fR/\fIK\fR/\fIk\fR to 8 bits, \fIm\fR to 4 bits, and single-bit types \fIU\fR/\fIu\fR/\fIS\fR/\fIs\fR/\fIx\fR/\fIX\fR/\fIz\fR/\fIo\fR/\fIr\fR default to 1 bit.
 .PP
 Patterns also support repetition multipliers in the format \fICOUNT*SPEC\fR or \fICOUNT*(SPEC1 SPEC2 ...)\fR.
-For example, \f(CR4*8B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
+For example, \f(CR4*8B\fR or \f(CR4*B\fR expands to four 8-bit unsigned bytes, and \f(CR2*(4U4u)\fR expands to \f(CR4U4u4U4u\fR.
 Patterns also support named fields in the format \fIname:SPEC\fR or \fIname:COUNT*SPEC\fR (e.g. \f(CRsync:11u,version:2u\fR or \f(CRw:4*6E\fR which expands to \f(CRw_0:6E,w_1:6E,w_2:6E,w_3:6E\fR). Field names automatically label JSON object keys with --json-object and generate CSV header lines.
 
 .TP
@@ -340,7 +347,7 @@ Allowed types and their internal representations are:
 .br
    Floats (translated as IEEE 754 64-bit floating point numbers)
 .br
-   Strings (UTF-8)
+   Strings (UTF-8, enclosed in quotes like "123" to prevent numeric coercion)
 
 .SS Manipulate tuple
 
@@ -470,13 +477,18 @@ pattern with the following exceptions:
 .br
     r - fill with random (from /dev/urandom)
 .br
-    x - can not be used in the output pattern
+    x - consume and discard one field from the tuple without emitting bits
+.br
+    k - emit auto-incrementing sequence counter (lsb first)
+.br
+    K - emit auto-incrementing sequence counter (msb first)
 
 Also in the output-pattern, lowercase letters
 turn the bit order reversed. Look --input-pattern
 for more information.
 
-z, o and r do not consume fields from the tuple.
+z, o, r, k and K do not consume fields from the tuple.
+x and X consume one field from the tuple and discard it without emitting bits.
 m and M consume two fields from the tuple and
 convert them to one 2's complement bit unit.
 
@@ -499,7 +511,7 @@ Packs the output unit to BITS bits. If --output-pattern is defined,
 output unit size comes from the total size of the output
 pattern and --output-unit must not be defined. If there is
 neither --output-unit nor --output-pattern, the default
-output unit size is 8 bits. 
+output unit size equals the input unit size (which itself defaults to 8 bits). 
 
 The last output byte is filled with zeros, if needed.
 

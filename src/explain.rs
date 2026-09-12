@@ -53,7 +53,9 @@ fn type_code_description(c: char) -> &'static str {
         'q' => "OCP FP8 (E5M2) Float (Little-Endian bits)",
         'C' => "ASCII / Character bytes (Big-Endian bits)",
         'c' => "ASCII / Character bytes (Little-Endian bits)",
-        'x' => "Skip / Ignored padding bits",
+        'x' | 'X' => "Skip / Ignored padding bits",
+        'K' => "Auto-incrementing Counter (Big-Endian bits)",
+        'k' => "Auto-incrementing Counter (Little-Endian bits)",
         _ => "Unknown",
     }
 }

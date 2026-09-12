@@ -589,3 +589,164 @@ fn test_mcp_server_protocol() {
     assert!(lines[3].contains("sync") && lines[3].contains("2047"));
     assert!(lines[3].contains("bitrate") && lines[3].contains("9"));
 }
+
+#[test]
+fn test_periodic_gap_seeking() {
+    // Create sparse file with 3 bytes placed at 1MB intervals
+    let path = "/tmp/bdd_test_periodic_gap_seek.bin";
+    {
+        use std::io::Seek;
+        let mut f = File::create(path).unwrap();
+        f.write_all(&[0x11]).unwrap();
+        f.seek(std::io::SeekFrom::Start(1024 * 1024)).unwrap();
+        f.write_all(&[0x22]).unwrap();
+        f.seek(std::io::SeekFrom::Start(2 * 1024 * 1024)).unwrap();
+        f.write_all(&[0x33]).unwrap();
+    }
+
+    // Using raw unit of 1MB (1024*1024*8 bits) with 8-bit active unit automatically computes
+    // periodic container gap of 1MB - 1 byte, triggering fast seeking between records.
+    let output = Command::new("./bdd")
+        .args([
+            "--input-file",
+            path,
+            "--input-raw-unit=1024*1024*8",
+            "--input-unit=8",
+            "--count=3",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd gap seek");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(tokens, vec!["11", "22", "33"]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_output_unit_default_to_input_unit() {
+    // When --output-unit and --output-pattern are omitted, output unit defaults to input unit
+    let output = Command::new("./bdd")
+        .args([
+            "--input-counter",
+            "--count=4",
+            "--input-unit=3",
+            "--output-bits",
+        ])
+        .output()
+        .expect("failed to run bdd counter 3-bit");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    // 3-bit values: 0 -> 000, 1 -> 001, 2 -> 010, 3 -> 011
+    assert_eq!(tokens, vec!["000", "001", "010", "011"]);
+}
+
+#[test]
+fn test_output_pattern_field_discard() {
+    // Test discarding field in output pattern via 'x'
+    let mut child = Command::new("./bdd")
+        .args(["--input-tuples", "--output-pattern=8U,x,8U", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "10,20,30").unwrap();
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // 10 -> 0x0A, 20 is dropped by x, 30 -> 0x1E => 16-bit unit 0x0A1E
+    assert_eq!(stdout.trim(), "0a1e");
+}
+
+#[test]
+fn test_bare_pattern_types() {
+    // Bare type letters without preceding counts: x, u, b, B, f, d
+    let output = Command::new("./bdd")
+        .args(["--explain-pattern=x,u,b,B,f,d", "--output-json"])
+        .output()
+        .expect("failed to run bdd explain bare");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(val["total_bits"], 1 + 1 + 1 + 8 + 32 + 64);
+    assert_eq!(val["fields"][0]["bits"], 1); // x
+    assert_eq!(val["fields"][1]["bits"], 1); // u
+    assert_eq!(val["fields"][2]["bits"], 1); // b
+    assert_eq!(val["fields"][3]["bits"], 8); // B
+    assert_eq!(val["fields"][4]["bits"], 32); // f
+    assert_eq!(val["fields"][5]["bits"], 64); // d
+}
+
+#[test]
+fn test_embedded_counter_pattern() {
+    // Packing with embedded counter (8K): counter doesn't consume from tuple
+    let mut child = Command::new("./bdd")
+        .args(["--input-tuples", "--output-pattern=8K,8U", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "10").unwrap();
+        writeln!(stdin, "20").unwrap();
+        writeln!(stdin, "30").unwrap();
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    // Record 0: counter 0, val 10 (0x000A)
+    // Record 1: counter 1, val 20 (0x0114)
+    // Record 2: counter 2, val 30 (0x021E)
+    assert_eq!(tokens, vec!["000a", "0114", "021e"]);
+}
+
+#[test]
+fn test_quoted_strings_in_input_tuples() {
+    // Distinguish quoted numbers as string bytes from raw unquoted numbers
+    let mut child = Command::new("./bdd")
+        .args([
+            "--input-tuples",
+            "--output-json",
+            "--json-object",
+            "--json-fields=s1,n1,s2,n2",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "\"123\",456,\"hello, world\",789").unwrap();
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for bdd");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+
+    assert_eq!(val["s1"], "123");
+    assert_eq!(val["n1"], 456);
+    assert_eq!(val["s2"], "hello, world");
+    assert_eq!(val["n2"], 789);
+}

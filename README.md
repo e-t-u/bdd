@@ -114,9 +114,10 @@ In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. In
 
 #### Fast $O(1)$ Filesystem Seeking vs. Sequential Streaming
 
-When skipping initial data with `--input-skip-bits` or `--input-skip-units`, `bdd` automatically performs an **$O(1)$ filesystem seek** whenever the input is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of reading gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps directly to the target byte offset in microseconds.
+When skipping initial data with `--input-skip-bits` or `--input-skip-units`, or skipping periodic gaps between records (`--input-gap` and raw unit container post-gaps), `bdd` automatically performs an **$O(1)$ filesystem seek** whenever the input is a seekable regular file or file descriptor (including `< file` shell redirection). Instead of reading gigabytes from disk and discarding them byte-by-byte in memory, `bdd` jumps directly across offsets and periodic gaps in microseconds.
 
 If the input is non-seekable (such as a standard pipe `cat file | bdd`, FIFO, or socket), `bdd` seamlessly falls back to streaming sequential reads, discarding skipped bytes without failing or requiring separate flags. To explicitly disable seeking and force sequential stream consumption across all inputs, pass **`--no-seek`** (or `--input-no-seek`, `--merge-no-seek`).
+
 
 ---
 
@@ -222,29 +223,39 @@ Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a un
 
 ### Pattern Specifiers Reference
 
-Every field in an `--input-pattern` or `--output-pattern` is specified as `<bits><type>` (with optional repetition multipliers like `4*8B` or `2*(4U4u)`):
+Every field in an `--input-pattern` or `--output-pattern` is specified as `[<bits>]<type>` (with optional repetition multipliers like `4*8B`, `4*B`, or `2*(4U4u)`).
+
+When `<bits>` is omitted, natural bit width defaults are automatically assigned:
+- `B` $\to$ 8 bits (byte)
+- `F` / `f` $\to$ 32 bits (IEEE 754 single)
+- `D` / `d` $\to$ 64 bits (IEEE 754 double)
+- `H` / `h` / `Y` / `y` $\to$ 16 bits (FP16 / BF16)
+- `E` / `e` / `Q` / `q` / `C` / `c` / `K` / `k` $\to$ 8 bits (FP8 / Char / Counter)
+- `m` $\to$ 4 bits (NVFP4)
+- `U` / `u` / `S` / `s` / `x` / `X` / `z` / `o` / `r` $\to$ 1 bit
 
 | Code | Name | Description | Allowed Bit Widths | Valid Context |
 |---|---|---|---|---|
-| `nU` / `nB` | Unsigned Integer / Byte | Standard big-endian unsigned integer | Any positive integer | Input / Output |
-| `nu` / `nb` | Unsigned (Reversed) | Unsigned integer with reversed bit order | Any positive integer | Input / Output |
-| `nS` | Signed Integer | Two's complement signed integer (returns negative values) | Any positive integer | Input / Output |
-| `ns` | Signed (Reversed) | Two's complement with reversed bit order | Any positive integer | Input / Output |
-| `nM` | Sign-Split Integer | Two's complement integer split into two fields: `[sign, abs(val)]` | Any positive integer | Input / Output |
-| `nm` | Sign-Split (Reversed)| Sign-split integer with reversed bit order | Any positive integer | Input / Output |
-| `32F` / `32f` | 32-bit Float | IEEE 754 single-precision float (`f` reverses bits) | Exactly 32 bits | Input / Output |
-| `64D` / `64d` | 64-bit Double | IEEE 754 double-precision float (`d` reverses bits) | Exactly 64 bits | Input / Output |
-| `16H` / `16h` | Half-Precision Float | IEEE 754 half-precision float (FP16) | Exactly 16 bits | Input / Output |
-| `16Y` / `16y` | Bfloat16 | Google Brain Bfloat16 float (BF16) | Exactly 16 bits | Input / Output |
-| `8E` / `8e` | OCP FP8 (E4M3) | Open Compute / NVIDIA Hopper FP8 E4M3FN | Exactly 8 bits | Input / Output |
-| `8Q` / `8q` | OCP FP8 (E5M2) | Open Compute / NVIDIA Ada FP8 E5M2 | Exactly 8 bits | Input / Output |
+| `nU` / `nB` | Unsigned Integer / Byte | Standard big-endian unsigned integer (default 1 / 8 bits) | Any positive integer | Input / Output |
+| `nu` / `nb` | Unsigned (Reversed) | Unsigned integer with reversed bit order (default 1 / 8 bits) | Any positive integer | Input / Output |
+| `nS` | Signed Integer | Two's complement signed integer (returns negative values; default 1 bit) | Any positive integer | Input / Output |
+| `ns` | Signed (Reversed) | Two's complement with reversed bit order (default 1 bit) | Any positive integer | Input / Output |
+| `nM` | Sign-Split Integer | Two's complement integer split into two fields: `[sign, abs(val)]` (default 1 bit) | Any positive integer | Input / Output |
+| `nm` | Sign-Split (Reversed)| Sign-split integer with reversed bit order (default 1 bit) | Any positive integer | Input / Output |
+| `32F` / `32f` | 32-bit Float | IEEE 754 single-precision float (`f` reverses bits; default 32 bits) | Exactly 32 bits | Input / Output |
+| `64D` / `64d` | 64-bit Double | IEEE 754 double-precision float (`d` reverses bits; default 64 bits) | Exactly 64 bits | Input / Output |
+| `16H` / `16h` | Half-Precision Float | IEEE 754 half-precision float (FP16; default 16 bits) | Exactly 16 bits | Input / Output |
+| `16Y` / `16y` | Bfloat16 | Google Brain Bfloat16 float (BF16; default 16 bits) | Exactly 16 bits | Input / Output |
+| `8E` / `8e` | OCP FP8 (E4M3) | Open Compute / NVIDIA Hopper FP8 E4M3FN (default 8 bits) | Exactly 8 bits | Input / Output |
+| `8Q` / `8q` | OCP FP8 (E5M2) | Open Compute / NVIDIA Ada FP8 E5M2 (default 8 bits) | Exactly 8 bits | Input / Output |
 | `6E` / `6e` | OCP FP6 (E3M2) | Open Compute Microscaling FP6 E3M2 | Exactly 6 bits | Input / Output |
-| `4E` / `4e` | OCP / NVFP4 (E2M1) | NVIDIA Blackwell / OCP Microscaling FP4 E2M1 | Exactly 4 bits | Input / Output |
-| `nC` / `nc` | Characters / Bytes | Raw byte/character sequence (retains byte fidelity) | Multiples of 8 bits | Input / Output |
-| `nx` | Skip / Discard | Discards $n$ bits from input without placing them in the tuple | Any positive integer | Input only |
-| `nz` | Fill Zeros | Inserts $n$ constant zero bits | Any positive integer | Output only |
-| `no` | Fill Ones | Inserts $n$ constant one bits | Any positive integer | Output only |
-| `nr` | Fill Random | Inserts $n$ pseudo-random bits | Any positive integer | Output only |
+| `4E` / `4e` | OCP / NVFP4 (E2M1) | NVIDIA Blackwell / OCP Microscaling FP4 E2M1 (default 4 bits) | Exactly 4 bits | Input / Output |
+| `nC` / `nc` | Characters / Bytes | Raw byte/character sequence (retains byte fidelity; default 8 bits) | Multiples of 8 bits | Input / Output |
+| `nK` / `nk` | Sequence Counter | Auto-incrementing unit counter. In output patterns, emits counter without consuming tuple fields. In input patterns, reads unsigned integer. (Default 8 bits) | Any positive integer | Input / Output |
+| `nx` / `nX` | Skip / Discard | Input: skips $n$ bits. Output: consumes and discards 1 tuple field without emitting bits. (Default 1 bit) | Any positive integer | Input / Output |
+| `nz` | Fill Zeros | Inserts $n$ constant zero bits (default 1 bit) | Any positive integer | Output only |
+| `no` | Fill Ones | Inserts $n$ constant one bits (default 1 bit) | Any positive integer | Output only |
+| `nr` | Fill Random | Inserts $n$ pseudo-random bits (default 1 bit) | Any positive integer | Output only |
 
 ### Pattern Repetition Multipliers
 Patterns support multiplier syntax for repetitive fields and tensor arrays:
@@ -382,7 +393,7 @@ Explanation:
 - **`--output-json`**: Newline-delimited JSON (NDJSON) record per tuple (ideal for `jq`, Python, databases).
 - **`--output-csv`**: Comma-separated values (with optional `--csv-header="col1,col2"`).
 - **`--output-visual`**: Interactive colorized terminal dump rendering unaligned field slices in alternating ANSI colors.
-- **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples.
+- **`--input-tuples` (`-t`)**: Ingest comma-separated values directly from stdin/file into tuples. Quoted values (e.g. `"hello"`, `'123'`) are preserved as byte strings (`Field::Bytes`) instead of numbers, preserving exact text for character/byte patterns (`c` / `C`).
 
 ### Packing from Text & Tuples
 
@@ -394,6 +405,18 @@ printf "1,2,3\n3,7,7\n" | bdd --input-tuples --output-pattern='2U3U3U' | od -t o
 # Pack two 4-bit numbers into hex bytes:
 echo -en "1,2\n3,4" | bdd --input-tuples --output-pattern=4U4U | od -t x1
 # Outputs: 12 34
+
+# Discard tuple fields on output using 'x' (drops the second field):
+echo -en "10,99,20\n" | bdd --input-tuples --output-pattern='8U,x,8U' --output-hex
+# Outputs: 0a14
+
+# Inject an embedded auto-incrementing sequence counter using 'k' / 'K':
+echo -en "10,20\n30,40\n" | bdd --input-tuples --output-pattern='8U,8U,8K' --output-hex
+# Outputs: 0a1400 1e2801
+
+# Pack bare pattern types with natural default widths:
+printf "1,2\n" | bdd --input-tuples --output-pattern='BB' --output-hex
+# Outputs: 0102
 
 # Pack text numbers into 64-bit IEEE double-precision floats:
 printf "1.0\n2.0\n" | bdd --input-tuples --output-pattern=64D > doubles.bin
@@ -524,8 +547,8 @@ Tuple Manipulators:
       --filter <F,OP,VAL>          Filter tuples where predicate is false (==, !=, <, <=, >, >=)
 
 Output Unit & Pattern Options:
-      --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats & multipliers)
-      --output-unit <BITS>         Output unit size in bits (shorthand for <BITS>U)
+      --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats, multipliers & counter)
+      --output-unit <BITS>         Output unit size in bits (defaults to input unit size or pattern width)
   -x, --output-hex                 Output units as formatted hexadecimal strings
   -b, --output-bits                Output units as ASCII bit strings ('0' and '1')
   -i, --output-integers            Output unsigned integer per unit (one per line)

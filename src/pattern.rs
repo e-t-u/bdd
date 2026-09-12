@@ -3,6 +3,27 @@ use crate::field::{reverse_bits, Field};
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use rand::RngCore;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Returns the natural default bit width for a pattern character code when no number is specified.
+pub fn default_bits_for_type(c: char, is_output: bool) -> usize {
+    match c {
+        'x' | 'X' => {
+            if is_output {
+                0
+            } else {
+                1
+            }
+        }
+        'u' | 'U' | 'b' | 'z' | 'o' | 'r' => 1,
+        'B' | 's' | 'S' | 'M' | 'q' | 'Q' | 'e' | 'E' | 'c' | 'C' | 'k' | 'K' => 8,
+        'm' => 4,
+        'h' | 'H' | 'y' | 'Y' => 16,
+        'f' | 'F' => 32,
+        'd' | 'D' => 64,
+        _ => 1,
+    }
+}
 
 /// A single token in a bitstream pattern specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,7 +199,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
                 digits.push(c);
             } else {
                 let bits = if digits.is_empty() {
-                    0
+                    default_bits_for_type(c, false)
                 } else {
                     digits.parse::<usize>().unwrap_or(0)
                 };
@@ -207,7 +228,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
 
     for item in &items {
         let c = item.char_code;
-        if !"xUuBbSsMmFfDdHhYyEeQqCc".contains(c) {
+        if !"xXUuBbSsMmFfDdHhYyEeQqCcKk".contains(c) {
             return Err(BddError::IllegalInputPatternChar(c));
         }
         if item.bits == 0 {
@@ -267,7 +288,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
                 digits.push(c);
             } else {
                 let bits = if digits.is_empty() {
-                    0
+                    default_bits_for_type(c, true)
                 } else {
                     digits.parse::<usize>().unwrap_or(0)
                 };
@@ -290,10 +311,10 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
 
     for item in &items {
         let c = item.char_code;
-        if !"UuBbSsMmFfDdHhYyEeQqCczor".contains(c) {
+        if !"UuBbSsMmFfDdHhYyEeQqCczorXxKk".contains(c) {
             return Err(BddError::IllegalOutputPatternChar(c));
         }
-        if item.bits == 0 {
+        if item.bits == 0 && c != 'x' && c != 'X' {
             return Err(BddError::OutputBitLengthRequired(c));
         }
         if "Ff".contains(c) && item.bits != 32 {
@@ -351,7 +372,7 @@ impl TupleUnpacker {
         let mut names = Vec::new();
         let mut idx = 0;
         for p in &self.pattern_items {
-            if p.char_code == 'x' {
+            if p.char_code == 'x' || p.char_code == 'X' {
                 continue;
             }
             if p.char_code == 'M' || p.char_code == 'm' {
@@ -373,12 +394,12 @@ impl TupleUnpacker {
         for p in &self.reversed_pattern {
             let bits = p.bits;
             let c = p.char_code;
-            if "usmfdchyqeb".contains(c) {
+            if "usmfdchyqebk".contains(c) {
                 unit = reverse_bits(&unit, bits);
             }
-            if c == 'x' {
+            if c == 'x' || c == 'X' {
                 unit >>= bits;
-            } else if c == 'U' || c == 'u' || c == 'B' || c == 'b' {
+            } else if c == 'U' || c == 'u' || c == 'B' || c == 'b' || c == 'K' || c == 'k' {
                 let mask = (BigUint::one() << bits) - 1u32;
                 let val = &unit & &mask;
                 tuple.push(Field::UInt(val));
@@ -472,15 +493,21 @@ impl TupleUnpacker {
 pub struct TuplePacker {
     pattern: Vec<PatternItem>,
     pub total_bits: usize,
+    counter: AtomicU64,
 }
 
 impl TuplePacker {
     pub fn new(pattern_str: &str) -> Result<Self, BddError> {
         let pattern = parse_output_pattern(pattern_str)?;
-        let total_bits = pattern.iter().map(|p| p.bits).sum();
+        let total_bits = pattern
+            .iter()
+            .filter(|p| p.char_code != 'x' && p.char_code != 'X')
+            .map(|p| p.bits)
+            .sum();
         Ok(Self {
             pattern,
             total_bits,
+            counter: AtomicU64::new(0),
         })
     }
 
@@ -498,6 +525,10 @@ impl TuplePacker {
         for p in &self.pattern {
             let bits = p.bits;
             let c = p.char_code;
+            if c == 'x' || c == 'X' {
+                let _ = Self::pop_field(&mut tuple)?;
+                continue;
+            }
             let mut val = match c {
                 'U' | 'u' | 'B' | 'b' => {
                     let f = Self::pop_field(&mut tuple)?;
@@ -585,13 +616,21 @@ impl TuplePacker {
                     rng.fill_bytes(&mut buf);
                     BigUint::from_bytes_be(&buf)
                 }
+                'k' | 'K' => {
+                    let cnt = self.counter.fetch_add(1, Ordering::Relaxed);
+                    BigUint::from(cnt)
+                }
                 _ => BigUint::zero(),
             };
 
-            if "usmfdchyqeb".contains(c) {
+            if "usmfdchyqebk".contains(c) {
                 val = reverse_bits(&val, bits);
             }
-            let mask = (BigUint::one() << bits) - 1u32;
+            let mask = if bits > 0 {
+                (BigUint::one() << bits) - 1u32
+            } else {
+                BigUint::zero()
+            };
             val &= mask;
             unit = (unit << bits) | val;
         }
@@ -651,8 +690,8 @@ mod tests {
             Err(BddError::InputBitLengthRequired('U'))
         ));
         assert!(matches!(
-            parse_input_pattern("32X"),
-            Err(BddError::IllegalInputPatternChar('X'))
+            parse_input_pattern("32Z"),
+            Err(BddError::IllegalInputPatternChar('Z'))
         ));
         assert!(matches!(
             parse_input_pattern("16F"),

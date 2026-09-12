@@ -24,7 +24,8 @@
 - `--input-raw-unit <BITS>`: Defines total periodic chunk container (e.g. 188B MPEG-TS packet = `188*8` or `1504`).
 - `--input-offset <BITS>`: Offset in bits from container start to target payload unit.
 - `--input-unit <BITS>`: Payload bit count to extract. Default equals `--input-raw-unit` if omitted.
-- `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers.
+- `--output-unit <BITS>`: Output bit count. Defaults to `--input-unit` if omitted.
+- `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers. On seekable files, gaps are skipped with O(1) kernel seek.
 - `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
 - `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
 - Size syntax supports multipliers and SI suffixes: `1024*188B`, `4k`, `10M`, `1G`, `16*8`, `1000000*24`.
@@ -34,22 +35,25 @@
 ## 2. Pattern Syntax
 
 A pattern string extracts or packs structured multi-field tuples:
-`[field_name:]<width><type_code>[,[field_name:]<width><type_code>...]`
+`[field_name:][width]<type_code>[,[field_name:][width]<type_code>...]`
+
+Bit widths are optional; bare type letters use natural defaults (`B`=8, `f`/`F`=32, `d`/`D`=64, `h`/`H`/`y`/`Y`=16, `e`/`E`/`q`/`Q`/`c`/`C`/`k`/`K`=8, `m`=4, `u`/`U`/`s`/`S`/`x`/`X`/`z`/`o`/`r`=1).
 
 ### Type Codes
-- `u`: Big-Endian Unsigned integer (e.g. `11u`, `32u`)
-- `U`: Little-Endian Unsigned integer (e.g. `32U`)
+- `u`: Big-Endian Unsigned integer (e.g. `11u`, `32u`, bare `u` = 1 bit)
+- `U`: Little-Endian Unsigned integer (e.g. `32U`, bare `U` = 1 bit)
 - `s`: Big-Endian Signed 2's complement integer (e.g. `16s`)
 - `S`: Little-Endian Signed 2's complement integer (e.g. `16S`)
-- `B`: Byte slice / Raw octets (e.g. `4B` = 32 bits byte buffer)
-- `b`: Boolean bit flag (`1b`)
-- `x`: Skipped / Ignored padding bits (e.g. `5x`)
-- `f`: IEEE 754 Floating-point Big-Endian (`16f`, `32f`, `64f`)
-- `F`: IEEE 754 Floating-point Little-Endian (`16F`, `32F`, `64F`)
+- `B`: Byte slice / Raw octets (e.g. `4B` = 32 bits byte buffer, bare `B` = 8 bits)
+- `b`: Boolean bit flag (`1b`, bare `b` = 1 bit)
+- `x` / `X`: Input: skip/discard padding bits (e.g. `5x`). Output: consume and discard 1 tuple field without emitting bits.
+- `k` / `K`: Auto-incrementing unit sequence counter (default 8 bits). In output patterns, emits counter without consuming tuple fields. In input patterns, reads unsigned integer.
+- `f`: IEEE 754 Floating-point Big-Endian (`16f`, `32f`, `64f`, bare `f` = 32 bits)
+- `F`: IEEE 754 Floating-point Little-Endian (`16F`, `32F`, `64F`, bare `F` = 32 bits)
 - `b`: Brain Floating-point (`16b` = BF16)
-- `e`: OCP FP8 E4M3 floating-point (`8e`)
+- `e`: OCP FP8 E4M3 floating-point (`8e`, bare `e` = 8 bits)
 - `E`: OCP FP8 E5M2 (`8E`) or FP6 E3M2 (`6E`)
-- `m`: NVIDIA NVFP4 E2M1 floating-point (`4m`)
+- `m`: NVIDIA NVFP4 E2M1 floating-point (`4m`, bare `m` = 4 bits)
 
 ### Multipliers & Field Names
 - Repetition: `4*8B` expands to `8B8B8B8B`

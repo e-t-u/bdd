@@ -59,7 +59,7 @@ fn run_pipeline_internal(
     } else if let Some(ref p) = packer {
         p.total_bits
     } else {
-        8
+        in_unit_size
     };
 
     let mut merge_stream: Option<FileInputStream<BddReader>> =
