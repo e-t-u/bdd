@@ -11,6 +11,17 @@ This document consolidates high-value feature improvements, API additions, and a
 - **Target Behavior**: Quoted numbers must be strictly preserved as raw ASCII string bytes (`"5"` $\rightarrow$ ASCII `0x35` / `53`), while unquoted numbers (`5`) are parsed as numeric values (`0x05`).
 - **Reference**: Resolves the note in `test/test.sh:151` (`echo -en "\"5\"" | ./bdd --input-tuples --output-hex` should output `35`).
 
+### 1.2 Overhaul of Rounding, Range Clamping, and Floating-Point Handling
+- **Problem Statement**:
+  - The current `--round` / `--cut-maxint` manipulator conflates two fundamentally distinct operations:
+    1. **Upper-End Magnitude / Range Overflow (MSB Cutting)**: When a larger value must fit into a smaller unit (e.g. value 300 into an 8-bit container max 255), the *most significant bits* exceed the range. This is **clamping, saturation, wrapping, or high-bit clipping**—it is *not* rounding.
+    2. **Lower-End Precision Reduction (LSB Rounding)**: When reducing precision, fractional digits, or low-order bits, bits are removed from the *least significant part*. This is **true rounding / quantization**.
+  - Additionally, floating-point handling currently translates values through an internal 64-bit double (`f64`). While convenient for pipeline arithmetic, converting to/from `f64` can introduce subtle rounding artifacts, alter NaN payloads, or affect subnormal representations in sub-byte and 16-bit AI floats.
+- **Target Architecture & Next Steps**:
+  - Decouple upper-end range overflow handling (clamping / saturation / wrapping) from lower-end precision reduction (rounding / quantization).
+  - Clarify or provide clean dedicated options (e.g. explicit range clamping / saturation vs. true precision rounding).
+  - Re-examine floating-point codecs and pipelines to avoid unintended `f64` conversions when bit-exactness is required, and ensure rounding modes applied to float mantissas and integers are mathematically precise and consistent.
+
 ---
 
 ## 2. Pattern Engine & Data Types
