@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sat Sep 12 07:53:35 2026 -->
+<!-- CreationDate: Sat Sep 12 08:07:19 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -221,6 +221,13 @@ to be specified.</p>
 <p style="margin-left:18%;">Gives error message if the
 input is not full units. Note that with --count you can
 cleanly stop reading non-aligned input.</p>
+
+<p style="margin-left:9%;">--drop-partial-eof,
+--drop-trailing-bits, --no-pad-eof</p>
+
+<p style="margin-left:18%;">Discard incomplete trailing
+bits at EOF instead of zero-padding them into an extra
+synthetic unit.</p>
 
 <p style="margin-left:9%;">--no-seek, --do-not-seek</p>
 
@@ -913,10 +920,17 @@ Output of the merge unit is done with the same
 output. <br>
 --merge-file=FILENAME</p>
 
-<p style="margin-left:18%;">Opens the merge file. If
-FILENAME is &quot;-&quot;, mergefile is standard input. If
-mergefile is standard input, input file must not be the
-same.</p>
+<p style="margin-left:18%;">Opens the merge file. Can be
+specified multiple times for N-way round-robin interleaving
+with the primary stream. If FILENAME is &quot;-&quot;,
+mergefile is standard input. If mergefile is standard input,
+input file must not be the same.</p>
+
+<p style="margin-left:9%;">--merge-files=FILENAMES</p>
+
+<p style="margin-left:18%;">Comma- or space-separated list
+of merge files to interleave round-robin with the primary
+input stream.</p>
 
 <p style="margin-left:9%;">--merge-unit=BITS</p>
 
@@ -966,6 +980,13 @@ within each merge raw unit (default: 0). Requires
 <p style="margin-left:18%;">Warn if the whole merge input
 was not used or the merge input did not end to the byte
 border.</p>
+
+<p style="margin-left:9%;">--merge-drop-partial-eof,
+--merge-drop-trailing-bits, <br>
+--merge-no-pad-eof</p>
+
+<p style="margin-left:18%;">Discard incomplete trailing
+bits at EOF in merge stream instead of zero-padding.</p>
 
 <p style="margin-left:9%;">--merge-no-seek,
 --no-merge-seek</p>

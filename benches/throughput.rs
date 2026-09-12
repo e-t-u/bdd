@@ -82,6 +82,7 @@ fn bench_unaligned_3bit_to_8bit() {
         skip_units: 0,
         gap: 0,
         assert_aligned: false,
+        drop_partial_eof: false,
         reverse_bytes: false,
         reverse_unit: false,
         unit_size: 3,

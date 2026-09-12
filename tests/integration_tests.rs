@@ -2,21 +2,16 @@ use std::fs::File;
 use std::io::Write;
 use std::process::Command;
 
+const BDD_BIN: &str = env!("CARGO_BIN_EXE_bdd");
+
 #[test]
 fn test_integration_script() {
-    // Ensure binary is built
-    let build_status = Command::new("cargo")
-        .args(["build", "--release"])
-        .status()
-        .expect("failed to run cargo build --release");
-    assert!(build_status.success(), "cargo build --release failed");
-
-    // Ensure ./bdd symlink exists
-    let symlink_status = Command::new("ln")
-        .args(["-sf", "target/release/bdd", "./bdd"])
-        .status()
-        .expect("failed to create bdd symlink");
-    assert!(symlink_status.success(), "failed to create bdd symlink");
+    // Ensure ./bdd symlink exists pointing to BDD_BIN so test.sh can invoke ./bdd
+    let _ = std::fs::remove_file("./bdd");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(BDD_BIN, "./bdd");
+    #[cfg(not(unix))]
+    let _ = std::fs::copy(BDD_BIN, "./bdd");
 
     // Execute test/test.sh
     let test_output = Command::new("bash")
@@ -34,7 +29,7 @@ fn test_integration_script() {
 
 #[test]
 fn test_cli_large_unit_counter_hex() {
-    let output = Command::new("./bdd")
+    let output = Command::new(BDD_BIN)
         .args([
             "--input-counter",
             "--count=3",
@@ -60,7 +55,7 @@ fn test_cli_large_unit_counter_hex() {
 #[test]
 fn test_cli_large_unit_ones_and_shift() {
     // Generate 1024 bits of all 1s as hex
-    let output_ones = Command::new("./bdd")
+    let output_ones = Command::new(BDD_BIN)
         .args([
             "--input-ones",
             "--count=1",
@@ -79,7 +74,7 @@ fn test_cli_large_unit_ones_and_shift() {
     assert_eq!(hex_ones, "f".repeat(256));
 
     // Test XOR with 1024-bit mask (all bits become 0)
-    let output_xor = Command::new("./bdd")
+    let output_xor = Command::new(BDD_BIN)
         .args([
             "--input-ones",
             "--count=1",
@@ -102,7 +97,7 @@ fn test_cli_large_tuple_rearrange() {
     // Pattern with 200 fields of 4-bit unsigned integers: 200 * 4 = 800 bits
     let pattern = "4U".repeat(200);
     // Rearrange: swap field 0 and field 199 (-1), and drop everything else
-    let output = Command::new("./bdd")
+    let output = Command::new(BDD_BIN)
         .args([
             "--input-ones",
             "--count=1",
@@ -135,7 +130,7 @@ fn test_cli_auto_seek_and_no_seek() {
     }
 
     // 1. Regular file with default auto-seeking
-    let out_auto = Command::new("./bdd")
+    let out_auto = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-units=99990",
@@ -149,7 +144,7 @@ fn test_cli_auto_seek_and_no_seek() {
     assert_eq!(hex_auto.trim(), "12 34 56 78 9a");
 
     // 2. Regular file with explicit --no-seek (streaming read fallback)
-    let out_no_seek = Command::new("./bdd")
+    let out_no_seek = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-units=99990",
@@ -164,7 +159,7 @@ fn test_cli_auto_seek_and_no_seek() {
     assert_eq!(hex_no_seek.trim(), "12 34 56 78 9a");
 
     // 3. Regular file with --do-not-seek alias
-    let out_do_not_seek = Command::new("./bdd")
+    let out_do_not_seek = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-units=99990",
@@ -209,7 +204,7 @@ fn test_cli_raw_unit_and_offset() {
     }
 
     // Extraction A: bits 3 and 4 of every 8-bit byte (offset 2, unit 2)
-    let out_a = Command::new("./bdd")
+    let out_a = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-raw-unit=8",
@@ -225,7 +220,7 @@ fn test_cli_raw_unit_and_offset() {
     assert_eq!(lines_a, vec!["3", "3"]);
 
     // Extraction B: bit 5 of every 8-bit byte (offset 4, unit 1)
-    let out_b = Command::new("./bdd")
+    let out_b = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-raw-unit=8",
@@ -259,7 +254,7 @@ fn test_cli_gigabyte_seek_and_suffixes() {
     }
 
     // Seek directly over 10GiB in O(1) time using size suffix
-    let out = Command::new("./bdd")
+    let out = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-bits=10GiB",
@@ -274,7 +269,7 @@ fn test_cli_gigabyte_seek_and_suffixes() {
     assert_eq!(stdout.trim(), "de ad be ef");
 
     // Also test unit-based skipping over 10GiB
-    let out_units = Command::new("./bdd")
+    let out_units = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-unit=8",
@@ -297,7 +292,7 @@ fn test_cli_round_and_float_transcoding() {
     use std::io::Write;
 
     // 1. Test --round with mode-only (floor, round_ties_even)
-    let out_round = Command::new("./bdd")
+    let out_round = Command::new(BDD_BIN)
         .args(["--input-tuples", "--round=0,floor", "--output-tuples"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -313,7 +308,7 @@ fn test_cli_round_and_float_transcoding() {
     assert_eq!(stdout_round.trim(), "2");
 
     // 2. Test --round alias --cut-maxint
-    let out_cut = Command::new("./bdd")
+    let out_cut = Command::new(BDD_BIN)
         .args([
             "--input-tuples",
             "--cut-maxint=0,10,saturate",
@@ -334,7 +329,7 @@ fn test_cli_round_and_float_transcoding() {
 
     // 3. Test cross-precision transcoding: FP32 (32F) -> FP16 (16H)
     // 1.0f32 big-endian is 0x3F800000; 1.0 in FP16 is 0x3C00
-    let out_transcode = Command::new("./bdd")
+    let out_transcode = Command::new(BDD_BIN)
         .args([
             "--input-pattern=32F",
             "--output-pattern=16H",
@@ -360,7 +355,7 @@ fn test_cli_round_and_float_transcoding() {
 
     // 4. Test cross-precision transcoding: FP16 (16H) -> FP8 E4M3 (8E)
     // 1.0 in FP16 is 0x3C00; 1.0 in FP8 E4M3 is 0x38
-    let out_fp8 = Command::new("./bdd")
+    let out_fp8 = Command::new(BDD_BIN)
         .args(["--input-pattern=16H", "--output-pattern=8E", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -399,7 +394,7 @@ fn test_cli_multiplication_sizes() {
     }
 
     // Skip 1,000,000 24-bit units using 1000000*24
-    let out = Command::new("./bdd")
+    let out = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-bits=1000000*24",
@@ -414,7 +409,7 @@ fn test_cli_multiplication_sizes() {
     assert_eq!(stdout.trim(), "11 22 33 44");
 
     // Also test chained multiplication and count
-    let out_chained = Command::new("./bdd")
+    let out_chained = Command::new(BDD_BIN)
         .args([
             &format!("--input-file={}", test_path),
             "--input-skip-bits=1000*1000*24",
@@ -435,7 +430,10 @@ fn test_cli_multiplication_sizes() {
 fn test_infinite_generators() {
     // Pipe infinite zeros into head -c 16
     let out_zeros = Command::new("bash")
-        .args(["-c", "./bdd --input-zeros 2>/dev/null | head -c 16 | wc -c"])
+        .args([
+            "-c",
+            &format!("{} --input-zeros 2>/dev/null | head -c 16 | wc -c", BDD_BIN),
+        ])
         .output()
         .expect("failed to run infinite zeros");
     assert!(out_zeros.status.success());
@@ -446,7 +444,10 @@ fn test_infinite_generators() {
     let out_rand = Command::new("bash")
         .args([
             "-c",
-            "./bdd --input-random 2>/dev/null | head -c 32 | wc -c",
+            &format!(
+                "{} --input-random 2>/dev/null | head -c 32 | wc -c",
+                BDD_BIN
+            ),
         ])
         .output()
         .expect("failed to run infinite random");
@@ -458,7 +459,7 @@ fn test_infinite_generators() {
 #[test]
 fn test_named_patterns_and_presets() {
     // Test preset mp3-header on sample.mp3
-    let out_mp3 = Command::new("./bdd")
+    let out_mp3 = Command::new(BDD_BIN)
         .args([
             "--preset=mp3-header",
             "--input-file=contrib/data/sample.mp3",
@@ -473,7 +474,7 @@ fn test_named_patterns_and_presets() {
     assert!(stdout_mp3.contains("\"layer\":2"));
 
     // Test preset nvfp4 on sample_nvfp4.bin
-    let out_nvfp4 = Command::new("./bdd")
+    let out_nvfp4 = Command::new(BDD_BIN)
         .args([
             "--preset=nvfp4",
             "--input-file=contrib/data/sample_nvfp4.bin",
@@ -489,7 +490,7 @@ fn test_named_patterns_and_presets() {
     assert!(lines[1].contains("\"w0\":1.0") && lines[1].contains("\"w1\":1.5"));
 
     // Test custom pattern with names and --json-fields
-    let out_custom = Command::new("./bdd")
+    let out_custom = Command::new(BDD_BIN)
         .args([
             "--input-zeros",
             "--count=1",
@@ -507,7 +508,7 @@ fn test_named_patterns_and_presets() {
 #[test]
 fn test_explain_pattern() {
     // Text output
-    let out_text = Command::new("./bdd")
+    let out_text = Command::new(BDD_BIN)
         .args(["--explain-pattern=sync:11u,ver:2u,layer:2u"])
         .output()
         .expect("failed to run explain-pattern text");
@@ -519,7 +520,7 @@ fn test_explain_pattern() {
     assert!(stdout_text.contains("layer"));
 
     // JSON output
-    let out_json = Command::new("./bdd")
+    let out_json = Command::new(BDD_BIN)
         .args(["--explain-pattern=sync:11u,ver:2u", "--output-json"])
         .output()
         .expect("failed to run explain-pattern json");
@@ -531,7 +532,7 @@ fn test_explain_pattern() {
 
 #[test]
 fn test_probe_binary() {
-    let out_probe = Command::new("./bdd")
+    let out_probe = Command::new(BDD_BIN)
         .args(["--probe=contrib/data/sample.mp3", "--output-json"])
         .output()
         .expect("failed to run probe json");
@@ -546,7 +547,7 @@ fn test_mcp_server_protocol() {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new("./bdd")
+    let mut child = Command::new(BDD_BIN)
         .arg("--mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -606,7 +607,7 @@ fn test_periodic_gap_seeking() {
 
     // Using raw unit of 1MB (1024*1024*8 bits) with 8-bit active unit automatically computes
     // periodic container gap of 1MB - 1 byte, triggering fast seeking between records.
-    let output = Command::new("./bdd")
+    let output = Command::new(BDD_BIN)
         .args([
             "--input-file",
             path,
@@ -633,7 +634,7 @@ fn test_periodic_gap_seeking() {
 #[test]
 fn test_output_unit_default_to_input_unit() {
     // When --output-unit and --output-pattern are omitted, output unit defaults to input unit
-    let output = Command::new("./bdd")
+    let output = Command::new(BDD_BIN)
         .args([
             "--input-counter",
             "--count=4",
@@ -653,7 +654,7 @@ fn test_output_unit_default_to_input_unit() {
 #[test]
 fn test_output_pattern_field_discard() {
     // Test discarding field in output pattern via 'x'
-    let mut child = Command::new("./bdd")
+    let mut child = Command::new(BDD_BIN)
         .args(["--input-tuples", "--output-pattern=8U,x,8U", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -675,7 +676,7 @@ fn test_output_pattern_field_discard() {
 #[test]
 fn test_bare_pattern_types() {
     // Bare type letters without preceding counts: x, u, b, B, f, d
-    let output = Command::new("./bdd")
+    let output = Command::new(BDD_BIN)
         .args(["--explain-pattern=x,u,b,B,f,d", "--output-json"])
         .output()
         .expect("failed to run bdd explain bare");
@@ -696,7 +697,7 @@ fn test_bare_pattern_types() {
 #[test]
 fn test_embedded_counter_pattern() {
     // Packing with embedded counter (8K): counter doesn't consume from tuple
-    let mut child = Command::new("./bdd")
+    let mut child = Command::new(BDD_BIN)
         .args(["--input-tuples", "--output-pattern=8K,8U", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -723,7 +724,7 @@ fn test_embedded_counter_pattern() {
 #[test]
 fn test_quoted_strings_in_input_tuples() {
     // Distinguish quoted numbers as string bytes from raw unquoted numbers
-    let mut child = Command::new("./bdd")
+    let mut child = Command::new(BDD_BIN)
         .args([
             "--input-tuples",
             "--output-json",
@@ -749,4 +750,153 @@ fn test_quoted_strings_in_input_tuples() {
     assert_eq!(val["n1"], 456);
     assert_eq!(val["s2"], "hello, world");
     assert_eq!(val["n2"], 789);
+}
+
+#[test]
+fn test_multi_file_merge_round_robin() {
+    let m1_path = "/tmp/bdd_merge_test_m1.bin";
+    let m2_path = "/tmp/bdd_merge_test_m2.bin";
+    std::fs::write(m1_path, [0x11, 0x22]).unwrap();
+    std::fs::write(m2_path, [0xAA, 0xBB]).unwrap();
+
+    // Repeatable --merge-file
+    let output = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=2",
+            "--input-unit=8",
+            "--output-unit=8",
+            "--merge-file",
+            m1_path,
+            "--merge-file",
+            m2_path,
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd multi merge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    // Round robin: Primary 00, m1 11, m2 aa, Primary 01, m1 22, m2 bb
+    assert_eq!(tokens, vec!["00", "11", "aa", "01", "22", "bb"]);
+
+    // Comma-separated --merge-files
+    let merge_files_arg = format!("{},{}", m1_path, m2_path);
+    let output2 = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=2",
+            "--input-unit=8",
+            "--output-unit=8",
+            "--merge-files",
+            &merge_files_arg,
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd multi merge with --merge-files");
+
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    let tokens2: Vec<&str> = stdout2.split_whitespace().collect();
+    assert_eq!(tokens2, vec!["00", "11", "aa", "01", "22", "bb"]);
+
+    let _ = std::fs::remove_file(m1_path);
+    let _ = std::fs::remove_file(m2_path);
+}
+
+#[test]
+fn test_drop_partial_eof_cli() {
+    let p = "/tmp/bdd_test_drop_eof.bin";
+    // 1 byte = 8 bits (0000 0001)
+    std::fs::write(p, [0x01]).unwrap();
+
+    // Default: unit size 3 pads remaining 2 bits (010 = 2) => 3 units: 0 0 2
+    let out_default = Command::new(BDD_BIN)
+        .args(["--input-file", p, "--input-unit=3", "--output-hex"])
+        .output()
+        .expect("failed to run bdd pad eof");
+    assert!(out_default.status.success());
+    let stdout_def = String::from_utf8(out_default.stdout).unwrap();
+    let tokens_def: Vec<&str> = stdout_def.split_whitespace().collect();
+    assert_eq!(tokens_def, vec!["0", "0", "2"]);
+
+    // With --drop-partial-eof: drops incomplete trailing 2 bits => 2 units: 0 0
+    let out_drop = Command::new(BDD_BIN)
+        .args([
+            "--input-file",
+            p,
+            "--input-unit=3",
+            "--drop-partial-eof",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd drop eof");
+    assert!(out_drop.status.success());
+    let stdout_drop = String::from_utf8(out_drop.stdout).unwrap();
+    let tokens_drop: Vec<&str> = stdout_drop.split_whitespace().collect();
+    assert_eq!(tokens_drop, vec!["0", "0"]);
+
+    // With alias --drop-trailing-bits
+    let out_alias = Command::new(BDD_BIN)
+        .args([
+            "--input-file",
+            p,
+            "--input-unit=3",
+            "--drop-trailing-bits",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd drop alias");
+    assert!(out_alias.status.success());
+    let stdout_alias = String::from_utf8(out_alias.stdout).unwrap();
+    let tokens_alias: Vec<&str> = stdout_alias.split_whitespace().collect();
+    assert_eq!(tokens_alias, vec!["0", "0"]);
+
+    let _ = std::fs::remove_file(p);
+}
+
+#[test]
+fn test_terminal_hex_and_bits_no_trailing_whitespace() {
+    // Hex output
+    let out_hex = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=16",
+            "--input-unit=8",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run hex output");
+    assert!(out_hex.status.success());
+    let stdout_hex = String::from_utf8(out_hex.stdout).unwrap();
+    assert!(!stdout_hex.is_empty());
+    for line in stdout_hex.lines() {
+        assert!(
+            !line.ends_with(' '),
+            "Hex output line has trailing space: {:?}",
+            line
+        );
+    }
+
+    // Bit output
+    let out_bits = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=16",
+            "--input-unit=4",
+            "--output-bits",
+        ])
+        .output()
+        .expect("failed to run bit output");
+    assert!(out_bits.status.success());
+    let stdout_bits = String::from_utf8(out_bits.stdout).unwrap();
+    assert!(!stdout_bits.is_empty());
+    for line in stdout_bits.lines() {
+        assert!(
+            !line.ends_with(' '),
+            "Bit output line has trailing space: {:?}",
+            line
+        );
+    }
 }

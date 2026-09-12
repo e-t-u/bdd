@@ -116,9 +116,14 @@ impl<W: Write> UnitSink for HexOutputStream<W> {
             self.output_units_in_line = 0;
         }
 
-        let s = format!("{}{h} ", filler);
+        if self.output_units_in_line > 0 {
+            self.writer.write_all(b" ")?;
+            self.output_column += 1;
+        }
+
+        let s = format!("{}{h}", filler);
         self.writer.write_all(s.as_bytes())?;
-        self.output_column += hex_digits + 1;
+        self.output_column += hex_digits;
         self.output_units_in_line += 1;
         Ok(())
     }
@@ -168,9 +173,14 @@ impl<W: Write> UnitSink for BitOutputStream<W> {
             self.output_units_in_line = 0;
         }
 
-        let s = format!("{}{b_str} ", filler);
+        if self.output_units_in_line > 0 {
+            self.writer.write_all(b" ")?;
+            self.output_column += 1;
+        }
+
+        let s = format!("{}{b_str}", filler);
         self.writer.write_all(s.as_bytes())?;
-        self.output_column += bits + 1;
+        self.output_column += bits;
         self.output_units_in_line += 1;
         Ok(())
     }
@@ -452,7 +462,28 @@ mod tests {
             sink.write_bits(BigUint::from(5u32), 8).unwrap();
             sink.flush_stream().unwrap();
         }
-        assert_eq!(String::from_utf8(buf).unwrap(), "05 \n");
+        assert_eq!(String::from_utf8(buf).unwrap(), "05\n");
+
+        let mut multi_buf = Vec::new();
+        {
+            let mut sink = HexOutputStream::new(&mut multi_buf);
+            sink.write_bits(BigUint::from(0x0Au32), 8).unwrap();
+            sink.write_bits(BigUint::from(0xBCu32), 8).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(multi_buf).unwrap(), "0a bc\n");
+    }
+
+    #[test]
+    fn test_bit_output_sink() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = BitOutputStream::new(&mut buf);
+            sink.write_bits(BigUint::from(1u32), 3).unwrap();
+            sink.write_bits(BigUint::from(6u32), 3).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(buf).unwrap(), "001 110\n");
     }
 
     #[test]

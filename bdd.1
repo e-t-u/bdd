@@ -109,6 +109,10 @@ Gives error message if the input is not full units.
 Note that with --count you can cleanly stop reading non-aligned input.
 
 .TP
+--drop-partial-eof, --drop-trailing-bits, --no-pad-eof
+Discard incomplete trailing bits at EOF instead of zero-padding them into an extra synthetic unit.
+
+.TP
 --no-seek, --do-not-seek
 Globally disable seeking on all inputs (both primary and merge streams), forcing streaming sequential reads. By default, \fBbdd\fR automatically attempts O(1) filesystem seek whenever the input stream is a seekable regular file or file descriptor, seamlessly falling back to sequential stream reads if the input is a pipe, socket, or FIFO.
 
@@ -556,10 +560,14 @@ Output of the merge unit is done with the same --reverse-bytes and
 
 .TP
 --merge-file=FILENAME
-Opens the merge file.
+Opens the merge file. Can be specified multiple times for N-way round-robin interleaving with the primary stream.
 If FILENAME is "-", mergefile is standard input.
 If mergefile is standard input, input file must not be
 the same.
+
+.TP
+--merge-files=FILENAMES
+Comma- or space-separated list of merge files to interleave round-robin with the primary input stream.
 
 .TP
 --merge-unit=BITS
@@ -599,6 +607,10 @@ Requires --merge-raw-unit to be specified.
 --merge-assert-aligned
 Warn if the whole merge input was not used or the merge input did not
 end to the byte border.
+
+.TP
+--merge-drop-partial-eof, --merge-drop-trailing-bits, --merge-no-pad-eof
+Discard incomplete trailing bits at EOF in merge stream instead of zero-padding.
 
 .TP
 --merge-no-seek, --no-merge-seek

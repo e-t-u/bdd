@@ -117,7 +117,7 @@ bdd --probe payload.dat --output-json
 
 ---
 
-## 6. Infinite Generators
+## 6. Infinite Generators & EOF Alignment
 
 Generate synthetic streams without `--count`:
 - `--input-zeros`: Infinite stream of zero bits `0x00`.
@@ -126,9 +126,24 @@ Generate synthetic streams without `--count`:
 - `--input-counter`: Monotonically incrementing integers modulo unit size.
 Specify `--count <N>` only when bounded generation is desired.
 
+### EOF Trailing Bits
+- Default: Trailing incomplete bits at EOF are zero-padded to form a full unit.
+- `--drop-partial-eof` (aliases: `--drop-trailing-bits`, `--no-pad-eof`): Discards trailing incomplete bits at EOF instead of zero-padding.
+- `--input-assert-aligned`: Returns an error if EOF does not fall on an exact unit boundary.
+
 ---
 
-## 7. Model Context Protocol (MCP)
+## 7. Multi-File Round-Robin Merging (N-way Interleaving)
+
+Interleave primary input with one or more secondary streams:
+- `--merge-file <PATH>`: Secondary file (repeatable for N-way round-robin interleaving: `[Primary] -> [M1] -> [M2] -> ...`).
+- `--merge-files <P1,P2,...>`: Comma- or space-separated list of merge files.
+- `--merge-unit <BITS>`: Unit size for merge streams [default: 8].
+- `--merge-drop-partial-eof`: Drop partial trailing bits in merge streams at EOF.
+
+---
+
+## 8. Model Context Protocol (MCP)
 
 Start native JSON-RPC 2.0 stdio server:
 ```bash
@@ -147,7 +162,7 @@ bdd --mcp
 
 ---
 
-## 8. Common Recipes
+## 9. Common Recipes
 
 ### Extract MPEG-TS PIDs to JSON
 ```bash

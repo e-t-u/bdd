@@ -41,6 +41,14 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub input_assert_aligned: bool,
 
+    /// Discard incomplete trailing bits at EOF instead of zero-padding
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = ["drop-partial-eof", "drop-trailing-bits", "no-pad-eof"]
+    )]
+    pub input_drop_partial_eof: bool,
+
     /// Disable seeking on all inputs (force streaming sequential read)
     #[arg(long, default_value_t = false, visible_alias = "do-not-seek")]
     pub no_seek: bool,
@@ -225,8 +233,13 @@ pub struct Cli {
     pub input_repeat: Option<String>,
 
     // Merge options
-    #[arg(long)]
-    pub merge_file: Option<String>,
+    /// Merge file(s) to interleave round-robin with primary stream (repeatable)
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub merge_file: Vec<String>,
+
+    /// Comma- or space-separated list of merge files to interleave round-robin
+    #[arg(long, value_delimiter = ',')]
+    pub merge_files: Vec<String>,
 
     #[arg(long)]
     pub merge_unit: Option<String>,
@@ -253,6 +266,14 @@ pub struct Cli {
 
     #[arg(long, default_value_t = false)]
     pub merge_assert_aligned: bool,
+
+    /// Discard incomplete trailing bits at EOF in merge stream instead of zero-padding
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = ["merge-drop-trailing-bits", "merge-no-pad-eof"]
+    )]
+    pub merge_drop_partial_eof: bool,
 
     /// Disable seeking on merge input (force streaming sequential read)
     #[arg(long, default_value_t = false, visible_alias = "no-merge-seek")]
@@ -282,6 +303,7 @@ pub struct ValidatedConfig {
     pub input_skip_units: u64,
     pub input_gap: u64,
     pub input_assert_aligned: bool,
+    pub input_drop_partial_eof: bool,
     pub input_use_seek: bool,
     pub input_reverse_bytes: bool,
     pub input_reverse_unit: bool,
@@ -328,12 +350,14 @@ pub struct ValidatedConfig {
     pub demux_files: Option<String>,
     pub input_repeat: usize,
     pub merge_file: Option<String>,
+    pub merge_files: Vec<String>,
     pub merge_unit: Option<usize>,
     pub merge_skip_bits: u64,
     pub merge_skip_units: u64,
     pub merge_copy_first: u64,
     pub merge_gap: u64,
     pub merge_assert_aligned: bool,
+    pub merge_drop_partial_eof: bool,
     pub merge_use_seek: bool,
     pub merge_reverse_bytes: bool,
     pub merge_reverse_unit: bool,
@@ -665,7 +689,25 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         ));
     }
 
-    let merge_specified = cli.merge_file.is_some();
+    let mut all_merge_files: Vec<String> = Vec::new();
+    for f in &cli.merge_file {
+        for part in f.split(',') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                all_merge_files.push(trimmed.to_string());
+            }
+        }
+    }
+    for f in &cli.merge_files {
+        for part in f.split(|c: char| c == ',' || c.is_whitespace()) {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                all_merge_files.push(trimmed.to_string());
+            }
+        }
+    }
+
+    let merge_specified = !all_merge_files.is_empty();
     if !merge_specified {
         let has_merge_opt = cli.merge_unit.is_some()
             || cli.merge_raw_unit.is_some()
@@ -675,6 +717,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             || cli.merge_gap.is_some()
             || cli.merge_offset.is_some()
             || cli.merge_assert_aligned
+            || cli.merge_drop_partial_eof
             || cli.merge_use_seek
             || cli.merge_no_seek
             || cli.merge_little_endian
@@ -914,6 +957,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         input_skip_units,
         input_gap,
         input_assert_aligned: cli.input_assert_aligned,
+        input_drop_partial_eof: cli.input_drop_partial_eof,
         input_use_seek,
         input_reverse_bytes: cli.input_reverse_bytes,
         input_reverse_unit: cli.input_reverse_unit,
@@ -959,13 +1003,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         demux: cli.demux,
         demux_files: cli.demux_files,
         input_repeat,
-        merge_file: cli.merge_file,
+        merge_file: all_merge_files.first().cloned(),
+        merge_files: all_merge_files,
         merge_unit: resolved_merge_unit,
         merge_skip_bits,
         merge_skip_units,
         merge_copy_first,
         merge_gap,
         merge_assert_aligned: cli.merge_assert_aligned,
+        merge_drop_partial_eof: cli.merge_drop_partial_eof,
         merge_use_seek,
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,

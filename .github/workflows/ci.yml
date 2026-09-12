@@ -22,5 +22,9 @@ jobs:
         run: cargo fmt --check
       - name: Clippy Lints
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build
+        run: |
+          cargo build --all-targets --all-features
+          ln -sf target/debug/bdd ./bdd
       - name: Run Tests
         run: cargo test --all-targets --all-features

@@ -13,6 +13,7 @@ pub struct StreamConfig {
     pub skip_units: u64,
     pub gap: u64,
     pub assert_aligned: bool,
+    pub drop_partial_eof: bool,
     pub reverse_bytes: bool,
     pub reverse_unit: bool,
     pub unit_size: usize,
@@ -26,6 +27,7 @@ impl Default for StreamConfig {
             skip_units: 0,
             gap: 0,
             assert_aligned: false,
+            drop_partial_eof: false,
             reverse_bytes: false,
             reverse_unit: false,
             unit_size: 8,
@@ -364,6 +366,11 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
 
             while self.bits_in_buffer < self.config.unit_size {
                 let b = self.read_byte();
+                if self.eof && self.config.drop_partial_eof {
+                    self.bits_in_buffer = 0;
+                    self.buffer = BigUint::zero();
+                    return Ok(None);
+                }
                 self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
                 self.bits_in_buffer += 8;
             }
@@ -808,5 +815,45 @@ mod tests {
         let mut streaming = BddReader::new_streaming(std::io::Cursor::new(data));
         assert!(!streaming.is_seekable());
         assert!(!streaming.try_seek(2).unwrap());
+    }
+
+    #[test]
+    fn test_drop_partial_eof() {
+        // 1 byte: 0b110010_11 (0xCB)
+        // Unit size: 6 bits.
+        // First 6 bits: 110010 = 50
+        // Trailing 2 bits: 11
+        let data = vec![0xCBu8];
+
+        // Without drop_partial_eof: trailing 2 bits padded with 4 zeros: 110000 = 48
+        let config_pad = StreamConfig {
+            unit_size: 6,
+            drop_partial_eof: false,
+            ..Default::default()
+        };
+        let mut stream_pad = FileInputStream::new(
+            std::io::Cursor::new(data.clone()),
+            config_pad,
+            Counter::new(0, None),
+        );
+        stream_pad.do_skip();
+        assert_eq!(stream_pad.next_unit().unwrap(), Some(BigUint::from(50u32)));
+        assert_eq!(stream_pad.next_unit().unwrap(), Some(BigUint::from(48u32)));
+        assert_eq!(stream_pad.next_unit().unwrap(), None);
+
+        // With drop_partial_eof: trailing 2 bits are dropped!
+        let config_drop = StreamConfig {
+            unit_size: 6,
+            drop_partial_eof: true,
+            ..Default::default()
+        };
+        let mut stream_drop = FileInputStream::new(
+            std::io::Cursor::new(data),
+            config_drop,
+            Counter::new(0, None),
+        );
+        stream_drop.do_skip();
+        assert_eq!(stream_drop.next_unit().unwrap(), Some(BigUint::from(50u32)));
+        assert_eq!(stream_drop.next_unit().unwrap(), None);
     }
 }

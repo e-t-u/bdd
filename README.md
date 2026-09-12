@@ -466,17 +466,22 @@ Reversing bits in binary processing can easily become confusing. `bdd` cleanly i
 
 The merge stream reads a secondary file and interleaves its data into the primary stream:
 
-```
- Primary Stream Units:  [ Unit 0 ]              [ Unit 1 ]              [ Unit 2 ]
-                             │                      │                      │
- Merge Stream Units:         │       [ Merge 0 ]    │       [ Merge 1 ]    │       [ Merge 2 ]
-                             ▼            ▼         ▼            ▼         ▼            ▼
- Interleaved Output:    [ Unit 0 ]  [ Merge 0 ] [ Unit 1 ]  [ Merge 1 ] [ Unit 2 ]  [ Merge 2 ]
+```text
+ Primary Stream Units:  [ Unit 0 ]                            [ Unit 1 ]
+                             │                                    │
+ Merge 1 Stream Units:       │       [ M1_0 ]                     │       [ M1_1 ]
+                             │          │                         │          │
+ Merge 2 Stream Units:       │          │       [ M2_0 ]          │          │       [ M2_1 ]
+                             ▼          ▼          ▼              ▼          ▼          ▼
+ Interleaved Output:    [ Unit 0 ]  [ M1_0 ]   [ M2_0 ]      [ Unit 1 ]  [ M1_1 ]   [ M2_1 ]
 ```
 
-- **`--merge-file=PATH`**: Interleave data from a secondary file (`"-"` for stdin).
+- **`--merge-file=PATH`**: Interleave data from secondary files (can be specified multiple times for N-way round-robin merge, `"-"` for stdin).
+- **`--merge-files=PATHS`**: Comma- or space-separated list of merge files to interleave round-robin.
 - **`--merge-unit=BITS`**: Size of merge units in bits (default: 8).
 - **`--merge-copy-first=BITS`**: Copies an initial bit header/preamble from the merge file *before* starting the interleaved loop.
+- **`--drop-partial-eof`** (aliases: `--drop-trailing-bits`, `--no-pad-eof`): Discards incomplete trailing bits at EOF instead of zero-padding them into a synthetic extra unit.
+- **`--merge-drop-partial-eof`**: Discards incomplete trailing bits at EOF in the merge stream.
 
 ### Example: Hex Dump with Interleaved Memory Addresses
 
@@ -490,6 +495,18 @@ Output:
 ```
 000 72 001 6f 002 6f 003 74 004 3a 005 78 006 3a 007 30
 008 3a 009 30 00a 3a 00b 72 00c 6f 00d 6f 00e 74 00f 3a
+```
+
+### Example: Multi-File Round-Robin Interleaving
+
+Interleave primary stream units with units from two independent secondary streams:
+
+```bash
+bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
+    --merge-file=ch1.bin --merge-file=ch2.bin --output-hex
+# or equivalently:
+bdd --input-counter --count=2 --input-unit=8 --output-unit=8 \
+    --merge-files=ch1.bin,ch2.bin --output-hex
 ```
 
 ---
@@ -513,6 +530,7 @@ Input Unit & Raw Unit Options:
       --input-raw-unit <BITS>      Size of repeating raw container/frame in bits
       --input-offset <BITS>        Bit offset of unit inside raw unit [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
+      --drop-partial-eof           Discard incomplete trailing bits at EOF instead of zero-padding
       --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
       --input-no-seek              Disable seeking specifically on primary input
       --input-use-seek             Explicitly enable seeking on input (default: true)
@@ -578,7 +596,8 @@ Demuxing & Channel Splitting:
       --input-repeat <COUNT>       Repeat input stream N times (0 = infinite)
 
 Merge Options:
-      --merge-file <PATH>          Interleave stream from secondary file
+      --merge-file <PATH>          Interleave stream from secondary file (repeatable for N-way merge)
+      --merge-files <PATHS>        Comma- or space-separated list of merge files
       --merge-unit <BITS>          Bit width of each merge unit [default: 8]
       --merge-skip-bits <BITS>     Initial bit offset in merge file [default: 0]
       --merge-skip-units <UNITS>   Skip initial N units in merge file [default: 0]
@@ -586,6 +605,7 @@ Merge Options:
       --merge-copy-first <BITS>    Copy initial header bits from merge file first
       --merge-raw-unit <BITS>      Size of repeating merge container in bits
       --merge-offset <BITS>        Bit offset of unit inside merge raw unit [default: 0]
+      --merge-drop-partial-eof     Discard incomplete trailing bits at EOF in merge stream
       --merge-no-seek              Disable seeking specifically on merge file
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)
 

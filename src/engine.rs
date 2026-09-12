@@ -62,35 +62,34 @@ fn run_pipeline_internal(
         in_unit_size
     };
 
-    let mut merge_stream: Option<FileInputStream<BddReader>> =
-        if let Some(ref mfile) = config.merge_file {
-            let reader = if mfile == "-" {
-                BddReader::from_stdin(config.merge_use_seek)
-            } else {
-                match File::open(mfile) {
-                    Ok(f) => BddReader::from_file(f, config.merge_use_seek),
-                    Err(_) => {
-                        return Err(BddError::CannotOpenMergeFile(mfile.clone()));
-                    }
-                }
-            };
-            let m_unit = config.merge_unit.unwrap_or(8);
-            let stream_conf = StreamConfig {
-                skip_bits: config.merge_skip_bits,
-                skip_units: config.merge_skip_units,
-                gap: config.merge_gap,
-                assert_aligned: config.merge_assert_aligned,
-                reverse_bytes: config.merge_reverse_bytes,
-                reverse_unit: config.merge_reverse_unit,
-                unit_size: m_unit,
-                seek_allowed: config.merge_use_seek,
-            };
-            let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
-            ms.do_skip();
-            Some(ms)
+    let mut merge_streams: Vec<FileInputStream<BddReader>> = Vec::new();
+    for mfile in &config.merge_files {
+        let reader = if mfile == "-" {
+            BddReader::from_stdin(config.merge_use_seek)
         } else {
-            None
+            match File::open(mfile) {
+                Ok(f) => BddReader::from_file(f, config.merge_use_seek),
+                Err(_) => {
+                    return Err(BddError::CannotOpenMergeFile(mfile.clone()));
+                }
+            }
         };
+        let m_unit = config.merge_unit.unwrap_or(8);
+        let stream_conf = StreamConfig {
+            skip_bits: config.merge_skip_bits,
+            skip_units: config.merge_skip_units,
+            gap: config.merge_gap,
+            assert_aligned: config.merge_assert_aligned,
+            drop_partial_eof: config.merge_drop_partial_eof,
+            reverse_bytes: config.merge_reverse_bytes,
+            reverse_unit: config.merge_reverse_unit,
+            unit_size: m_unit,
+            seek_allowed: config.merge_use_seek,
+        };
+        let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
+        ms.do_skip();
+        merge_streams.push(ms);
+    }
 
     // Build manipulation pipeline: ordered from CLI arguments if available, else from flags
     let mut manipulators: Vec<Box<dyn TupleManipulator>> = if !config.raw_args.is_empty() {
@@ -240,7 +239,7 @@ fn run_pipeline_internal(
         }
     }
 
-    if let Some(ref mut ms) = merge_stream {
+    if let Some(ms) = merge_streams.first_mut() {
         if config.merge_copy_first > 0 {
             let bits = ms.read_bits(config.merge_copy_first as usize);
             if let Some(ref mut sink) = unit_sink {
@@ -307,7 +306,8 @@ fn run_pipeline_internal(
                     sink.write_bits(unit, out_unit_size)?;
                 }
             }
-            if let Some(ref mut ms) = merge_stream {
+            let mut premature_eof = false;
+            for ms in &mut merge_streams {
                 let m_unit = ms.config.unit_size;
                 match ms.next_unit()? {
                     Some(u) => {
@@ -317,9 +317,13 @@ fn run_pipeline_internal(
                     }
                     None => {
                         eprintln!("Premature end of merge file");
+                        premature_eof = true;
                         break;
                     }
                 }
+            }
+            if premature_eof {
+                break;
             }
         }
     } else {
@@ -355,6 +359,7 @@ fn run_pipeline_internal(
                 skip_units: config.input_skip_units,
                 gap: config.input_gap,
                 assert_aligned: config.input_assert_aligned,
+                drop_partial_eof: config.input_drop_partial_eof,
                 reverse_bytes: config.input_reverse_bytes,
                 reverse_unit: config.input_reverse_unit,
                 unit_size: in_unit_size,
@@ -417,7 +422,8 @@ fn run_pipeline_internal(
                 }
             }
 
-            if let Some(ref mut ms) = merge_stream {
+            let mut premature_eof = false;
+            for ms in &mut merge_streams {
                 let m_unit = ms.config.unit_size;
                 match ms.next_unit()? {
                     Some(u) => {
@@ -427,9 +433,13 @@ fn run_pipeline_internal(
                     }
                     None => {
                         eprintln!("Premature end of merge file");
+                        premature_eof = true;
                         break;
                     }
                 }
+            }
+            if premature_eof {
+                break;
             }
         }
     }
