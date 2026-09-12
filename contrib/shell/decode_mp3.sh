@@ -24,9 +24,8 @@ decode_frame() {
     local offset="$1"
     local label="$2"
     echo "--- ${label} (Byte Offset: ${offset}) ---"
-    "${BDD}" --input-file="${INPUT_FILE}" \
-            --input-skip-bits="${offset}B" \
-            --input-pattern="11U2U2U1U4U2U1U1U2U2U1U1U2U" \
+    "${BDD}" "${offset}B:32 -> 32" "11U2U2U1U4U2U1U1U2U2U1U1U2U" \
+            --input-file="${INPUT_FILE}" \
             --count=1 \
             --output-json | \
     jq -r '
@@ -43,4 +42,4 @@ decode_frame() {
 }
 
 decode_frame "0" "Frame 0 (First Frame)"
-decode_frame "417" "Frame 1 (Fast-seeked via --input-skip-bits=417B)"
+decode_frame "417" "Frame 1 (Fast-seeked via stream pattern 417B:32 -> 32)"

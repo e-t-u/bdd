@@ -117,18 +117,17 @@ echo "Packet #1: DNS Query over UDP (Offset 0B, 32 bytes total)"
 jq -r "${JQ_IP_HELPER}"'
   "  [IP Layer]  \(.src_ip | to_ip) -> \(.dst_ip | to_ip) | Total Len: \(.total_length)B | Proto: UDP (\(.protocol))"
 '
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=20B \
-        --count=1 \
+"${BDD}" "20B:64 -> 64" \
         --preset=udp-header \
+        --input-file="${PACKETS_SAMPLE}" \
+        --count=1 \
         --output-json \
         --json-object | \
 jq -r '
   "  [UDP Layer] Port: \(.src_port) -> \(.dst_port) | Datagram Len: \(.length)B"
 '
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=28B \
-        --input-pattern="dns_id:16U,flags:16U" \
+"${BDD}" "28B:32 -> 32" "dns_id:16U,flags:16U" \
+        --input-file="${PACKETS_SAMPLE}" \
         --count=1 \
         --output-json \
         --json-object | \
@@ -137,19 +136,19 @@ jq -r '
 '
 
 echo -e "\nPacket #2: TCP SYN Handshake (Offset 32B, 40 bytes total)"
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=32B \
-        --count=1 \
+"${BDD}" "32B:160 -> 160" \
         --preset=ipv4-header \
+        --input-file="${PACKETS_SAMPLE}" \
+        --count=1 \
         --output-json \
         --json-object | \
 jq -r "${JQ_IP_HELPER}"'
   "  [IP Layer]  \(.src_ip | to_ip) -> \(.dst_ip | to_ip) | Total Len: \(.total_length)B | Proto: TCP (\(.protocol))"
 '
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=52B \
-        --count=1 \
+"${BDD}" "52B:160 -> 160" \
         --preset=tcp-header \
+        --input-file="${PACKETS_SAMPLE}" \
+        --count=1 \
         --output-json \
         --json-object | \
 jq -r '
@@ -157,27 +156,26 @@ jq -r '
 '
 
 echo -e "\nPacket #3: HTTP GET Request (Offset 72B, 58 bytes total)"
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=72B \
-        --count=1 \
+"${BDD}" "72B:160 -> 160" \
         --preset=ipv4-header \
+        --input-file="${PACKETS_SAMPLE}" \
+        --count=1 \
         --output-json \
         --json-object | \
 jq -r "${JQ_IP_HELPER}"'
   "  [IP Layer]  \(.src_ip | to_ip) -> \(.dst_ip | to_ip) | Total Len: \(.total_length)B | Proto: TCP (\(.protocol))"
 '
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=92B \
-        --count=1 \
+"${BDD}" "92B:160 -> 160" \
         --preset=tcp-header \
+        --input-file="${PACKETS_SAMPLE}" \
+        --count=1 \
         --output-json \
         --json-object | \
 jq -r '
   "  [TCP Layer] Port: \(.src_port) -> \(.dst_port) | Seq: \(.seq_num) | ACK: \(.ack) | PSH: \(.psh)"
 '
-"${BDD}" --input-file="${PACKETS_SAMPLE}" \
-        --input-skip-bits=112B \
-        --input-pattern="payload:144C" \
+"${BDD}" "112B:144 -> 144" "payload:144C" \
+        --input-file="${PACKETS_SAMPLE}" \
         --count=1 \
         --output-json \
         --json-object | \

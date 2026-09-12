@@ -73,38 +73,41 @@ Standard Unix tools cannot inspect MP3 frame headers because fields do not align
   `11U` (Syncword `0x7FF`) `2U` (MPEG Version) `2U` (Layer) `1U` (CRC Protection) `4U` (Bitrate Index) `2U` (Sample Rate Index) `1U` (Padding) `1U` (Private) `2U` (Channel Mode) `2U` (Mode Extension) `1U` (Copyright) `1U` (Original) `2U` (Emphasis)
 - **CLI Pattern**:
   ```bash
-  bdd --input-pattern="11U2U2U1U4U2U1U1U2U2U1U1U2U" --count=1 --output-json < sample.mp3
+  bdd "11U2U2U1U4U2U1U1U2U2U1U1U2U" --count=1 --output-json < sample.mp3
   ```
 - **$O(1)$ Frame Seeking**:
   ```bash
   # Jump directly to frame 2 at byte 417:
-  bdd --input-file=sample.mp3 --input-skip-bits=417B --input-pattern="11U2U2U1U4U2U1U1U2U2U1U1U2U" --count=1 --output-json
+  bdd "417B:32 -> 32" "11U2U2U1U4U2U1U1U2U2U1U1U2U" --count=1 --output-json < sample.mp3
   ```
 
 ---
 
 ### 2. MPEG-2 Transport Stream (MPEG-TS)
 MPEG-TS uses repeating 188-byte containers (1504 bits). The 4-byte header contains an unaligned **13-bit Packet Identifier (PID)**:
-- **Header Pattern**: `8U1U1U1U13U2U2U4U1472x` (Sync `0x47`, TEI, PUSI, Priority, **13-bit PID**, Scrambling, Adaptation, Continuity Counter, plus 184-byte payload skip).
-- **Container Stride & Offset**:
+- **Header Pattern**: Unpack the 32-bit header from each 188-byte packet while discarding the 184-byte payload automatically:
   ```bash
-  # Extract only the 13-bit PID from every 188-byte packet:
-  bdd --input-raw-unit=1504 --input-offset=11 --input-unit=13 --output-unit=13 --output-integers < sample.ts
+  bdd "188B[0:32] -> 32" 8U1U1U1U13U2U2U4U --count=4 --output-json < sample.ts
+  ```
+- **Direct Container PID Extraction**:
+  Extract only the 13-bit PID (bits 11..24) from every 188-byte container with zero manual bitmasking or post-gap math:
+  ```bash
+  bdd "188B[11:13] -> 13" --output-integers < sample.ts
   ```
 
 ---
 
 ### 3. WAV / RIFF Audio & Multi-Channel Demuxing
 - **Stereo Demuxing**:
-  Demux interleaved 16-bit stereo PCM into two independent mono audio files in a single pass:
+  Skip the 44-byte RIFF header, frame into 32-bit stereo pairs (two 16-bit signed PCM samples), and demux into two independent mono audio files in a single pass:
   ```bash
-  bdd --input-file=sample.wav --input-skip-bits=352 --input-little-endian \
-      --input-pattern="16S16S" --demux-files="left.raw,right.raw"
+  bdd "44B:32 -> 32" 16S16S --input-little-endian \
+      --demux-files="left.raw,right.raw" < sample.wav
   ```
-- **24-bit PCM Downsampling**:
-  Read non-standard 24-bit signed integers (`24S`), right-shift 8 bits, and output 16-bit signed PCM:
+- **24-bit PCM Downsampling via Container Slicing**:
+  Directly slice the most significant 16 bits (`[0:16]`) of each 24-bit PCM sample without needing manual arithmetic shifts:
   ```bash
-  bdd --input-file=sample_24bit.raw --input-pattern="24S" --remove-right=0,8 --output-unit=16 --output-tuples
+  bdd "24[0:16] -> 16" 16S --output-tuples < sample_24bit.raw
   ```
 
 ---
@@ -113,21 +116,23 @@ MPEG-TS uses repeating 188-byte containers (1504 bits). The 4-byte header contai
 - **MP4 Box Walking**:
   Inspect nested 32-bit big-endian length and 4-byte FourCC ASCII box headers:
   ```bash
-  bdd --input-pattern="32U32C" --count=1 --output-json < movie.mp4
+  bdd 32U32C --count=1 --output-json < movie.mp4
+  # Or seek directly to box offset:
+  bdd "28B:64 -> 64" 32U32C --count=1 --output-json < movie.mp4
   ```
 - **H.264 NAL Unit Headers**:
-  Decode `1U` (Forbidden Zero), `2U` (NAL Reference IDC), `5U` (NAL Unit Type: SPS=7, PPS=8, IDR=5, Slice=1):
+  Decode `32U` (Length), `1U` (Forbidden Zero), `2U` (NAL Reference IDC), `5U` (NAL Unit Type: SPS=7, PPS=8, IDR=5, Slice=1):
   ```bash
-  bdd --input-skip-bits=36B --input-pattern="32U1U2U5U" --output-json < movie.mp4
+  bdd "36B:40 -> 40" 32U1U2U5U --output-json < movie.mp4
   ```
 
 ---
 
 ### 5. JPEG SOF0 Chroma Subsampling Nibbles
 In baseline JPEG (`0xFFC0`), the horizontal and vertical chroma subsampling factors (e.g., 2x2 for 4:2:0) are stored as **4-bit nibbles** (`4U4U`):
-- **Pattern with Repetition Multiplier**:
+- **Stream Pattern with Repetition Multiplier**:
   ```bash
-  bdd --input-skip-bits=24B --input-pattern="8U16U16U8U3*(8U4U4U8U)" --count=1 --output-json < sample.jpg
+  bdd "24B:120 -> 120" "8U16U16U8U3*(8U4U4U8U)" --count=1 --output-json < sample.jpg
   ```
 
 ---
@@ -146,17 +151,17 @@ In baseline JPEG (`0xFFC0`), the horizontal and vertical chroma subsampling fact
 - **Safetensors Inspection**:
   ```bash
   # 1. Read 64-bit LE JSON header length:
-  HEADER_LEN=$(bdd --input-pattern="8*8U" --count=1 --output-json < model.safetensors | jq '.[0] + .[1]*256 + .[2]*65536 + .[3]*16777216')
+  HEADER_LEN=$(bdd "8*8U" --count=1 --output-json < model.safetensors | jq '.[0] + .[1]*256 + .[2]*65536 + .[3]*16777216')
   # 2. Seek directly to tensor offset in O(1) time and unpack FP8 weights:
-  bdd --input-skip-bits=$(( 8 + HEADER_LEN ))B --input-pattern=8E --output-json < model.safetensors
+  bdd "$(( 8 + HEADER_LEN ))B:8 -> 8" 8E --output-json < model.safetensors
   ```
 - **NVIDIA Blackwell NVFP4 (Sub-Byte 4E4E)**:
   ```bash
-  bdd --input-pattern="4E4E" --output-json < sample_nvfp4.bin
+  bdd 4E4E --output-json < sample_nvfp4.bin
   ```
 - **OCP FP6 (Unaligned 4*6E across 24 bits)**:
   ```bash
-  bdd --input-pattern="4*6E" --output-json < sample_fp6.bin
+  bdd "4*6E" --output-json < sample_fp6.bin
   ```
 
 ---
@@ -169,7 +174,7 @@ Network headers are strictly big-endian (network byte order) with MSB-first bit 
   - **Bitfield**: `version:4U,ihl:4U,dscp:6U,ecn:2U,total_length:16U,id:16U,flags:3U,frag_offset:13U,ttl:8U,protocol:8U,checksum:16U,src_ip:32U,dst_ip:32U`
   - **CLI Command**:
     ```bash
-    bdd --input-file=sample_ipv4.bin --preset=ipv4-header --output-json --json-object
+    bdd --preset=ipv4-header --output-json --json-object < sample_ipv4.bin
     ```
 
 - **RFC 768 UDP Datagram Header (64 bits = 8 bytes)**:
@@ -177,7 +182,7 @@ Network headers are strictly big-endian (network byte order) with MSB-first bit 
   - **Bitfield**: `src_port:16U,dst_port:16U,length:16U,checksum:16U`
   - **CLI Command**:
     ```bash
-    bdd --input-file=sample_udp.bin --preset=udp-header --output-json --json-object
+    bdd --preset=udp-header --output-json --json-object < sample_udp.bin
     ```
 
 - **RFC 793 TCP Base Segment Header (160 bits = 20 bytes)**:
@@ -186,19 +191,20 @@ Network headers are strictly big-endian (network byte order) with MSB-first bit 
   - **Sub-byte Flags**: Every control flag (`ns`, `cwr`, `ece`, `urg`, `ack`, `psh`, `rst`, `syn`, `fin`) is isolated into an individual boolean/integer field.
   - **CLI Command**:
     ```bash
-    bdd --input-file=sample_tcp.bin --preset=tcp-header --output-json --json-object
+    bdd --preset=tcp-header --output-json --json-object < sample_tcp.bin
     ```
 
 - **Multi-Packet Capture Stream Dissection**:
-  Combine container offsets (`--input-skip-bits`) with presets to dissect sequential protocols within captures:
+  Combine stream offset patterns (`<offset>B:<size> -> <size>`) with presets or named fields:
   ```bash
   # Packet 1 (DNS over UDP at offset 0):
-  bdd --input-file=sample_packets.bin --input-skip-bits=0B --count=1 --preset=ipv4-header --output-json
-  bdd --input-file=sample_packets.bin --input-skip-bits=20B --count=1 --preset=udp-header --output-json
+  bdd --preset=ipv4-header --count=1 --output-json < sample_packets.bin
+  bdd "20B:64 -> 64" --preset=udp-header --count=1 --output-json < sample_packets.bin
+  bdd "28B:32 -> 32" "dns_id:16U,flags:16U" --count=1 --output-json --json-object < sample_packets.bin
 
   # Packet 2 (TCP SYN at offset 32B):
-  bdd --input-file=sample_packets.bin --input-skip-bits=32B --count=1 --preset=ipv4-header --output-json
-  bdd --input-file=sample_packets.bin --input-skip-bits=52B --count=1 --preset=tcp-header --output-json
+  bdd "32B:160 -> 160" --preset=ipv4-header --count=1 --output-json < sample_packets.bin
+  bdd "52B:160 -> 160" --preset=tcp-header --count=1 --output-json < sample_packets.bin
   ```
 
 ---

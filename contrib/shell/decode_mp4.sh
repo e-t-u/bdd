@@ -24,9 +24,8 @@ OFFSET=0
 FILE_SIZE=$(stat -c%s "${INPUT_FILE}")
 
 while [ "$OFFSET" -lt "$FILE_SIZE" ]; do
-    BOX_JSON=$("${BDD}" --input-file="${INPUT_FILE}" \
-                       --input-skip-bits="${OFFSET}B" \
-                       --input-pattern="32U32C" \
+    BOX_JSON=$("${BDD}" "${OFFSET}B:64 -> 64" "32U32C" \
+                       --input-file="${INPUT_FILE}" \
                        --count=1 \
                        --output-json)
     
@@ -49,9 +48,8 @@ NAL_OFFSET=36
 MDAT_END=68
 
 while [ "$NAL_OFFSET" -lt "$MDAT_END" ]; do
-    NAL_JSON=$("${BDD}" --input-file="${INPUT_FILE}" \
-                       --input-skip-bits="${NAL_OFFSET}B" \
-                       --input-pattern="32U1U2U5U" \
+    NAL_JSON=$("${BDD}" "${NAL_OFFSET}B:40 -> 40" "32U1U2U5U" \
+                       --input-file="${INPUT_FILE}" \
                        --count=1 \
                        --output-json)
     

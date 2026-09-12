@@ -679,6 +679,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             pos_in_pat = stream_pat.take();
         }
     }
+    let cli_explicit_input_unit = cli.input_unit.is_some();
+    let cli_explicit_output_unit = cli.output_unit.is_some();
 
     if let Some(ref sp) = stream_pat {
         let parsed = crate::stream_pattern::parse_stream_io_pattern(sp)?;
@@ -834,11 +836,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     };
 
     if cli.input_pattern.is_some() && cli.input_unit.is_some() {
-        crate::diag::warn("--input-pattern overwrites --input-unit");
+        if cli_explicit_input_unit {
+            crate::diag::warn("--input-pattern overwrites --input-unit");
+        }
         cli.input_unit = None;
     }
     if cli.output_pattern.is_some() && cli.output_unit.is_some() {
-        crate::diag::warn("--output-pattern overwrites --output-unit");
+        if cli_explicit_output_unit {
+            crate::diag::warn("--output-pattern overwrites --output-unit");
+        }
         cli.output_unit = None;
     }
 

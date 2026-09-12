@@ -113,9 +113,13 @@ pub fn format_summaries() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_warning_deduplication() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         set_quiet(false);
         reset();
 
@@ -141,6 +145,7 @@ mod tests {
 
     #[test]
     fn test_quiet_mode_suppression() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         reset();
         set_quiet(true);
 

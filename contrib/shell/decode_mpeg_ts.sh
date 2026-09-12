@@ -21,8 +21,10 @@ echo "                 13U (PID) 2U (Scrambling) 2U (Adaptation) 4U (Counter)"
 echo "================================================================="
 
 echo -e "\n--- Step 1: Full Packet Header Decoding (First 4 Packets) ---"
+echo "Command: bdd \"188B[0:32] -> 32\" 8U1U1U1U13U2U2U4U --count=4 --output-json"
 "${BDD}" --input-file="${INPUT_FILE}" \
-        --input-pattern="8U1U1U1U13U2U2U4U1472x" \
+        "188B[0:32] -> 32" \
+        "8U1U1U1U13U2U2U4U" \
         --count=4 \
         --output-json | \
 jq -r '
@@ -33,14 +35,11 @@ jq -r '
   "• Packet #\(.[7]): Sync=0x\(.[0] | tostring) (0x47) | PID=\(.[4]) (0x\(.[4] | tostring)) [\($desc)] | PUSI=\(.[2]) | Continuity=\(.[7])"
 '
 
-echo -e "\n--- Step 2: Extracting 13-bit PIDs directly with Container Offset ---"
-echo "Command: bdd --input-raw-unit=1504 --input-offset=11 --input-unit=13 --output-unit=13 --output-integers"
+echo -e "\n--- Step 2: Extracting 13-bit PIDs directly with Container Stream Pattern ---"
+echo "Command: bdd \"188B[11:13] -> 13\" --output-integers"
 echo "Histogram of PIDs found in stream:"
 "${BDD}" --input-file="${INPUT_FILE}" \
-        --input-raw-unit=1504 \
-        --input-offset=11 \
-        --input-unit=13 \
-        --output-unit=13 \
+        "188B[11:13] -> 13" \
         --output-integers | \
 sort -n | uniq -c | \
 while read -r count pid; do
