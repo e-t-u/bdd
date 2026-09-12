@@ -740,7 +740,7 @@ But what if you encounter an unfamiliar proprietary file format, a corrupted fir
 ### Built-in Format Presets (`--preset`, `--list-presets`)
 Instead of manually calculating complex bit offsets, standard protocol and AI weight presets configure input patterns, unit widths, and field names in one step:
 ```bash
-# List all 13 standard presets:
+# List all 19 standard presets:
 bdd --list-presets
 ```
 Standard presets include:
@@ -759,6 +759,10 @@ Standard presets include:
 - `udp-header` (UDP Datagram Header, 64 bits / 8 bytes)
 - `tcp-header` (TCP Segment Header with discrete sub-byte flags, 160 bits / 20 bytes)
 - `riscv-r-type` (RISC-V 32-bit R-type Instruction, 32 bits)
+- `proc-pagemap` (Linux `/proc/[pid]/pagemap` 64-bit page table entry: present, swapped, exclusive, dirty, PFN)
+- `proc-auxv` (Linux ELF 64-bit Auxiliary Vector entry: type, value)
+- `pci-config` (PCI Configuration Space 16-byte base header: vendor, device, command, status, class)
+- `netlink-proc-event` (Linux Netlink Process Connector `proc_event` header: timestamp, CPU, what)
 
 ### Keyed JSON Objects (`--json-object`, `--json-fields`)
 Pair named patterns or presets with `--json-object` to emit newline-delimited JSON dictionaries where keys match field names:
@@ -1111,13 +1115,49 @@ General:
   -V, --version                    Print version
 ```
 
+---
+
+## 14. Real-World Applications & Contributed Tooling (`contrib/`)
+
+The [`contrib/`](contrib/) directory provides production-grade reference implementations, standalone shell scripts, Python ctypes tools, and native C programs demonstrating `bdd` across media streaming, AI weight transcoding, network analysis, cryptographic memory forensics, and Linux kernel telemetry:
+
+- **Multimedia Containers & Audio Bitstreams ([`contrib/shell/decode_*.sh`](contrib/shell/), [`contrib/c/decode_media.c`](contrib/c/decode_media.c), [`contrib/python/decode_media.py`](contrib/python/decode_media.py))**:
+  - **MP3 Frame Dissection**: Slices 32-bit unaligned MPEG frame headers (`11U2U2U1U4U2U1U1U2U2U1U1U2U`) and performs $O(1)$ hardware seeks between frames.
+  - **MPEG-2 Transport Streams (MPEG-TS)**: Extracts 13-bit PIDs from repeating 188-byte containers (`188B[11:13] -> 13`) in a single pass without manual bitmasking.
+  - **RIFF / WAV Audio Demuxing**: Splits interleaved 32-bit stereo PCM into two independent mono audio files in a single pass and downsamples 24-bit audio to 16-bit.
+  - **MP4 & H.264 NAL Units**: Traverses ISO-BMFF box hierarchies and unpacks AVC NAL unit headers (`32U1U2U5U`).
+  - **JPEG Chroma Subsampling**: Slices unaligned 4-bit chroma nibbles (`4U4U`) from SOF0 baseline headers.
+
+- **AI Microscaling Floating-Point Codecs ([`contrib/shell/decode_ai_weights.sh`](contrib/shell/decode_ai_weights.sh), [`contrib/c/decode_ai_weights.c`](contrib/c/decode_ai_weights.c), [`contrib/python/decode_ai_weights.py`](contrib/python/decode_ai_weights.py))**:
+  - Unpacks sub-byte NVIDIA Blackwell NVFP4 (`4E4E`), OCP Microscaling FP6 (`4*6E`), FP8 (E4M3 / E5M2), and BF16 weights into standard IEEE floats.
+  - Slices Hugging Face `.safetensors` headers and unpacks quantized tensors in $O(1)$ seek time with zero Python ML framework dependencies.
+
+- **Network Packet Protocol Dissection ([`contrib/shell/decode_network.sh`](contrib/shell/decode_network.sh), [`contrib/c/decode_network.c`](contrib/c/decode_network.c), [`contrib/python/decode_network.py`](contrib/python/decode_network.py))**:
+  - Slices RFC 791 IPv4 20-byte base headers, RFC 768 UDP datagrams, and RFC 793 TCP segment headers with discrete 1-bit control flags (`ns`, `cwr`, `ece`, `urg`, `ack`, `psh`, `rst`, `syn`, `fin`).
+
+- **System Memory Forensic Key Discovery ([`contrib/shell/stream_memory_keys.sh`](contrib/shell/stream_memory_keys.sh), [`contrib/python/stream_memory_keys.py`](contrib/python/stream_memory_keys.py))**:
+  - Streams raw memory dumps (`/dev/mem`, `/proc/kcore`, or `/proc/[pid]/mem`) in discrete 256-bit units (`--input-unit=256 --probe-keys=256`) to locate high-entropy cryptographic keys (AES-256, ChaCha20, Ed25519) and active state.
+
+- **Linux Kernel Structures & System Telemetry ([`contrib/shell/bdd_kernel_inspect.sh`](contrib/shell/bdd_kernel_inspect.sh), [`contrib/python/bdd_ps.py`](contrib/python/bdd_ps.py), [`contrib/python/bdd_top.py`](contrib/python/bdd_top.py))**:
+  - **Virtual Memory Page Tables (`/proc/[pid]/pagemap`)**: Slices 64-bit page table entries to calculate true Unique Set Size (USS / exclusive private memory), dirty pages, and swapped pages.
+  - **ELF Auxiliary Vectors (`/proc/[pid]/auxv`)**: Unpacks 16-byte `Elf64_auxv_t` key-value pairs (`AT_CLKTCK` timer frequency, `AT_PAGESZ`, `AT_SECURE` SUID flag).
+  - **Signal Masks (`/proc/[pid]/status`)**: Decodes 64-bit hex masks into human-readable active POSIX signal lists (`INT`, `QUIT`, `TERM`, `WINCH`).
+  - **PCI Hardware Configuration Space (`/sys/bus/pci/devices/*/config`)**: Unpacks Vendor, Device, Command/Status registers, and Class codes without `lspci`.
+  - **Interactive Terminal Top Dashboard (`bdd_top.py`)**: Full-screen curses-style system monitor with per-core CPU meters and bit-sliced USS memory metrics.
+
+- **Event-Driven Process Lifecycle Monitoring ([`contrib/python/bdd_netlink_proc.py`](contrib/python/bdd_netlink_proc.py))**:
+  - Streams kernel process lifecycle events (`FORK`, `EXEC`, `EXIT`, `UID/GID`, `COMM` thread renames) via `NETLINK_CONNECTOR` (`CN_IDX_PROC`) without polling.
+  - Hardened against burst drops under heavy build concurrency with an 8MB socket buffer, `NETLINK_NO_ENOBUFS` socket option, and concatenated multi-message packet draining.
+
+Detailed documentation, reproducible test data files, and execution instructions are available in [`contrib/README.md`](contrib/README.md).
+
 #### Building, Verifying and Distributing
 
-For developers extending `bdd`, compiling lean embedded binaries, or packaging for Linux distributions, Chapter 14 details the verification test suite, modular feature flags, documentation compiler, and release tooling.
+For developers extending `bdd`, compiling lean embedded binaries, or packaging for Linux distributions, Chapter 15 details the verification test suite, modular feature flags, documentation compiler, and release tooling.
 
 ---
 
-## 14. Development, Testing, Packaging & Releases
+## 15. Development, Testing, Packaging & Releases
 
 Run the test suite:
 

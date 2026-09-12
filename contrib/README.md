@@ -37,7 +37,7 @@ contrib/
 │   ├── decode_media.py         # MP3, MPEG-TS, JPEG, and H.264 NAL parsing
 │   ├── decode_ai_weights.py    # Safetensors inspection, NVFP4, and FP6 decoding
 │   ├── decode_network.py       # IPv4, UDP, and TCP packet dissection and IP formatting
-│   ├── bdd_ps.py               # Process status inspector slicing /proc/[pid]/stat structures
+│   ├── bdd_ps.py               # Process status inspector slicing /proc/[pid]/pagemap, auxv & signal masks
 │   ├── bdd_top.py              # Interactive top-like process monitor using bit-sliced metrics
 │   ├── bdd_netlink_proc.py     # Linux Netlink process connector socket monitor
 │   └── stream_memory_keys.py   # Stream raw memory (physical, kernel, PID) and probe crypto keys
@@ -265,6 +265,120 @@ The contributed tools (`contrib/shell/stream_memory_keys.sh` and `contrib/python
   # Stream 4096 blocks of 32 bytes (256 bits each) directly into bdd:
   dd if=/proc/kcore bs=32 count=4096 status=none | \
       bdd --input-unit=256 --probe-keys=256 --output-json
+  ```
+
+---
+
+### 9. Linux Kernel Structures & Hardware Telemetry (`/proc` & `/sys`)
+Linux exposes raw kernel binary structures, MMU page translation tables, and bus controller registries via virtual filesystems (`/proc` and `/sys`). Traditional shell utilities cannot unpack bitfields like 64-bit pagemap entries (which contain individual 1-bit flags for presence, swap, dirty state, exclusive ownership, and 55-bit Physical Frame Numbers) or 16-byte ELF auxiliary vectors without compiling custom C programs.
+
+`bdd` provides native presets and $O(1)$ hardware seeking to slice these structures directly from the command line or Python:
+
+- **Virtual Memory Page Table Slicing (`/proc/[pid]/pagemap`)**:
+  - **Preset**: `--preset=proc-pagemap`
+  - **Bitfield**: `present:1b,swapped:1b,file_page:1b,3x,uffd_wp:1b,exclusive:1b,soft_dirty:1b,pfn:55u`
+  - **Addressing & Seeking**: Each 4096-byte virtual page corresponds to one 64-bit entry in `pagemap`. Slicing any virtual address requires seeking to bit offset `(VADDR / 4096) * 64`:
+    ```bash
+    # Inspect 4 pages of the stack for PID 1234:
+    bdd --input-file="/proc/1234/pagemap" --input-skip-bits=OFFSET_BITS \
+        --preset=proc-pagemap --count=4 --output-json --json-object
+    ```
+  - **Memory Metrics**:
+    - `present=1, exclusive=1`: Unique Set Size (USS / private physical memory).
+    - `soft_dirty=1`: Page modified since last clear.
+    - `swapped=1`: Page swapped out to disk (PFN field contains swap type and swap offset).
+
+- **ELF Auxiliary Vector Traversal (`/proc/[pid]/auxv`)**:
+  - **Preset**: `--preset=proc-auxv`
+  - **Record Structure**: 16-byte pairs of `Elf64_auxv_t { uint64_t a_type; uint64_t a_val; }`.
+  - **Bitfield**: `val:64U,type:64U` with `--input-little-endian`
+  - **Key Variables**:
+    - `AT_CLKTCK` (type 17): Kernel clock ticks per second (used for exact CPU percentage calculations).
+    - `AT_PAGESZ` (type 6): System MMU page size (typically 4096 bytes).
+    - `AT_SECURE` (type 23): Setuid/privileged security execution flag.
+    - `AT_ENTRY` (type 9): ELF entry point address.
+  - **CLI Command**:
+    ```bash
+    bdd --input-file="/proc/self/auxv" --preset=proc-auxv --output-json --json-object
+    ```
+
+- **PCI Hardware Configuration Space (`/sys/bus/pci/devices/*/config`)**:
+  - **Preset**: `--preset=pci-config`
+  - **Bitfield**: `bist:8U,hdr_type:8U,latency:8U,cache_line:8U,class_code:8U,subclass:8U,prog_if:8U,rev_id:8U,status:16U,cmd:16U,device_id:16U,vendor_id:16U`
+  - **Hardware Telemetry**: Unpacks Vendor ID (e.g., `0x10de` NVIDIA, `0x8086` Intel), Device ID, Command/Status register flags, and PCI Class code without requiring external utilities like `lspci`.
+  - **CLI Command**:
+    ```bash
+    bdd --input-file="/sys/bus/pci/devices/0000:00:00.0/config" \
+        --preset=pci-config --output-json --json-object
+    ```
+
+- **Process Deep-Inspection Tool (`contrib/python/bdd_ps.py`)**:
+  Dissects `/proc/[pid]/pagemap` to calculate true Unique Set Size (USS), dirty pages, and shared pages, parses `/proc/[pid]/auxv` for timer clock ticks and SUID status, and decodes `/proc/[pid]/status` 64-bit signal masks (`SigPnd`, `SigBlk`, `SigIgn`, `SigCgt`) into human-readable POSIX signal names (`INT`, `QUIT`, `TERM`, `WINCH`):
+  ```bash
+  # Deep-inspect current running processes:
+  python3 contrib/python/bdd_ps.py
+
+  # Target a specific PID:
+  python3 contrib/python/bdd_ps.py --pid 1234
+
+  # Sort by Unique Set Size (USS / private memory):
+  python3 contrib/python/bdd_ps.py --sort uss
+
+  # Emit machine-readable JSON:
+  python3 contrib/python/bdd_ps.py --json
+  ```
+
+- **Interactive System & Process Monitor (`contrib/python/bdd_top.py`)**:
+  Full-screen terminal dashboard displaying real-time per-core CPU utilization meters, system RAM/Swap gauges, process thread counts, and bit-sliced USS memory metrics:
+  ```bash
+  # Launch interactive top monitor (refresh every 1.5s):
+  python3 contrib/python/bdd_top.py
+
+  # Set custom refresh interval:
+  python3 contrib/python/bdd_top.py --interval 0.5
+  ```
+  *Interactive Hotkeys:*
+  - `c`: Sort by CPU utilization (%)
+  - `m`: Sort by Resident Set Size (RSS)
+  - `u`: Sort by Unique Set Size (USS)
+  - `p`: Sort by Process ID (PID)
+  - `q`: Quit
+
+---
+
+### 10. Real-Time Process Lifecycle Event Streaming (`NETLINK_CONNECTOR`)
+Polling `/proc` to detect process creation or termination introduces CPU overhead, drains mobile battery, and misses ephemeral, short-lived processes (such as rapid compiler invocations, transient scripts, or malicious injection).
+
+Linux provides the **Netlink Process Connector** (`NETLINK_CONNECTOR = 11`, `CN_IDX_PROC = 1`, `CN_VAL_PROC = 1`), an event-driven multicast socket that streams binary notifications directly from the kernel scheduler whenever a process event occurs.
+
+- **Header Preset (`--preset=netlink-proc-event`)**:
+  Unpacks the 16-byte `proc_event` header from the Netlink message payload:
+  `timestamp_ns:64U,cpu:32U,what:32U` with `--input-little-endian`
+
+- **Process Event Types**:
+  - `FORK` (`0x0001`): Parent PID/TGID creates child PID/TGID.
+  - `EXEC` (`0x0002`): Process executes a new binary image (resolves new comm and command line).
+  - `EXIT` (`0x80000000`): Process terminates, emitting exit code, exit signal, and lifetime duration.
+  - `UID` (`0x0004`) / `GID` (`0x0040`): Privilege transitions (e.g. `setuid`, `sudo`, dropping capabilities).
+  - `COMM` (`0x0200`): Thread renaming (e.g. Rayon, Tokio, or Go worker pool threads).
+
+- **Zero-Drop High-Throughput Burst Handling**:
+  During heavy build workloads (e.g. `cargo build -j16`), the kernel can emit thousands of fork/exec/exit events per second, causing standard Netlink sockets to fail with `ENOBUFS` (Errno 105, buffer space exhausted).
+  `contrib/python/bdd_netlink_proc.py` eliminates drops through three kernel socket optimizations:
+  1. **8MB Socket Buffer**: Sets `SO_RCVBUF` to 8 MiB (`8 * 1024 * 1024`).
+  2. **`NETLINK_NO_ENOBUFS`**: Sets socket option `NETLINK_NO_ENOBUFS = 5` on protocol level `SOL_NETLINK = 270`, instructing the kernel to prioritize continuous streaming without raising fatal socket errors.
+  3. **Multi-Message Iteration**: Reads 64 KiB chunks and steps through concatenated `nlmsghdr` records using `NLMSG_ALIGN` / `NLMSG_NEXT` pointer arithmetic.
+
+- **Running the Monitor**:
+  ```bash
+  # Stream all process events in real time:
+  sudo python3 contrib/python/bdd_netlink_proc.py
+
+  # Filter specific lifecycle events (e.g., EXEC or FORK):
+  sudo python3 contrib/python/bdd_netlink_proc.py --event EXEC
+
+  # Stream machine-readable NDJSON for security telemetry / SIEM pipelines:
+  sudo python3 contrib/python/bdd_netlink_proc.py --json
   ```
 
 ---
