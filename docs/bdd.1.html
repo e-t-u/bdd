@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 02:19:04 2026 -->
+<!-- CreationDate: Sun Sep 13 02:26:06 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -816,120 +816,167 @@ from the output stream.</p>
 <p style="margin-left:9%;">--round=FIELD,LIMIT[,MODE] |
 --round=FIELD,MODE</p>
 
-<p style="margin-left:12%;">Rounds floating-point fields or
-bounds/clamps integer fields within [-LIMIT, LIMIT] (or [0,
-LIMIT] if unsigned). Visible alias: --cut-maxint. When LIMIT
-is omitted (e.g. --round=0,floor or
---round=0,round_ties_even), the rounding mode is applied
-directly without magnitude clamping. An optional MODE
-parameter may be appended using comma or colon delimiter
-(e.g. --round=0,127,wrap or --round=0,127:round_ties_even).
-Supported modes:</p>
+<p style="margin-left:12%;">Handles either upper-end range
+overflow (clamping, saturating, or wrapping high bits when
+LIMIT is specified) or lower-end precision reduction
+(floating-point rounding when MODE is specified). Visible
+alias: --cut-maxint.</p>
+
+<p style="margin-left:9%; margin-top: 1em">Note the
+distinction between cutting high bits versus cutting low
+bits:</p>
 
 <table width="100%" border="0" rules="none" frame="void"
        cellspacing="0" cellpadding="0">
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="9%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="88%">
 
 
-<p><b>saturate</b> or <b>clamp</b> (default): Clamps
-out-of-range values to MAXINT or -MAXINT.</p></td></tr>
+<p><b>Upper End (MSB Range Overflow):</b> When a value is
+too large to fit in a target container (e.g. 300 in an 8-bit
+byte), its most significant bits must be handled. This is
+not rounding; it is range bounding or saturation. Modes
+include <b>saturate</b> (clamp to LIMIT), <b>wrap</b>
+(truncate high bits via modulo), <b>zero</b>, and
+<b>drop</b>.</p> </td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="9%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="88%">
+
+
+<p><b>Lower End (LSB Precision Reduction):</b> When
+discarding fractional digits or least significant bits, bits
+are removed from the lower end. For floats, this applies
+true rounding (<b>floor</b>, <b>ceil</b>, <b>trunc</b>,
+<b>round</b>, or <b>round_ties_even</b>). For integers,
+shifting right (--remove-right) truncates low bits; to round
+instead of truncate, add a bias of half the divisor before
+shifting.</p> </td></tr>
+</table>
+
+<p style="margin-left:9%; margin-top: 1em">When LIMIT is
+omitted (e.g. --round=0,floor or --round=0,round_ties_even),
+the rounding mode is applied directly without magnitude
+clamping. An optional MODE parameter may be appended using
+comma or colon delimiter (e.g. --round=0,127,wrap or
+--round=0,127:round_ties_even). Supported modes:</p>
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p style="margin-top: 1em">&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
+
+
+<p style="margin-top: 1em"><b>saturate</b> or <b>clamp</b>
+(default when limit is specified): Clamps out-of-range
+values to LIMIT or -LIMIT.</p></td></tr>
+<tr valign="top" align="left">
+<td width="18%"></td>
+<td width="1%">
+
+
+<p>&bull;</p></td>
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>wrap</b> or <b>wrapping</b>: Wraps values around
-using modular arithmetic (modulo MAXINT+1 for unsigned, or
-across [-MAXINT, MAXINT] for signed).</p></td></tr>
+using modular arithmetic (modulo LIMIT+1 for unsigned, or
+across [-LIMIT, LIMIT] for signed).</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>zero</b> or <b>reset</b>: Replaces out-of-range
 values with zero.</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>drop</b> or <b>filter</b>: Discards the entire tuple
 from the output stream if value exceeds bounds.</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>trunc</b>: Truncates magnitude toward zero.</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>floor</b>: Rounds toward negative infinity.</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>ceil</b>: Rounds toward positive infinity.</p></td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>round</b>: Rounds to nearest neighbor, ties away from
 zero.</p> </td></tr>
 <tr valign="top" align="left">
-<td width="12%"></td>
+<td width="18%"></td>
 <td width="1%">
 
 
 <p>&bull;</p></td>
-<td width="1%"></td>
-<td width="86%">
+<td width="2%"></td>
+<td width="79%">
 
 
 <p><b>round_ties_even</b>: Rounds to nearest neighbor, ties
@@ -941,7 +988,7 @@ rounding).</p> </td></tr>
 when the position is counted from the end of the tuple. <br>
 --remove-right=FIELD,BITS</p>
 
-<p style="margin-left:12%;">If we want to output other bits
+<p style="margin-left:18%;">If we want to output other bits
 from the field than the rightmost ones, we can remove BITS
 rightmost bits from the field.</p>
 

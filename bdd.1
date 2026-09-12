@@ -430,13 +430,21 @@ Filters tuples based on a predicate condition where OP is one of ==, !=, <, <=, 
 
 .TP
 --round=FIELD,LIMIT[,MODE] | --round=FIELD,MODE
-Rounds floating-point fields or bounds/clamps integer fields within [-LIMIT, LIMIT] (or [0, LIMIT] if unsigned). Visible alias: \f(CR--cut-maxint\fR. When LIMIT is omitted (e.g. \f(CR--round=0,floor\fR or \f(CR--round=0,round_ties_even\fR), the rounding mode is applied directly without magnitude clamping. An optional MODE parameter may be appended using comma or colon delimiter (e.g. \f(CR--round=0,127,wrap\fR or \f(CR--round=0,127:round_ties_even\fR).
+Handles either upper-end range overflow (clamping, saturating, or wrapping high bits when LIMIT is specified) or lower-end precision reduction (floating-point rounding when MODE is specified). Visible alias: \f(CR--cut-maxint\fR.
+.PP
+Note the distinction between cutting high bits versus cutting low bits:
+.IP \(bu 2
+\fBUpper End (MSB Range Overflow):\fR When a value is too large to fit in a target container (e.g. 300 in an 8-bit byte), its most significant bits must be handled. This is not rounding; it is range bounding or saturation. Modes include \fBsaturate\fR (clamp to LIMIT), \fBwrap\fR (truncate high bits via modulo), \fBzero\fR, and \fBdrop\fR.
+.IP \(bu 2
+\fBLower End (LSB Precision Reduction):\fR When discarding fractional digits or least significant bits, bits are removed from the lower end. For floats, this applies true rounding (\fBfloor\fR, \fBceil\fR, \fBtrunc\fR, \fBround\fR, or \fBround_ties_even\fR). For integers, shifting right (\f(CR--remove-right\fR) truncates low bits; to round instead of truncate, add a bias of half the divisor before shifting.
+.PP
+When LIMIT is omitted (e.g. \f(CR--round=0,floor\fR or \f(CR--round=0,round_ties_even\fR), the rounding mode is applied directly without magnitude clamping. An optional MODE parameter may be appended using comma or colon delimiter (e.g. \f(CR--round=0,127,wrap\fR or \f(CR--round=0,127:round_ties_even\fR).
 Supported modes:
 .RS
 .IP \(bu 2
-\fBsaturate\fR or \fBclamp\fR (default): Clamps out-of-range values to MAXINT or -MAXINT.
+\fBsaturate\fR or \fBclamp\fR (default when limit is specified): Clamps out-of-range values to LIMIT or -LIMIT.
 .IP \(bu 2
-\fBwrap\fR or \fBwrapping\fR: Wraps values around using modular arithmetic (modulo MAXINT+1 for unsigned, or across [-MAXINT, MAXINT] for signed).
+\fBwrap\fR or \fBwrapping\fR: Wraps values around using modular arithmetic (modulo LIMIT+1 for unsigned, or across [-LIMIT, LIMIT] for signed).
 .IP \(bu 2
 \fBzero\fR or \fBreset\fR: Replaces out-of-range values with zero.
 .IP \(bu 2

@@ -415,7 +415,7 @@ Once unpacked into a tuple, fields can be transformed using pipeline manipulator
     - `--rearrange=1,0` $\to$ `[B, A]` *(drops field 2 entirely)*
     - `--rearrange=0,0,1` $\to$ `[A, A, B]` *(duplicates field 0)*
     - `--rearrange=-1` $\to$ `[C]` *(negative indices count backwards from the end: `-1` is last, `-2` second-to-last)*
-- **`--round=FIELD,LIMIT[,MODE]`** or **`--round=FIELD,MODE`** *(alias: `--cut-maxint`)*: Rounds floating-point fields or clamps/bounds integer fields within `[-LIMIT, LIMIT]` (or `[0, LIMIT]` if unsigned). `MODE` can be specified using comma or colon (e.g. `--round 0,floor` or `--round 0,127,wrap`). When `LIMIT` is omitted, the rounding mode is applied without magnitude clamping. Supported modes:
+- **`--round=FIELD,LIMIT[,MODE]`** or **`--round=FIELD,MODE`** *(alias: `--cut-maxint`)*: Handles either upper-end range overflow (clamping/saturation/wrapping when `LIMIT` is specified) or lower-end precision reduction (floating-point rounding when `MODE` is specified). `MODE` can be specified using comma or colon (e.g. `--round 0,floor` or `--round 0,127,wrap`). When `LIMIT` is omitted, the rounding mode is applied without magnitude clamping. Supported modes:
   - `saturate` / `clamp` (default when limit is specified): Clamps out-of-bounds values to `LIMIT` or `-LIMIT`.
   - `wrap` / `wrapping`: Wraps values around using modular arithmetic (`[0, LIMIT]` for unsigned, `[-LIMIT, LIMIT]` for signed).
   - `zero` / `reset`: Sets out-of-bounds values to 0.
@@ -439,6 +439,32 @@ Once unpacked into a tuple, fields can be transformed using pipeline manipulator
 - **`--abs=FIELD`**: Converts a signed field to its absolute value (syntax: `--abs 0` or legacy `--abs 0,0`).
 - **`--sign=FIELD`**: Isolates sign bit (`0` = positive, `1` = negative).
 - **`--filter=FIELD,OP,VALUE`**: Drops tuples where predicate is false (`==`, `!=`, `<`, `<=`, `>`, `>=`).
+
+### High Bits vs. Low Bits: Range Overflow vs. Precision Rounding
+
+When fitting a value into a smaller unit or target representation, data can be cut from two opposite ends:
+
+| Dimension | Problem | Bits Affected | Operation Name | Typical Command |
+|---|---|---|---|---|
+| **Upper Bound (Range)** | Value too large to fit in container (e.g. integer 300 in an 8-bit unsigned unit max 255) | **Most Significant Bits (MSBs)** | Range Clamping / Saturation / Wrapping / High-bit Cut | `--cut-maxint=0,255,saturate` or `--round=0,255,wrap` |
+| **Lower Bound (Precision)** | Reducing fractional digits or discarding sub-unit bit resolution | **Least Significant Bits (LSBs)** | True Rounding / Quantization / Low-bit Truncation | `--round=0,round_ties_even` or `--remove-right=0,4` |
+
+#### 1. Upper End: Range Overflow Handling (`--cut-maxint=FIELD,LIMIT,MODE`)
+When a number is too large to fit in a target container, its most significant bits must be cut or handled. **This is not rounding; it is range bounding, clipping, or saturation:**
+- **`saturate` / `clamp`** (default): Clips values exceeding `LIMIT` down to `LIMIT` (e.g., 300 becomes 255).
+- **`wrap` / `wrapping`**: Truncates high-order bits, wrapping modulo the container capacity (e.g., $300 \pmod{256} = 44$).
+- **`drop` / `checked`**: Rejects and discards the tuple completely if out of bounds.
+- **`zero` / `reset`**: Resets out-of-range values to zero.
+
+#### 2. Lower End: True Rounding & Precision Reduction (`--round=FIELD,MODE`)
+When reducing precision or discarding fractional parts, bits are removed from the **least significant part**:
+- **Floating-point rounding**: `--round=0,floor`, `--round=0,ceil`, `--round=0,trunc`, `--round=0,round`, or `--round=0,round_ties_even` rounds fractional values to integers according to IEEE 754 rules.
+- **Integer bit shifting / truncation**: `--remove-right=0,N` bitwise shifts right by $N$ bits, discarding the $N$ least significant bits (integer truncation towards zero).
+- **Integer true rounding (half-up)**: To round an integer to the nearest multiple of $2^N$ instead of truncating it, add a rounding bias of half the divisor before shifting right:
+  ```bash
+  # Divide field 0 by 16 (2^4) with round-to-nearest (half-up) instead of truncation:
+  bdd --add 0,8 --remove-right 0,4
+  ```
 
 ### Ordered Pipeline Example
 
