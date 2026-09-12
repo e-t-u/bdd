@@ -780,13 +780,51 @@ bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
 bdd --explain-pattern "sync:11u,version:2u" --output-json
 ```
 
-### Binary Prober (`--probe`)
-Inspect unknown binary blobs without prior schema knowledge. Computes Shannon entropy ($H = -\sum p_i \log_2 p_i$), byte class distributions, periodic stride autocorrelation across offsets 1..512 bytes (detecting MPEG-TS, 24-bit audio, or fixed-stride telemetry), and extracts printable ASCII strings:
+### Binary Prober (`--probe`) & Unit Stream Prober (`--probe-units`)
+
+`bdd` provides two levels of diagnostic probing depending on where you want to analyze data in the processing lifecycle:
+
+| Prober | CLI Flag | Pipeline Stage | Metric Scope | Use Case |
+|---|---|---|---|---|
+| **Raw Pre-Pipeline Prober** | `--probe [FILE]` | **Pre-flight**: Direct on raw input stream/file before engine execution | Byte distributions, $0..8$ bits/byte entropy, $1..512$ byte strides, ASCII strings | Initial file triage, container identification, file type heuristics |
+| **Unit Stream Prober** | `--probe-units`, `--probe-keys` | **Post-stream processing**: Evaluates units *after* skips, gaps, reversals, patterns, and repeats | Unit distributions, unit Shannon entropy, unit strides, **max-entropy crypto key discovery** | Sliced payload analysis, crypto key extraction, sub-byte unit auditing |
+
+#### 1. Raw Binary Prober (`--probe`)
+Inspect unknown binary blobs without prior schema knowledge:
 ```bash
 bdd --probe payload.bin
 # Full JSON metrics:
 bdd --probe payload.bin --output-json
 ```
+
+#### 2. Unit Stream Prober (`--probe-units`)
+Analyzes units **after** input stream processing (applying `--input-skip-bits`, `--input-unit`, `--input-gap`, `--input-reverse-bytes`, `--input-pattern`, etc.):
+```bash
+# Probe 16-bit units after skipping a 64-bit header:
+bdd --input-file=capture.bin --input-skip-bits=64 --input-unit=16 --probe-units
+
+# Probe specific unpacked field (e.g. payload field #1) in a multiplexed container:
+bdd --input-file=stream.ts --input-pattern="8U,187B" --probe-field=1 --probe-units
+```
+
+#### 3. Cryptographic Key Discovery (`--probe-keys`)
+Scans the unpacked unit stream using sliding-window entropy analysis to locate candidate cryptographic keys (such as AES-128, AES-256, ChaCha20, Ed25519, or HMAC keys) surrounded by lower-entropy structures, code, or padding:
+```bash
+# Scan for default 256-bit (32-byte) cryptographic keys:
+bdd --input-file=firmware.bin --probe-keys
+
+# Scan for 128-bit (16-byte) keys or IVs:
+bdd --input-file=memory_dump.bin --probe-keys=128
+
+# Specify sizes in bytes or bits (e.g. 512 bits / 64 bytes):
+bdd --input-file=dump.bin --probe-keys=64B --output-json
+```
+Each candidate key reports:
+- **Unit & Bit Offsets**: Exact starting unit and bit index in the processed stream.
+- **Entropy Score & Ratio**: Local Shannon entropy and normalized ratio relative to theoretical maximum.
+- **Bit Balance**: Percentage of set bits (ideal $\approx 50\%$ for cryptographic pseudo-randomness).
+- **Hex Payload**: Full hexadecimal representation of the candidate key bytes.
+- **Classification**: Likely cryptographic algorithm (AES-128, AES-256, ChaCha20, Ed25519, SHA-512).
 
 ### Model Context Protocol (MCP) Server (`--mcp`)
 `bdd` includes a native JSON-RPC 2.0 stdio MCP server for agent integration:
@@ -795,7 +833,8 @@ bdd --mcp
 ```
 Registered MCP tools:
 - `bdd_slice`: Slices a file or hex string by pattern/preset and outputs text or JSON.
-- `bdd_probe`: Analyzes entropy, periodic strides, and format heuristics.
+- `bdd_probe`: Analyzes raw binary entropy, byte distributions, and repeating record strides.
+- `bdd_probe_units`: Probes unit characteristics after stream processing and discovers maximum-entropy crypto keys.
 - `bdd_explain_pattern`: Explains schema bit offsets and field types.
 - `bdd_list_presets`: Returns available protocol presets.
 
@@ -1041,6 +1080,9 @@ Output Unit & Pattern Options:
 Inspection, Web UI & Model Context Protocol (MCP):
       --explain-pattern [PATTERN]  Analyze bit layout, byte alignment, and field breakdown
       --probe [FILE]               Inspect binary entropy, byte classes, periodic strides, and strings
+      --probe-units                Probe unit stream characteristics and entropy AFTER input stream processing [alias: --probe-stream]
+      --probe-keys [SIZE]          Scan unit stream for potential maximum-entropy cryptographic keys [default: 256 bits]
+      --probe-field <INDEX>        Target specific tuple field index (0-based) for unit probing after pattern unpacking
       --mcp                        Launch native JSON-RPC 2.0 Model Context Protocol (MCP) server
       --serve [PORT]               Launch interactive Web UI browser app (aliases: --web, --gui) [default: 7788]
 

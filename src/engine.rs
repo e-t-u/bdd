@@ -46,6 +46,10 @@ fn run_pipeline_internal(
     crate::diag::reset();
     let _diag_guard = DiagnosticGuard;
 
+    if config.probe_units || config.probe_keys.is_some() {
+        return run_unit_probe_internal(&config, custom_writer);
+    }
+
     let unpacker = if let Some(ref p) = config.input_pattern {
         Some(TupleUnpacker::new(p)?)
     } else {
@@ -356,61 +360,7 @@ fn run_pipeline_internal(
             }
         }
     } else {
-        let mut unit_stream: Box<dyn UnitStream> = if config.input_zeros {
-            Box::new(ZeroStream::new(counter))
-        } else if config.input_ones {
-            Box::new(OneStream::new(counter, in_unit_size))
-        } else if config.input_random {
-            Box::new(RandomStream::new(counter, in_unit_size))
-        } else if config.input_counter {
-            Box::new(CounterStream::new(counter, in_unit_size))
-        } else if config.input_integers {
-            let in_reader: Box<dyn RewindableBufRead> = if config.input_file == "-" {
-                if config.input_repeat != 1 {
-                    let mut buf = Vec::new();
-                    io::stdin().read_to_end(&mut buf)?;
-                    Box::new(std::io::Cursor::new(buf))
-                } else {
-                    Box::new(StreamSeekBufReader(BufReader::new(io::stdin())))
-                }
-            } else {
-                match File::open(&config.input_file) {
-                    Ok(f) => Box::new(BufReader::new(f)),
-                    Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
-                }
-            };
-            Box::new(IntegerInputStream::new(in_reader, counter, config.input_repeat))
-        } else {
-            let in_reader = if config.input_file == "-" {
-                if config.input_repeat != 1 {
-                    let mut buf = Vec::new();
-                    io::stdin().read_to_end(&mut buf)?;
-                    BddReader::new_seekable(std::io::Cursor::new(buf), true)
-                } else {
-                    BddReader::from_stdin(config.input_use_seek)
-                }
-            } else {
-                match File::open(&config.input_file) {
-                    Ok(f) => BddReader::from_file(f, config.input_use_seek),
-                    Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
-                }
-            };
-            let stream_conf = StreamConfig {
-                skip_bits: config.input_skip_bits,
-                skip_units: config.input_skip_units,
-                gap: config.input_gap,
-                assert_aligned: config.input_assert_aligned,
-                drop_partial_eof: config.input_drop_partial_eof,
-                reverse_bytes: config.input_reverse_bytes,
-                reverse_unit: config.input_reverse_unit,
-                unit_size: in_unit_size,
-                seek_allowed: config.input_use_seek,
-                repeat_count: config.input_repeat,
-            };
-            let mut fs = FileInputStream::new(in_reader, stream_conf, counter);
-            fs.do_skip();
-            Box::new(fs)
-        };
+        let mut unit_stream = create_unit_stream(&config, in_unit_size, counter)?;
 
         while let Some(unit) = unit_stream.next_unit()? {
             let tuple = if let Some(ref u) = unpacker {
@@ -549,6 +499,215 @@ fn write_framed_unit(
 
     if gap > 0 {
         write_zero_bits(sink, gap)?;
+    }
+
+    Ok(())
+}
+
+pub fn create_unit_stream(
+    config: &ValidatedConfig,
+    in_unit_size: usize,
+    counter: Counter,
+) -> Result<Box<dyn UnitStream>, BddError> {
+    let unit_stream: Box<dyn UnitStream> = if config.input_zeros {
+        Box::new(ZeroStream::new(counter))
+    } else if config.input_ones {
+        Box::new(OneStream::new(counter, in_unit_size))
+    } else if config.input_random {
+        Box::new(RandomStream::new(counter, in_unit_size))
+    } else if config.input_counter {
+        Box::new(CounterStream::new(counter, in_unit_size))
+    } else if config.input_integers {
+        let in_reader: Box<dyn RewindableBufRead> = if config.input_file == "-" {
+            if config.input_repeat != 1 {
+                let mut buf = Vec::new();
+                io::stdin().read_to_end(&mut buf)?;
+                Box::new(std::io::Cursor::new(buf))
+            } else {
+                Box::new(StreamSeekBufReader(BufReader::new(io::stdin())))
+            }
+        } else {
+            match File::open(&config.input_file) {
+                Ok(f) => Box::new(BufReader::new(f)),
+                Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
+            }
+        };
+        Box::new(IntegerInputStream::new(
+            in_reader,
+            counter,
+            config.input_repeat,
+        ))
+    } else {
+        let in_reader = if config.input_file == "-" {
+            if config.input_repeat != 1 {
+                let mut buf = Vec::new();
+                io::stdin().read_to_end(&mut buf)?;
+                BddReader::new_seekable(std::io::Cursor::new(buf), true)
+            } else {
+                BddReader::from_stdin(config.input_use_seek)
+            }
+        } else {
+            match File::open(&config.input_file) {
+                Ok(f) => BddReader::from_file(f, config.input_use_seek),
+                Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
+            }
+        };
+        let stream_conf = StreamConfig {
+            skip_bits: config.input_skip_bits,
+            skip_units: config.input_skip_units,
+            gap: config.input_gap,
+            assert_aligned: config.input_assert_aligned,
+            drop_partial_eof: config.input_drop_partial_eof,
+            reverse_bytes: config.input_reverse_bytes,
+            reverse_unit: config.input_reverse_unit,
+            unit_size: in_unit_size,
+            seek_allowed: config.input_use_seek,
+            repeat_count: config.input_repeat,
+        };
+        let mut fs = FileInputStream::new(in_reader, stream_conf, counter);
+        fs.do_skip();
+        Box::new(fs)
+    };
+    Ok(unit_stream)
+}
+
+fn run_unit_probe_internal(
+    config: &ValidatedConfig,
+    mut custom_writer: Option<Box<dyn Write>>,
+) -> Result<(), BddError> {
+    let unpacker = if let Some(ref p) = config.input_pattern {
+        Some(TupleUnpacker::new(p)?)
+    } else {
+        None
+    };
+
+    let in_unit_size = if let Some(u) = config.input_unit {
+        u
+    } else if let Some(ref u) = unpacker {
+        u.total_bits
+    } else {
+        8
+    };
+
+    let key_search_bits = if let Some(ref ks) = config.probe_keys {
+        Some(crate::probe::parse_key_bits(ks)?)
+    } else {
+        Some(256)
+    };
+
+    const MAX_PROBE_UNITS: usize = 1_048_576;
+    let mut units = Vec::new();
+    let target_unit_bits: usize;
+    let target_description: String;
+
+    let counter = Counter::new(config.skip, config.count);
+
+    if config.input_tuples {
+        let in_reader: Box<dyn RewindableBufRead> = if config.input_file == "-" {
+            if config.input_repeat != 1 {
+                let mut buf = Vec::new();
+                io::stdin().read_to_end(&mut buf)?;
+                Box::new(std::io::Cursor::new(buf))
+            } else {
+                Box::new(StreamSeekBufReader(BufReader::new(io::stdin())))
+            }
+        } else {
+            match File::open(&config.input_file) {
+                Ok(f) => Box::new(BufReader::new(f)),
+                Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
+            }
+        };
+        let mut tuple_in = TupleDirectInput::new(in_reader, counter, config.input_repeat);
+        let field_idx = config.probe_field.unwrap_or(0);
+        target_unit_bits = in_unit_size;
+        target_description = format!("{} (tuples, field #{})", config.input_file, field_idx);
+
+        while let Some(tuple) = tuple_in.next_tuple()? {
+            if field_idx < tuple.len() {
+                units.push(tuple[field_idx].as_biguint());
+            } else if !tuple.is_empty() {
+                units.push(tuple[0].as_biguint());
+            } else {
+                units.push(BigUint::zero());
+            }
+            if config.count.is_none() && units.len() >= MAX_PROBE_UNITS {
+                break;
+            }
+        }
+    } else {
+        let mut unit_stream = create_unit_stream(config, in_unit_size, counter)?;
+
+        if let Some(ref u) = unpacker {
+            let field_idx = config.probe_field.unwrap_or(0);
+            if field_idx >= u.pattern_items.len() {
+                return Err(BddError::CliError(format!(
+                    "Field index {} out of range for pattern with {} fields",
+                    field_idx,
+                    u.pattern_items.len()
+                )));
+            }
+            let item = &u.pattern_items[field_idx];
+            target_unit_bits = item.bits;
+            target_description = format!(
+                "{} [pattern field #{}: {}{}]",
+                config.input_file, field_idx, item.bits, item.char_code
+            );
+
+            while let Some(raw_unit) = unit_stream.next_unit()? {
+                let tuple = u.unpack(raw_unit);
+                if field_idx < tuple.len() {
+                    units.push(tuple[field_idx].as_biguint());
+                }
+                if config.count.is_none() && units.len() >= MAX_PROBE_UNITS {
+                    break;
+                }
+            }
+        } else {
+            target_unit_bits = in_unit_size;
+            let source_name = if config.input_file == "-" {
+                if config.input_counter {
+                    "counter stream".to_string()
+                } else if config.input_random {
+                    "random stream".to_string()
+                } else if config.input_zeros {
+                    "zero stream".to_string()
+                } else if config.input_ones {
+                    "ones stream".to_string()
+                } else {
+                    "stdin".to_string()
+                }
+            } else {
+                config.input_file.clone()
+            };
+            target_description = format!("{} (unit size: {} bits)", source_name, target_unit_bits);
+
+            while let Some(unit) = unit_stream.next_unit()? {
+                units.push(unit);
+                if config.count.is_none() && units.len() >= MAX_PROBE_UNITS {
+                    break;
+                }
+            }
+        }
+    }
+
+    let report = crate::probe::probe_unit_stream(
+        &units,
+        target_unit_bits,
+        key_search_bits,
+        &target_description,
+    );
+
+    let out_str = if config.output_json {
+        crate::probe::format_unit_probe_json(&report)
+    } else {
+        crate::probe::format_unit_probe_text(&report)
+    };
+
+    if let Some(ref mut w) = custom_writer {
+        w.write_all(out_str.as_bytes())?;
+        w.write_all(b"\n")?;
+    } else {
+        println!("{}", out_str);
     }
 
     Ok(())

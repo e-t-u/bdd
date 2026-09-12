@@ -29,12 +29,18 @@ contrib/
 │   ├── decode_jpeg.sh          # JPEG SOF0 geometry & 4-bit chroma nibble extraction (4U4U)
 │   ├── decode_ai_weights.sh    # Safetensors O(1) seeking & NVFP4/FP6/FP8/BF16 decoding
 │   ├── decode_network.sh       # IPv4, UDP, and TCP header dissection with sub-byte flags
+│   ├── bdd_kernel_inspect.sh   # Bit-level inspection of Linux kernel structures (auxv, pagemap, PCI)
+│   ├── stream_memory_keys.sh   # Stream system raw memory 256 bits at a time and probe crypto keys
 │   └── run_all_shell_examples.sh # Master script running all shell demonstrations
 ├── python/                     # Python scripts using libbdd ctypes bindings
 │   ├── generate_samples.py     # Deterministic generator for all data/ sample files
 │   ├── decode_media.py         # MP3, MPEG-TS, JPEG, and H.264 NAL parsing
 │   ├── decode_ai_weights.py    # Safetensors inspection, NVFP4, and FP6 decoding
-│   └── decode_network.py       # IPv4, UDP, and TCP packet dissection and IP formatting
+│   ├── decode_network.py       # IPv4, UDP, and TCP packet dissection and IP formatting
+│   ├── bdd_ps.py               # Process status inspector slicing /proc/[pid]/stat structures
+│   ├── bdd_top.py              # Interactive top-like process monitor using bit-sliced metrics
+│   ├── bdd_netlink_proc.py     # Linux Netlink process connector socket monitor
+│   └── stream_memory_keys.py   # Stream raw memory (physical, kernel, PID) and probe crypto keys
 └── c/                          # Native C programs linking against libbdd.so
     ├── decode_media.c          # bdd_unpack_u64, bdd_pack_u64, and bit reversal
     ├── decode_ai_weights.c     # Native FP4, FP6, FP8, BF16, and FP16 float decoders
@@ -216,6 +222,49 @@ Network headers are strictly big-endian (network byte order) with MSB-first bit 
   # Packet 2 (TCP SYN at offset 32B):
   bdd "32B:160 -> 160" --preset=ipv4-header --count=1 --output-json < sample_packets.bin
   bdd "52B:160 -> 160" --preset=tcp-header --count=1 --output-json < sample_packets.bin
+  ```
+
+---
+
+### 8. System Raw Memory Key Probing (256-bit Unit Streaming)
+When investigating memory dumps, physical RAM, or running processes for cryptographic material, cryptographic keys (such as AES-256, ChaCha20, Ed25519, and SHA-256 state) appear as contiguous 256-bit blocks with maximum Shannon entropy ($\approx 5.0$ bits/byte) and balanced bit distributions ($\approx 50\%$ ones set).
+
+The contributed tools (`contrib/shell/stream_memory_keys.sh` and `contrib/python/stream_memory_keys.py`) stream system memory in discrete 256-bit units (`--input-unit=256`, 32 bytes per unit) and run `bdd --probe-keys=256` to locate candidate keys:
+
+- **Supported Sources**:
+  - `demo`: In-memory realistic stream with embedded NIST AES-256 and ChaCha20 test vectors (runs without root).
+  - `kcore`: Linux kernel virtual address space via `/proc/kcore`.
+  - `devmem`: Physical RAM via `/dev/mem` (requires root/sudo).
+  - `self`: Current process address space via `/proc/self/mem` (runs without root).
+  - `pid <PID>`: Target daemon or process memory via `/proc/<PID>/mem`.
+  - `<FILE>`: Raw memory dump or disk image file.
+
+- **Streaming and Probing Example (Shell)**:
+  ```bash
+  # Run realistic in-memory test demo (128 units = 4096 bytes):
+  ./contrib/shell/stream_memory_keys.sh --source demo --units 128
+
+  # Output as machine-readable JSON:
+  ./contrib/shell/stream_memory_keys.sh --source demo --units 128 --json
+
+  # Probe 4096 units (128 KiB) of kernel memory:
+  ./contrib/shell/stream_memory_keys.sh --source kcore --units 4096
+
+  # Inspect a specific process:
+  ./contrib/shell/stream_memory_keys.sh --source pid 1234 --units 2048
+  ```
+
+- **Streaming and Probing Example (Python)**:
+  ```bash
+  python3 contrib/python/stream_memory_keys.py --source demo --units 128
+  python3 contrib/python/stream_memory_keys.py --source self --units 1024
+  ```
+
+- **Manual One-Liner Pipeline**:
+  ```bash
+  # Stream 4096 blocks of 32 bytes (256 bits each) directly into bdd:
+  dd if=/proc/kcore bs=32 count=4096 status=none | \
+      bdd --input-unit=256 --probe-keys=256 --output-json
   ```
 
 ---

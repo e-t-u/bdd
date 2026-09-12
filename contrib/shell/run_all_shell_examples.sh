@@ -21,5 +21,9 @@ echo ""
 "${SCRIPT_DIR}/decode_ai_weights.sh"
 echo ""
 "${SCRIPT_DIR}/decode_network.sh"
+echo ""
+"${SCRIPT_DIR}/bdd_kernel_inspect.sh" "$$"
+echo ""
+"${SCRIPT_DIR}/stream_memory_keys.sh" --source demo --units 128
 
 echo -e "\nAll shell script demonstrations completed successfully!"

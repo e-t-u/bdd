@@ -1,7 +1,7 @@
 .\" 
 .\" bdd.1 $Revision: 64 $
 .\" 
-.TH bdd 1 "12 September 2026" "0.5.0" "User commands"
+.TH bdd 1 "13 September 2026" "0.5.1" "User commands"
 
 .SH NAME
 bdd \- Bit stream copy and modify
@@ -753,11 +753,23 @@ Analyze and display the structural breakdown of PATTERN (or the pattern set via 
 
 .TP
 --probe[=FILENAME]
-Deeply inspect the input file (or standard input if omitted). Computes Shannon entropy, byte class frequencies (nulls, printable ASCII, high bytes), periodic stride autocorrelation across offsets 1..512 bytes (detecting periodic formats like 188-byte MPEG-TS packets, 24-bit audio, or fixed-width telemetry frames), and extracts prominent ASCII string runs. If --output-json is specified, outputs full structured JSON metrics.
+Deeply inspect the input file (or standard input if omitted) as a raw byte stream before engine execution. Computes Shannon entropy, byte class frequencies (nulls, printable ASCII, high bytes), periodic stride autocorrelation across offsets 1..512 bytes (detecting periodic formats like 188-byte MPEG-TS packets, 24-bit audio, or fixed-width telemetry frames), and extracts prominent ASCII string runs. If --output-json is specified, outputs full structured JSON metrics.
+
+.TP
+--probe-units, --probe-stream
+Inspect unit characteristics and entropy AFTER input stream processing (honoring --input-skip-bits, --input-unit, --input-gap, --input-reverse-bytes, --input-pattern, etc.). Computes unit distribution, unit Shannon entropy, unit periodic autocorrelation strides, and scans for maximum-entropy cryptographic keys.
+
+.TP
+--probe-keys[=SIZE], --probe-crypto-keys
+Scan the unit stream using sliding-window entropy analysis to locate candidate cryptographic keys (such as AES-128, AES-256, ChaCha20, Ed25519, or HMAC keys) surrounded by lower-entropy structures, code, or padding. SIZE defaults to 256 bits (32 bytes), but can be specified in bits (e.g. 128, 256, 512) or bytes (e.g. 16B, 32B, 64B). Automatically activates unit stream probing.
+
+.TP
+--probe-field=INDEX
+Target specific tuple field index (0-based) for unit probing after pattern unpacking (e.g. probing payload field 1 in an MPEG-TS or telemetry stream).
 
 .TP
 --mcp
-Run native JSON-RPC 2.0 Model Context Protocol (MCP) server over standard input and standard output. Exposes four tools for AI agent pair programming, binary reverse engineering, and pipeline automation: \fBbdd_slice\fR (extract, transcode, and slice bitstreams into text or JSON), \fBbdd_probe\fR (probing binary blobs for entropy and periodicity), \fBbdd_explain_pattern\fR (inspecting schema bit layouts), and \fBbdd_list_presets\fR (cataloging built-in protocols).
+Run native JSON-RPC 2.0 Model Context Protocol (MCP) server over standard input and standard output. Exposes tools for AI agent pair programming, binary reverse engineering, and pipeline automation: \fBbdd_slice\fR (extract, transcode, and slice bitstreams into text or JSON), \fBbdd_probe\fR (probing raw binary blobs for entropy and periodicity), \fBbdd_probe_units\fR (probing unpacked unit streams and discovering cryptographic keys), \fBbdd_explain_pattern\fR (inspecting schema bit layouts), and \fBbdd_list_presets\fR (cataloging built-in protocols).
 
 .TP
 --llms, --ai-guide, --ai

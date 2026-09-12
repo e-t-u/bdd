@@ -4,7 +4,10 @@
 //! autocorrelation periodicities (repeating record strides), and ASCII string runs.
 
 use crate::error::BddError;
+use num_bigint::BigUint;
+use num_traits::{One, ToPrimitive, Zero};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::io::Read;
 
 const MAX_PROBE_SAMPLE: usize = 1_048_576; // Sample up to 1 MB
@@ -55,6 +58,64 @@ pub struct StringRun {
     pub offset: usize,
     pub length: usize,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnitProbeReport {
+    pub target: String,
+    pub unit_bits: usize,
+    pub total_units: usize,
+    pub total_bits: usize,
+    pub total_bytes: usize,
+    pub distinct_units: usize,
+    pub min_value: String,
+    pub max_value: String,
+    pub null_units: usize,
+    pub null_percent: f64,
+    pub all_ones_units: usize,
+    pub all_ones_percent: f64,
+    pub unit_entropy: f64,
+    pub max_unit_entropy: f64,
+    pub normalized_entropy: f64,
+    pub entropy_diagnosis: String,
+    pub top_units: Vec<UnitFrequency>,
+    pub detected_strides: Vec<DetectedUnitStride>,
+    pub crypto_key_candidates: Vec<CryptoKeyCandidate>,
+    pub general_diagnosis: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnitFrequency {
+    pub value_dec: String,
+    pub value_hex: String,
+    pub count: usize,
+    pub percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectedUnitStride {
+    pub stride_units: usize,
+    pub stride_bits: usize,
+    pub match_ratio: f64,
+    pub confidence: String,
+    pub likely_format: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CryptoKeyCandidate {
+    pub rank: usize,
+    pub start_unit: usize,
+    pub unit_count: usize,
+    pub bit_offset: usize,
+    pub bit_length: usize,
+    pub byte_length: usize,
+    pub entropy: f64,
+    pub max_entropy: f64,
+    pub normalized_entropy: f64,
+    pub bit_balance_percent: f64,
+    pub hex_payload: String,
+    pub likely_algorithm: String,
+    pub confidence: String,
 }
 
 pub fn probe_buffer(buf: &[u8], target_name: &str) -> ProbeReport {
@@ -363,4 +424,661 @@ pub fn format_probe_text(report: &ProbeReport) -> String {
 
 pub fn format_probe_json(report: &ProbeReport) -> String {
     serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn units_to_bytes(units: &[BigUint], unit_bits: usize) -> Vec<u8> {
+    if unit_bits == 8 {
+        return units
+            .iter()
+            .map(|u| (u & BigUint::from(0xFFu32)).to_u8().unwrap_or(0))
+            .collect();
+    }
+    let mut out = Vec::new();
+    let mut buffer = BigUint::zero();
+    let mut bits_in_buffer = 0usize;
+    let mask = if unit_bits > 0 {
+        (BigUint::one() << unit_bits) - 1u32
+    } else {
+        BigUint::zero()
+    };
+
+    for u in units {
+        let val = u & &mask;
+        buffer = (buffer << unit_bits) | val;
+        bits_in_buffer += unit_bits;
+
+        while bits_in_buffer >= 8 {
+            let shift = bits_in_buffer - 8;
+            let byte_val = (&buffer >> shift).to_u8().unwrap_or(0);
+            out.push(byte_val);
+            bits_in_buffer -= 8;
+            let rem_mask = if bits_in_buffer > 0 {
+                (BigUint::one() << bits_in_buffer) - 1u32
+            } else {
+                BigUint::zero()
+            };
+            buffer &= rem_mask;
+        }
+    }
+    if bits_in_buffer > 0 {
+        let byte_val = (buffer << (8 - bits_in_buffer)).to_u8().unwrap_or(0);
+        out.push(byte_val);
+    }
+    out
+}
+
+pub fn parse_key_bits(s: &str) -> Result<usize, BddError> {
+    let s_trimmed = s.trim();
+    if s_trimmed.is_empty() {
+        return Ok(256);
+    }
+    let lower = s_trimmed.to_lowercase();
+    if let Some(rest) = lower
+        .strip_suffix("bytes")
+        .or_else(|| lower.strip_suffix("byte"))
+    {
+        let num_str = rest.trim_end_matches(['-', '_', ' ']);
+        let bytes: usize = num_str.parse().map_err(|_| {
+            BddError::CliError(format!("Invalid key size '{}': cannot parse byte count", s))
+        })?;
+        if bytes == 0 {
+            return Err(BddError::CliError("Key size cannot be 0".to_string()));
+        }
+        return Ok(bytes * 8);
+    }
+    if let Some(rest) = s_trimmed.strip_suffix('B') {
+        let num_str = rest.trim_end_matches(['-', '_', ' ']);
+        let bytes: usize = num_str.parse().map_err(|_| {
+            BddError::CliError(format!("Invalid key size '{}': cannot parse byte count", s))
+        })?;
+        if bytes == 0 {
+            return Err(BddError::CliError("Key size cannot be 0".to_string()));
+        }
+        return Ok(bytes * 8);
+    }
+    if let Some(rest) = lower
+        .strip_suffix("bits")
+        .or_else(|| lower.strip_suffix("bit"))
+        .or_else(|| lower.strip_suffix('b'))
+    {
+        let num_str = rest.trim_end_matches(['-', '_', ' ']);
+        let bits: usize = num_str.parse().map_err(|_| {
+            BddError::CliError(format!("Invalid key size '{}': cannot parse bit count", s))
+        })?;
+        if bits == 0 {
+            return Err(BddError::CliError("Key size cannot be 0".to_string()));
+        }
+        return Ok(bits);
+    }
+    let bits: usize = s_trimmed.parse().map_err(|_| {
+        BddError::CliError(format!(
+            "Invalid key size '{}': expected bits (e.g. 256) or bytes (e.g. 32B)",
+            s
+        ))
+    })?;
+    if bits == 0 {
+        return Err(BddError::CliError("Key size cannot be 0".to_string()));
+    }
+    Ok(bits)
+}
+
+pub fn find_crypto_keys(
+    bytes: &[u8],
+    unit_bits: usize,
+    key_bits: usize,
+) -> Vec<CryptoKeyCandidate> {
+    let key_bytes = key_bits.div_ceil(8);
+    if key_bytes == 0 || bytes.len() < key_bytes {
+        return Vec::new();
+    }
+
+    let n = bytes.len();
+    let w = key_bytes;
+    let max_h = (w as f64).min(256.0).log2();
+
+    let mut freq = [0usize; 256];
+    let mut ones_count = 0usize;
+
+    for &b in &bytes[..w] {
+        freq[b as usize] += 1;
+        ones_count += b.count_ones() as usize;
+    }
+
+    let calc_entropy = |f: &[usize; 256]| -> f64 {
+        let mut ent = 0.0f64;
+        let w_f = w as f64;
+        for &cnt in f {
+            if cnt > 0 {
+                let p = cnt as f64 / w_f;
+                ent -= p * p.log2();
+            }
+        }
+        ent
+    };
+
+    let total_bits_in_window = w * 8;
+    let mut raw_candidates: Vec<(usize, f64, f64, f64, usize)> = Vec::new();
+
+    let ent0 = calc_entropy(&freq);
+    let norm0 = if max_h > 0.0 { ent0 / max_h } else { 0.0 };
+    let bal0 = (ones_count as f64 / total_bits_in_window as f64) * 100.0;
+    raw_candidates.push((0, ent0, norm0, bal0, freq[0]));
+
+    for i in 1..=(n - w) {
+        let old_b = bytes[i - 1];
+        let new_b = bytes[i + w - 1];
+        freq[old_b as usize] -= 1;
+        freq[new_b as usize] += 1;
+        ones_count -= old_b.count_ones() as usize;
+        ones_count += new_b.count_ones() as usize;
+
+        let ent = calc_entropy(&freq);
+        let norm = if max_h > 0.0 { ent / max_h } else { 0.0 };
+        let bal = (ones_count as f64 / total_bits_in_window as f64) * 100.0;
+        raw_candidates.push((i, ent, norm, bal, freq[0]));
+    }
+
+    raw_candidates.sort_by(|a, b| {
+        b.2.partial_cmp(&a.2)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.4.cmp(&b.4))
+            .then_with(|| {
+                let diff_a = (a.3 - 50.0).abs();
+                let diff_b = (b.3 - 50.0).abs();
+                diff_a
+                    .partial_cmp(&diff_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let mut selected = Vec::new();
+    for (offset, ent, norm, bal, _) in raw_candidates {
+        let overlaps = selected
+            .iter()
+            .any(|(sel_offset, _, _, _): &(usize, f64, f64, f64)| offset.abs_diff(*sel_offset) < w);
+        if !overlaps {
+            selected.push((offset, ent, norm, bal));
+            if selected.len() >= 5 {
+                break;
+            }
+        }
+    }
+
+    let likely_algo = match key_bits {
+        128 => "AES-128 / Poly1305 / MD5 key or IV (128-bit)",
+        192 => "AES-192 / 3DES key or 192-bit nonce (192-bit)",
+        256 => "AES-256 / ChaCha20 / Ed25519 / SHA-256 key (256-bit)",
+        512 => "Ed512 / SHA-512 / HMAC-512 key (512-bit)",
+        k => Box::leak(format!("{}-bit Cryptographic Key Candidate", k).into_boxed_str()),
+    };
+
+    let mut out = Vec::new();
+    for (rank, &(offset, ent, norm, bal)) in selected.iter().enumerate() {
+        let bit_offset = offset * 8;
+        let start_unit = bit_offset.checked_div(unit_bits).unwrap_or(0);
+        let unit_count = if unit_bits > 0 {
+            key_bits.div_ceil(unit_bits)
+        } else {
+            0
+        };
+        let payload = &bytes[offset..offset + w];
+        let hex_payload: String = payload.iter().map(|b| format!("{:02x}", b)).collect();
+
+        let confidence = if norm >= 0.98 {
+            "Very High"
+        } else if norm >= 0.93 {
+            "High"
+        } else if norm >= 0.85 {
+            "Moderate"
+        } else {
+            "Low"
+        };
+
+        out.push(CryptoKeyCandidate {
+            rank: rank + 1,
+            start_unit,
+            unit_count,
+            bit_offset,
+            bit_length: key_bits,
+            byte_length: w,
+            entropy: ent,
+            max_entropy: max_h,
+            normalized_entropy: norm,
+            bit_balance_percent: bal,
+            hex_payload,
+            likely_algorithm: likely_algo.to_string(),
+            confidence: confidence.to_string(),
+        });
+    }
+
+    out
+}
+
+pub fn probe_unit_stream(
+    units: &[BigUint],
+    unit_bits: usize,
+    key_search_bits: Option<usize>,
+    target_name: &str,
+) -> UnitProbeReport {
+    let n = units.len();
+    let total_bits = n * unit_bits;
+    let total_bytes = total_bits.div_ceil(8);
+
+    if n == 0 {
+        return UnitProbeReport {
+            target: target_name.to_string(),
+            unit_bits,
+            total_units: 0,
+            total_bits: 0,
+            total_bytes: 0,
+            distinct_units: 0,
+            min_value: "0".to_string(),
+            max_value: "0".to_string(),
+            null_units: 0,
+            null_percent: 0.0,
+            all_ones_units: 0,
+            all_ones_percent: 0.0,
+            unit_entropy: 0.0,
+            max_unit_entropy: 0.0,
+            normalized_entropy: 0.0,
+            entropy_diagnosis: "Empty unit stream".to_string(),
+            top_units: Vec::new(),
+            detected_strides: Vec::new(),
+            crypto_key_candidates: Vec::new(),
+            general_diagnosis: "Empty unit stream (0 units processed).".to_string(),
+        };
+    }
+
+    let mut freq: HashMap<BigUint, usize> = HashMap::new();
+    let mut null_count = 0usize;
+    let mut all_ones_count = 0usize;
+    let all_ones_val = if unit_bits > 0 {
+        (BigUint::one() << unit_bits) - 1u32
+    } else {
+        BigUint::zero()
+    };
+
+    let mut min_val: Option<BigUint> = None;
+    let mut max_val: Option<BigUint> = None;
+
+    for u in units {
+        *freq.entry(u.clone()).or_insert(0) += 1;
+        if u.is_zero() {
+            null_count += 1;
+        }
+        if *u == all_ones_val {
+            all_ones_count += 1;
+        }
+        min_val = Some(match min_val {
+            Some(curr) => curr.min(u.clone()),
+            None => u.clone(),
+        });
+        max_val = Some(match max_val {
+            Some(curr) => curr.max(u.clone()),
+            None => u.clone(),
+        });
+    }
+
+    let distinct_units = freq.len();
+
+    let mut unit_entropy = 0.0f64;
+    let n_f = n as f64;
+    for &count in freq.values() {
+        if count > 0 {
+            let p = count as f64 / n_f;
+            unit_entropy -= p * p.log2();
+        }
+    }
+
+    let max_theoretical = if unit_bits < 64 {
+        (1u64 << unit_bits) as f64
+    } else {
+        f64::MAX
+    };
+    let max_unit_entropy = n_f.min(max_theoretical).log2();
+    let normalized_entropy = if unit_bits > 0 {
+        (unit_entropy / (unit_bits as f64)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let entropy_diagnosis = if normalized_entropy > 0.98 {
+        "Near-maximal (0.98-1.00): Cryptographic randomness, cipher payload, or dense compressed stream".to_string()
+    } else if normalized_entropy > 0.85 {
+        "High (0.85-0.98): Compressed data, packed floating-point numbers, or dense bitfields"
+            .to_string()
+    } else if normalized_entropy > 0.50 {
+        "Medium (0.50-0.85): Structured records, machine instructions, or mixed text/binary"
+            .to_string()
+    } else if normalized_entropy > 0.20 {
+        "Low (0.20-0.50): Sparse data, ASCII text, or structured protocol headers".to_string()
+    } else {
+        "Very Low (<0.20): Constant, repetitive, or zero-dominated stream".to_string()
+    };
+
+    let mut unit_pairs: Vec<(&BigUint, usize)> = freq.iter().map(|(u, &c)| (u, c)).collect();
+    unit_pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+    let hex_width = unit_bits.div_ceil(4).max(2);
+    let top_units: Vec<UnitFrequency> = unit_pairs
+        .iter()
+        .take(5)
+        .map(|&(u, count)| {
+            let hex_str = u.to_str_radix(16).to_uppercase();
+            let padded_hex = format!("0x{:0>width$}", hex_str, width = hex_width);
+            UnitFrequency {
+                value_dec: u.to_str_radix(10),
+                value_hex: padded_hex,
+                count,
+                percent: (count as f64 / n_f) * 100.0,
+            }
+        })
+        .collect();
+
+    let mut detected_strides = Vec::new();
+    let max_stride = 256.min(n / 2);
+    let baseline_p = 1.0 / (distinct_units as f64).max(1.0);
+
+    for s in 1..=max_stride {
+        let cmp_len = n - s;
+        let mut matches = 0;
+        for i in 0..cmp_len {
+            if units[i] == units[i + s] {
+                matches += 1;
+            }
+        }
+        let ratio = matches as f64 / cmp_len as f64;
+        if ratio > baseline_p * 2.0 && ratio > 0.02 {
+            let likely_format = match s {
+                1 => "Consecutive identical units (repetition run)",
+                2 => "Stereo audio or 2-unit interleaved record stride",
+                3 => "RGB or 3-unit tuple stride",
+                4 => "RGBA pixel or 4-channel audio stride",
+                6 => "6-unit record stride",
+                8 => "8-unit record stride / 64-bit word stride",
+                16 => "16-unit SIMD / 128-bit block stride",
+                32 => "32-unit AVX / SHA-256 block stride",
+                64 => "64-unit cacheline stride",
+                188 if unit_bits == 8 => "MPEG Transport Stream (188-byte packet stride)",
+                204 if unit_bits == 8 => "MPEG-TS with Reed-Solomon parity (204-byte stride)",
+                _ => "Periodic structured record boundary",
+            };
+            let confidence = if ratio > 0.3 {
+                "Very High"
+            } else if ratio > 0.1 {
+                "High"
+            } else {
+                "Moderate"
+            };
+            detected_strides.push(DetectedUnitStride {
+                stride_units: s,
+                stride_bits: s * unit_bits,
+                match_ratio: ratio,
+                confidence: confidence.to_string(),
+                likely_format,
+            });
+        }
+    }
+    detected_strides.sort_by(|a, b| {
+        b.match_ratio
+            .partial_cmp(&a.match_ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    detected_strides.truncate(5);
+
+    let bytes = units_to_bytes(units, unit_bits);
+    let key_bits = key_search_bits.unwrap_or(256);
+    let crypto_key_candidates = find_crypto_keys(&bytes, unit_bits, key_bits);
+
+    let general_diagnosis = if !crypto_key_candidates.is_empty()
+        && (crypto_key_candidates[0].confidence == "Very High"
+            || crypto_key_candidates[0].confidence == "High")
+    {
+        format!(
+            "High-entropy unit stream with strong {} candidate at unit offset {} (bit {}, entropy {:.4}/{:.4}).",
+            crypto_key_candidates[0].likely_algorithm,
+            crypto_key_candidates[0].start_unit,
+            crypto_key_candidates[0].bit_offset,
+            crypto_key_candidates[0].entropy,
+            crypto_key_candidates[0].max_entropy
+        )
+    } else if (null_count as f64 / n_f) > 0.70 {
+        "Sparse unit stream with heavy zero-padding.".to_string()
+    } else if !detected_strides.is_empty() {
+        format!(
+            "Structured unit stream with periodic record stride of {} units ({} bits).",
+            detected_strides[0].stride_units, detected_strides[0].stride_bits
+        )
+    } else if normalized_entropy > 0.90 {
+        "High-entropy opaque unit stream (compressed, encrypted, or packed float payload)."
+            .to_string()
+    } else {
+        "Structured unit stream with mixed data structures.".to_string()
+    };
+
+    let min_val_str = min_val
+        .map(|u| {
+            let h = u.to_str_radix(16).to_uppercase();
+            format!(
+                "{} (0x{:0>width$})",
+                u.to_str_radix(10),
+                h,
+                width = hex_width
+            )
+        })
+        .unwrap_or_else(|| "0".to_string());
+
+    let max_val_str = max_val
+        .map(|u| {
+            let h = u.to_str_radix(16).to_uppercase();
+            format!(
+                "{} (0x{:0>width$})",
+                u.to_str_radix(10),
+                h,
+                width = hex_width
+            )
+        })
+        .unwrap_or_else(|| "0".to_string());
+
+    UnitProbeReport {
+        target: target_name.to_string(),
+        unit_bits,
+        total_units: n,
+        total_bits,
+        total_bytes,
+        distinct_units,
+        min_value: min_val_str,
+        max_value: max_val_str,
+        null_units: null_count,
+        null_percent: (null_count as f64 / n_f) * 100.0,
+        all_ones_units: all_ones_count,
+        all_ones_percent: (all_ones_count as f64 / n_f) * 100.0,
+        unit_entropy,
+        max_unit_entropy,
+        normalized_entropy,
+        entropy_diagnosis,
+        top_units,
+        detected_strides,
+        crypto_key_candidates,
+        general_diagnosis,
+    }
+}
+
+pub fn format_unit_probe_text(report: &UnitProbeReport) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "================================================================================\n",
+    );
+    out.push_str("bdd Unit Stream Prober (Post-Input Stream Processing)\n");
+    out.push_str(
+        "================================================================================\n",
+    );
+    out.push_str(&format!("Target:              {}\n", report.target));
+    out.push_str(&format!("Unit Width:          {} bits\n", report.unit_bits));
+    out.push_str(&format!(
+        "Sample Size:         {} units ({} bits / {} bytes)\n",
+        report.total_units, report.total_bits, report.total_bytes
+    ));
+    out.push_str(&format!(
+        "Shannon Entropy:     {:.4} / {:.4} bits/unit (Normalized: {:.4})\n",
+        report.unit_entropy, report.max_unit_entropy, report.normalized_entropy
+    ));
+    out.push_str(&format!(
+        "Entropy Level:       {}\n",
+        report.entropy_diagnosis
+    ));
+    out.push_str(&format!(
+        "General Diagnosis:   {}\n\n",
+        report.general_diagnosis
+    ));
+
+    out.push_str("Unit Value Statistics:\n");
+    out.push_str(&format!(
+        "  • Distinct Values:     {:>8} / {}\n",
+        report.distinct_units, report.total_units
+    ));
+    out.push_str(&format!("  • Minimum Value:       {}\n", report.min_value));
+    out.push_str(&format!("  • Maximum Value:       {}\n", report.max_value));
+    out.push_str(&format!(
+        "  • Null Units (0x00):   {:>8}  ({:5.2}%)\n",
+        report.null_units, report.null_percent
+    ));
+    out.push_str(&format!(
+        "  • Max Units (All-1s):  {:>8}  ({:5.2}%)\n",
+        report.all_ones_units, report.all_ones_percent
+    ));
+
+    if !report.top_units.is_empty() {
+        out.push_str("\nTop Frequent Unit Values:\n");
+        for u in &report.top_units {
+            out.push_str(&format!(
+                "  • {:>8} ({:>6}): {:>8} ({:5.2}%)\n",
+                u.value_hex, u.value_dec, u.count, u.percent
+            ));
+        }
+    }
+
+    if !report.detected_strides.is_empty() {
+        out.push_str("\nDetected Periodic Unit Strides (Autocorrelation):\n");
+        for s in &report.detected_strides {
+            out.push_str(&format!(
+                "  • {:>4} units ({:>5} bits) [Match: {:5.2}%, Conf: {:<9}]: {}\n",
+                s.stride_units,
+                s.stride_bits,
+                s.match_ratio * 100.0,
+                s.confidence,
+                s.likely_format
+            ));
+        }
+    }
+
+    if !report.crypto_key_candidates.is_empty() {
+        out.push_str("\nPotential Maximum-Entropy Cryptographic Keys:\n");
+        for c in &report.crypto_key_candidates {
+            out.push_str(&format!(
+                "  #{} [{}] Unit offset: {} (bit {}, byte 0x{:04X}), Len: {} bits ({} bytes)\n",
+                c.rank,
+                c.confidence,
+                c.start_unit,
+                c.bit_offset,
+                c.bit_offset / 8,
+                c.bit_length,
+                c.byte_length
+            ));
+            out.push_str(&format!(
+                "     Entropy:        {:.4} / {:.4} bits/byte (Normalized: {:.4})\n",
+                c.entropy, c.max_entropy, c.normalized_entropy
+            ));
+            out.push_str(&format!(
+                "     Bit Balance:    {:.2}% ones set\n",
+                c.bit_balance_percent
+            ));
+            out.push_str(&format!("     Likely Type:    {}\n", c.likely_algorithm));
+            out.push_str(&format!("     Hex Payload:    {}\n", c.hex_payload));
+        }
+    }
+
+    out
+}
+
+pub fn format_unit_probe_json(report: &UnitProbeReport) -> String {
+    serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_key_bits() {
+        assert_eq!(parse_key_bits("").unwrap(), 256);
+        assert_eq!(parse_key_bits("128").unwrap(), 128);
+        assert_eq!(parse_key_bits("256").unwrap(), 256);
+        assert_eq!(parse_key_bits("512").unwrap(), 512);
+        assert_eq!(parse_key_bits("16B").unwrap(), 128);
+        assert_eq!(parse_key_bits("32B").unwrap(), 256);
+        assert_eq!(parse_key_bits("64B").unwrap(), 512);
+        assert_eq!(parse_key_bits("32 bytes").unwrap(), 256);
+        assert_eq!(parse_key_bits("128-bit").unwrap(), 128);
+        assert!(parse_key_bits("0").is_err());
+        assert!(parse_key_bits("abc").is_err());
+    }
+
+    #[test]
+    fn test_units_to_bytes() {
+        let u8_units = vec![BigUint::from(0x12u32), BigUint::from(0x34u32)];
+        assert_eq!(units_to_bytes(&u8_units, 8), vec![0x12, 0x34]);
+
+        let u16_units = vec![BigUint::from(0x1234u32), BigUint::from(0x5678u32)];
+        assert_eq!(units_to_bytes(&u16_units, 16), vec![0x12, 0x34, 0x56, 0x78]);
+
+        let u4_units = vec![BigUint::from(0xAu32), BigUint::from(0xBu32)];
+        assert_eq!(units_to_bytes(&u4_units, 4), vec![0xAB]);
+    }
+
+    #[test]
+    fn test_find_crypto_keys_embedded() {
+        // Stream: 100 null bytes + 32 distinct bytes (near max entropy) + 100 null bytes
+        let mut data = vec![0u8; 100];
+        let mut key = Vec::new();
+        for i in 0..32u8 {
+            key.push(i ^ 0xA5);
+        }
+        data.extend_from_slice(&key);
+        data.extend_from_slice(&[0u8; 100]);
+
+        let candidates = find_crypto_keys(&data, 8, 256);
+        assert!(!candidates.is_empty());
+        let top = &candidates[0];
+        assert_eq!(top.bit_offset, 100 * 8);
+        assert_eq!(top.start_unit, 100);
+        assert_eq!(top.bit_length, 256);
+        assert_eq!(top.byte_length, 32);
+        assert!(top.normalized_entropy > 0.95);
+        let expected_hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(top.hex_payload, expected_hex);
+    }
+
+    #[test]
+    fn test_probe_unit_stream_zeroes() {
+        let units = vec![BigUint::zero(); 100];
+        let rep = probe_unit_stream(&units, 8, Some(256), "test_zeros");
+        assert_eq!(rep.total_units, 100);
+        assert_eq!(rep.distinct_units, 1);
+        assert_eq!(rep.null_units, 100);
+        assert_eq!(rep.unit_entropy, 0.0);
+    }
+
+    #[test]
+    fn test_probe_unit_stream_stride() {
+        // Periodic RGB stride: 1, 2, 3, 1, 2, 3...
+        let mut units = Vec::new();
+        for _ in 0..100 {
+            units.push(BigUint::from(1u32));
+            units.push(BigUint::from(2u32));
+            units.push(BigUint::from(3u32));
+        }
+        let rep = probe_unit_stream(&units, 8, Some(256), "test_stride");
+        assert!(rep.detected_strides.iter().any(|s| s.stride_units == 3));
+    }
 }

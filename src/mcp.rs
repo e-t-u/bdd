@@ -113,6 +113,24 @@ pub fn run_mcp_server() -> Result<(), BddError> {
                         }
                     },
                     {
+                        "name": "bdd_probe_units",
+                        "description": "Probe unit stream characteristics and entropy AFTER input stream processing, including detection of maximum-entropy cryptographic keys (AES-256, ChaCha20, Ed25519).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": { "type": "string", "description": "Absolute path to binary file" },
+                                "unit_bits": { "type": "integer", "description": "Unit size in bits (default: 8)" },
+                                "skip_bits": { "type": "integer", "description": "Bits to skip before stream processing" },
+                                "skip_units": { "type": "integer", "description": "Units to skip before stream processing" },
+                                "pattern": { "type": "string", "description": "Pattern or stream pattern specification" },
+                                "probe_field": { "type": "integer", "description": "Tuple field index to probe when pattern unpacking" },
+                                "key_search_bits": { "type": "integer", "description": "Target key candidate window size in bits (e.g. 128, 256, 512, default: 256)" },
+                                "count": { "type": "integer", "description": "Maximum number of units to sample" }
+                            },
+                            "required": ["file_path"]
+                        }
+                    },
+                    {
                         "name": "bdd_explain_pattern",
                         "description": "Verify and explain a bit pattern, computing bit offsets, byte alignments, and field types.",
                         "inputSchema": {
@@ -234,6 +252,51 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
                 .map_err(|e| format!("Failed to read file: {}", e))?;
             let report = probe_buffer(&buf, file_path);
             Ok(format_probe_json(&report))
+        }
+        "bdd_probe_units" => {
+            let file_path = args
+                .get("file_path")
+                .and_then(|p| p.as_str())
+                .ok_or_else(|| "Missing required argument 'file_path'".to_string())?;
+
+            let mut cli_args = vec![
+                "bdd".to_string(),
+                format!("--input-file={}", file_path),
+                "--probe-units".to_string(),
+                "--output-json".to_string(),
+            ];
+
+            if let Some(u) = args.get("unit_bits").and_then(|u| u.as_u64()) {
+                cli_args.push(format!("--input-unit={}", u));
+            }
+            if let Some(sb) = args.get("skip_bits").and_then(|s| s.as_u64()) {
+                cli_args.push(format!("--input-skip-bits={}", sb));
+            }
+            if let Some(su) = args.get("skip_units").and_then(|s| s.as_u64()) {
+                cli_args.push(format!("--input-skip-units={}", su));
+            }
+            if let Some(pat) = args.get("pattern").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--input-pattern={}", pat));
+            }
+            if let Some(pf) = args.get("probe_field").and_then(|f| f.as_u64()) {
+                cli_args.push(format!("--probe-field={}", pf));
+            }
+            if let Some(kb) = args.get("key_search_bits").and_then(|k| k.as_u64()) {
+                cli_args.push(format!("--probe-keys={}", kb));
+            }
+            if let Some(count) = args.get("count").and_then(|c| c.as_u64()) {
+                cli_args.push(format!("--count={}", count));
+            }
+
+            let cli = Cli::try_parse_from(&cli_args).map_err(|e| e.to_string())?;
+            let config = validate_and_process(cli).map_err(|e| e.to_string())?;
+
+            let buf = SharedBuffer::default();
+            crate::engine::run_pipeline_to_writer(config, buf.clone())
+                .map_err(|e| e.to_string())?;
+            let output_bytes = buf.0.lock().unwrap().clone();
+            let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
+            Ok(output_str)
         }
         "bdd_slice" => {
             let file_path = args

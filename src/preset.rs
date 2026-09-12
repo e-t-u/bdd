@@ -140,6 +140,38 @@ pub static PRESETS: &[Preset] = &[
         little_endian: false,
         default_count: None,
     },
+    Preset {
+        name: "proc-pagemap",
+        description: "Linux /proc/[pid]/pagemap 64-bit page table entry (present, swapped, exclusive, dirty, pfn)",
+        pattern: "present:1b,swapped:1b,file_page:1b,3x,uffd_wp:1b,exclusive:1b,soft_dirty:1b,pfn:55u",
+        unit_bits: 64,
+        little_endian: true,
+        default_count: None,
+    },
+    Preset {
+        name: "proc-auxv",
+        description: "Linux ELF 64-bit Auxiliary Vector entry (type, val)",
+        pattern: "val:64U,type:64U",
+        unit_bits: 128,
+        little_endian: true,
+        default_count: None,
+    },
+    Preset {
+        name: "pci-config",
+        description: "PCI Configuration Space 16-byte base header (vendor, device, command, status, class)",
+        pattern: "bist:8U,hdr_type:8U,latency:8U,cache_line:8U,class_code:8U,subclass:8U,prog_if:8U,rev_id:8U,status:16U,cmd:16U,device_id:16U,vendor_id:16U",
+        unit_bits: 128,
+        little_endian: true,
+        default_count: Some(1),
+    },
+    Preset {
+        name: "netlink-proc-event",
+        description: "Linux Netlink Process Connector proc_event header (what, cpu, timestamp_ns)",
+        pattern: "timestamp_ns:64U,cpu:32U,what:32U",
+        unit_bits: 128,
+        little_endian: true,
+        default_count: None,
+    },
 ];
 
 /// Find a preset by name (case-insensitive, allows hyphens and underscores).

@@ -455,16 +455,16 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                     return Err(BddError::NonAlignedEof);
                 }
                 if !self.counter.finished()
-                    && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                    && (self.config.repeat_count == 0
+                        || self.current_repeat < self.config.repeat_count)
+                    && self.reader.rewind()?
                 {
-                    if self.reader.rewind()? {
-                        self.current_repeat += 1;
-                        self.eof = false;
-                        self.buffer = BigUint::zero();
-                        self.bits_in_buffer = 0;
-                        self.do_skip();
-                        continue;
-                    }
+                    self.current_repeat += 1;
+                    self.eof = false;
+                    self.buffer = BigUint::zero();
+                    self.bits_in_buffer = 0;
+                    self.do_skip();
+                    continue;
                 }
                 return Ok(None);
             }
@@ -475,14 +475,14 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                     self.bits_in_buffer = 0;
                     self.buffer = BigUint::zero();
                     if !self.counter.finished()
-                        && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                        && (self.config.repeat_count == 0
+                            || self.current_repeat < self.config.repeat_count)
+                        && self.reader.rewind()?
                     {
-                        if self.reader.rewind()? {
-                            self.current_repeat += 1;
-                            self.eof = false;
-                            self.do_skip();
-                            continue;
-                        }
+                        self.current_repeat += 1;
+                        self.eof = false;
+                        self.do_skip();
+                        continue;
                     }
                     return Ok(None);
                 }
@@ -515,29 +515,29 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                             unit = reverse_bits(&unit, self.config.unit_size);
                         }
                         if !self.counter.finished()
-                            && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                            && (self.config.repeat_count == 0
+                                || self.current_repeat < self.config.repeat_count)
+                            && self.reader.rewind()?
                         {
-                            if self.reader.rewind()? {
-                                self.current_repeat += 1;
-                                self.eof = false;
-                                self.buffer = BigUint::zero();
-                                self.bits_in_buffer = 0;
-                                self.do_skip();
-                            }
+                            self.current_repeat += 1;
+                            self.eof = false;
+                            self.buffer = BigUint::zero();
+                            self.bits_in_buffer = 0;
+                            self.do_skip();
                         }
                         return Ok(Some(unit));
                     } else {
                         if !self.counter.finished()
-                            && (self.config.repeat_count == 0 || self.current_repeat < self.config.repeat_count)
+                            && (self.config.repeat_count == 0
+                                || self.current_repeat < self.config.repeat_count)
+                            && self.reader.rewind()?
                         {
-                            if self.reader.rewind()? {
-                                self.current_repeat += 1;
-                                self.eof = false;
-                                self.buffer = BigUint::zero();
-                                self.bits_in_buffer = 0;
-                                self.do_skip();
-                                continue;
-                            }
+                            self.current_repeat += 1;
+                            self.eof = false;
+                            self.buffer = BigUint::zero();
+                            self.bits_in_buffer = 0;
+                            self.do_skip();
+                            continue;
                         }
                         return Ok(None);
                     }
@@ -746,11 +746,10 @@ impl<R: BufRead + StreamSeek> UnitStream for IntegerInputStream<R> {
                 Ok(0) => {
                     if !self.counter.finished()
                         && (self.repeat_count == 0 || self.current_repeat < self.repeat_count)
+                        && self.reader.rewind().unwrap_or(false)
                     {
-                        if self.reader.rewind().unwrap_or(false) {
-                            self.current_repeat += 1;
-                            continue;
-                        }
+                        self.current_repeat += 1;
+                        continue;
                     }
                     return Ok(None);
                 }
@@ -882,11 +881,10 @@ impl<R: BufRead + StreamSeek> TupleDirectInput<R> {
                 Ok(0) => {
                     if !self.counter.finished()
                         && (self.repeat_count == 0 || self.current_repeat < self.repeat_count)
+                        && self.reader.rewind().unwrap_or(false)
                     {
-                        if self.reader.rewind().unwrap_or(false) {
-                            self.current_repeat += 1;
-                            continue;
-                        }
+                        self.current_repeat += 1;
+                        continue;
                     }
                     return Ok(None);
                 }

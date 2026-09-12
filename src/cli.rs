@@ -254,6 +254,18 @@ pub struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub probe: Option<String>,
 
+    /// Probe unit stream characteristics and entropy AFTER input stream processing
+    #[arg(long, default_value_t = false, visible_alias = "probe-stream")]
+    pub probe_units: bool,
+
+    /// Scan unit stream for potential maximum-entropy cryptographic keys (e.g. 128, 256, 512 bits)
+    #[arg(long, num_args = 0..=1, default_missing_value = "256", visible_aliases = ["probe-crypto-keys", "probe-key"])]
+    pub probe_keys: Option<String>,
+
+    /// Specific tuple field index (0-based) to probe when using stream patterns
+    #[arg(long)]
+    pub probe_field: Option<usize>,
+
     /// Start Model Context Protocol (MCP) JSON-RPC 2.0 stdio server
     #[arg(long, default_value_t = false)]
     pub mcp: bool,
@@ -423,6 +435,9 @@ pub struct ValidatedConfig {
     pub list_presets: bool,
     pub explain_pattern: Option<String>,
     pub probe: Option<String>,
+    pub probe_units: bool,
+    pub probe_keys: Option<String>,
+    pub probe_field: Option<usize>,
     pub mcp: bool,
 }
 
@@ -1246,6 +1261,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         list_presets: cli.list_presets,
         explain_pattern: cli.explain_pattern,
         probe: cli.probe,
+        probe_units: cli.probe_units || cli.probe_keys.is_some() || cli.probe_field.is_some(),
+        probe_keys: if cli.probe_keys.is_some() {
+            cli.probe_keys
+        } else if cli.probe_units || cli.probe_field.is_some() {
+            Some("256".to_string())
+        } else {
+            None
+        },
+        probe_field: cli.probe_field,
         mcp: cli.mcp,
     })
 }

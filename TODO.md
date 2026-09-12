@@ -38,27 +38,35 @@ This document consolidates high-value feature improvements, API additions, and a
   - Reserve `--round` strictly for precision reduction: rounding floats to integers or rounding floats/integers to a specified step/precision (`--round FIELD,PRECISION[,MODE]`).
   - Re-examine floating-point codecs and pipelines to avoid unintended `f64` conversions when bit-exactness is required, and ensure rounding modes applied to float mantissas and integers are mathematically precise and consistent.
 
-### 1.3 Clarification and Architectural Evolution of Binary Probing (`--probe`)
-- **Current Architecture & Pipeline Stage**:
-  - **Where Probe Executes Today**: `--probe` is currently implemented as an **out-of-band pre-flight diagnostic scan** (`src/main.rs:83-113`). It runs directly on the raw input stream or file (`stdin` or target file) **before** the engine pipeline starts, and terminates immediately after printing its report without running the pipeline.
-  - **What It Currently Bypasses**: It does not pass through stream patterns (`--stream-pattern`), container slicing (`8[2:6]`), unit extraction (`--input-unit`), or tuple manipulation (`--rearrange`, `--round`). It samples up to 1 MB of raw input bytes and calculates:
-    1. Overall Shannon entropy ($0.0 - 8.0$).
-    2. Byte class distributions (null bytes, printable ASCII, high bytes).
-    3. Periodic autocorrelation strides ($1..512$ bytes) to identify container packet lengths (e.g. 188-byte MPEG-TS).
-    4. Printable ASCII string runs.
-  - **Documentation Deficit**: The user documentation (`README.md`, `bdd.1`) needs a much clearer explanation of what `--probe` does, how each metric should be interpreted, and where in the data lifecycle it operates.
-- **Proposed Feature: "Find Crypto Keys / High-Entropy Regions"**:
-  - **Motivation**: In binary reverse engineering, firmware auditing, and forensic analysis, a single global entropy score is insufficient—an uncompressed firmware image or memory dump might have moderate overall entropy (~4.5), but contain embedded 256-bit AES keys, RSA private keys, or encrypted payload blocks with maximal entropy ($H \approx 8.0$).
-  - **Target Feature**: Sliding-window localized entropy scanning (`--probe-entropy-scan` or `--probe-keys`):
-    - Slides across the stream using configurable window sizes (e.g. 16, 32, 64, 256 bytes).
-    - Detects localized entropy spikes ($H > 7.8$) to pinpoint candidate encryption keys, IVs, ciphertext blobs, or compressed segments.
-    - Outputs candidate offset locations, bit ranges, length, and local entropy score in human-readable output and structured JSON (`--output-json`).
-- **Proposed Architectural Evolution: Probing Inside the Processing Pipeline**:
-  - **Post-Pattern / Per-Field Probing (`--probe-field=F` / `--probe-tuple`)**:
-    - Allow probing *after* the stream unpacker / container pattern has sliced the stream.
-    - *Use Case*: In a multiplexed container (e.g. MPEG-TS, telemetry frames, or custom protocol headers), measure the entropy and distribution of individual fields across packets (e.g. check if field 1 / payload is encrypted while field 0 / header remains structured).
-  - **Unit-Level Probing**:
-    - Allow computing entropy and periodicity across unpacked units rather than only raw bytes.
+### 1.3 Clarification and Architectural Evolution of Binary Probing (`--probe` & `--probe-units`) [COMPLETED]
+- **Architecture & Pipeline Stages**:
+  - **Raw Pre-Pipeline Prober (`--probe`)**: Pre-flight diagnostic scan (`src/main.rs`). Runs directly on raw `stdin` or target file before engine execution. Samples raw bytes and computes global Shannon entropy ($0..8$), byte distributions, $1..512$ byte strides, and ASCII string runs.
+  - **Post-Processing Unit Stream Prober (`--probe-units` / `--probe-stream`)**: Runs inside the engine pipeline *after* input skips (`--input-skip-bits`, `--input-skip-units`), unit sizing (`--input-unit`), gaps (`--input-gap`), reversals, repeats, and pattern unpacking (`--input-pattern` / `--stream-pattern`).
+  - **Per-Field Probing (`--probe-field=INDEX`)**: Targets a specific field of an unpacked container (e.g. payload field 1 in MPEG-TS) for entropy and distribution analysis.
+- **Cryptographic Key Discovery (`--probe-keys` / `--probe-crypto-keys`) [COMPLETED]**:
+  - Sliding-window localized entropy scanning across the unit stream.
+  - Window sizes configurable via bits (128, 256, 512) or bytes (16B, 32B, 64B), default 256 bits (32 bytes).
+  - Non-maximum suppression (NMS) isolates distinct peak candidates without reporting redundant 1-byte shifted windows.
+  - Reports exact unit offset, bit offset, length, Shannon entropy, normalized entropy ratio, bit balance (% set bits), hex payload, and confidence classification.
+  - Integrated into CLI text output, structured JSON (`--output-json`), and Model Context Protocol (`bdd_probe_units`).
+
+### 1.4 Native Netlink & Kernel Telemetry Stream Ingestion (`--input-netlink`)
+- **Motivation & Background**:
+  The Linux kernel exposes ultra-fast binary telemetry and process lifecycle events over Netlink sockets:
+  - `NETLINK_CONNECTOR` with `CN_IDX_PROC` (real-time `FORK`, `EXEC`, `EXIT`, `UID`/`GID`, `COMM` events without polling)
+  - `NETLINK_GENERIC` / `TASKSTATS` (per-process and per-cgroup microsecond CPU, I/O delay, swap delay, and peak RSS accounting)
+  - `NETLINK_INET_DIAG` (binary socket monitoring replacing `netstat`/`ss`)
+  Currently, subscribing to Netlink multicast groups requires an external script/helper (such as `contrib/python/bdd_netlink_proc.py`) to open the Netlink socket, send multicast registration (`PROC_CN_MCAST_LISTEN`), and pipe the resulting packet stream into `bdd`.
+- **Target Enhancements**:
+  1. **Native Netlink Input Stream Source**:
+     Support direct Netlink socket binding and multicast group subscription via CLI:
+     ```bash
+     bdd --input-netlink=connector:proc --preset=netlink-proc-event --output-json
+     ```
+  2. **Netlink Message Alignment & Framing**:
+     Automatic handling of `nlmsghdr` (16 bytes) and Netlink connector headers (`cn_msg`), slicing the payload directly into target presets (`netlink-proc-event`, `proc-fork`, `proc-exec`, `proc-exit`).
+  3. **Zero-Polling Real-Time System Monitor (`bdd top` / `bdd ps`)**:
+     Combine native Netlink connector event streaming with $O(1)$ `/proc/[pid]/pagemap` seeking and `/proc/[pid]/auxv` dissection to build an ultra-fast, zero-overhead process monitor entirely within the `bdd` toolchain.
 
 ---
 
@@ -136,6 +144,9 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Multi-gigabit Rust engine**: High-performance engine achieving 16 Gbps bit reversal and multi-gigabit streaming throughput.
 - [x] **Warning deduplication & quiet mode on high-throughput streams**: Diagnostic warnings printed only on first occurrence during stream processing; deduplicated warning summary emitted at EOF. Added `-q` / `--quiet` flag to completely suppress non-fatal warnings and summaries for maximum pipeline throughput.
 - [x] **Unified Stream I/O Mapping Syntax & Symmetrical Output Framing (Approach 1)**: Unified positional stream pattern argument (e.g. `8->3`, `123:8[2:4]+8 -> 5B:8[2:4]`) supporting both Form A (`raw[offset:unit]`) and Form B (`[pre:unit:post]`), flexible positional CLI syntax (`bdd [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN] [OPTIONS]`), and symmetrical output framing flags (`--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`).
+- [x] **Linux Kernel & Hardware Dissection Presets**: Added built-in format presets for kernel memory and hardware structures: `proc-pagemap` (64-bit page table entries: present, swapped, exclusive, dirty, pfn), `proc-auxv` (ELF 64-bit auxiliary vectors: AT_CLKTCK, AT_PAGESZ, AT_SECURE), `pci-config` (16-byte PCI device header: vendor, device, command, status, class), and `netlink-proc-event` (Netlink process connector event headers).
+- [x] **Netlink Connector & Process Monitoring Suite**: Created `contrib/python/bdd_netlink_proc.py` for real-time, zero-polling Linux process lifecycle event streaming (FORK, EXEC, EXIT, UID/GID, COMM), `contrib/python/bdd_ps.py` for deep pagemap memory (USS / private exclusive memory) and signal mask inspection, and `contrib/python/bdd_top.py` for an interactive terminal monitor.
+- [x] **Raw Memory & Cryptographic Key Streaming Tools**: Created `contrib/shell/stream_memory_keys.sh` and `contrib/python/stream_memory_keys.py` to stream system memory (physical RAM `/dev/mem`, kernel `/proc/kcore`, process virtual memory `/proc/[pid]/mem`, or standalone demo vectors) 256 bits at a time into `bdd --probe-keys=256` to locate high-entropy candidate cryptographic keys (AES-256, ChaCha20, Ed25519) with Shannon entropy, bit balance, and confidence scoring.
 - [ ] **Inline Unit Manipulations in Stream Patterns**: Extend the stream arrow notation to support inline unit transformations between input and output specifications (e.g. `<in> -> <manip> -> <out>`).
 
 

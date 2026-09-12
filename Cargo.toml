@@ -1,6 +1,6 @@
 [package]
 name = "bdd"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Command line tool to interpret, manipulate, merge and create bit streams"
 authors = ["Esa Turtiainen"]

@@ -542,6 +542,33 @@ fn test_named_patterns_and_presets() {
     assert!(stdout_tcp.contains("\"syn\":1"));
     assert!(stdout_tcp.contains("\"ack\":0"));
 
+    // Test kernel presets
+    let out_auxv = Command::new(BDD_BIN)
+        .args(["--explain-pattern=proc-auxv"])
+        .output()
+        .expect("failed to run explain-pattern proc-auxv");
+    assert!(out_auxv.status.success());
+    let stdout_auxv = String::from_utf8(out_auxv.stdout).unwrap();
+    assert!(stdout_auxv.contains("128 bits"));
+    assert!(stdout_auxv.contains("type") && stdout_auxv.contains("val"));
+
+    let out_pagemap = Command::new(BDD_BIN)
+        .args(["--explain-pattern=proc-pagemap"])
+        .output()
+        .expect("failed to run explain-pattern proc-pagemap");
+    assert!(out_pagemap.status.success());
+    let stdout_pagemap = String::from_utf8(out_pagemap.stdout).unwrap();
+    assert!(stdout_pagemap.contains("64 bits"));
+    assert!(stdout_pagemap.contains("present") && stdout_pagemap.contains("pfn"));
+
+    let out_pci = Command::new(BDD_BIN)
+        .args(["--explain-pattern=pci-config"])
+        .output()
+        .expect("failed to run explain-pattern pci-config");
+    assert!(out_pci.status.success());
+    let stdout_pci = String::from_utf8(out_pci.stdout).unwrap();
+    assert!(stdout_pci.contains("vendor_id") && stdout_pci.contains("device_id"));
+
     // Test custom pattern with names and --json-fields
     let out_custom = Command::new(BDD_BIN)
         .args([
@@ -631,6 +658,8 @@ fn test_mcp_server_protocol() {
         writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"bdd_list_presets\",\"arguments\":{{}}}}}}").unwrap();
         // 4. tools/call bdd_slice on sample.mp3
         writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"bdd_slice\",\"arguments\":{{\"file_path\":\"contrib/data/sample.mp3\",\"preset\":\"mp3-header\",\"count\":1}}}}}}").unwrap();
+        // 5. tools/call bdd_probe_units on sample.mp3
+        writeln!(stdin, "{{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{{\"name\":\"bdd_probe_units\",\"arguments\":{{\"file_path\":\"contrib/data/sample.mp3\",\"count\":100}}}}}}").unwrap();
     }
 
     let output = child
@@ -639,7 +668,7 @@ fn test_mcp_server_protocol() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.trim().lines().collect();
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 5);
 
     // Line 1: initialize
     assert!(lines[0].contains(&format!(
@@ -649,6 +678,7 @@ fn test_mcp_server_protocol() {
     // Line 2: tools/list
     assert!(lines[1].contains("\"name\":\"bdd_slice\""));
     assert!(lines[1].contains("\"name\":\"bdd_probe\""));
+    assert!(lines[1].contains("\"name\":\"bdd_probe_units\""));
     // Line 3: bdd_list_presets
     assert!(lines[2].contains("mp3-header"));
     #[cfg(feature = "small-floats")]
@@ -656,6 +686,8 @@ fn test_mcp_server_protocol() {
     // Line 4: bdd_slice output
     assert!(lines[3].contains("sync") && lines[3].contains("2047"));
     assert!(lines[3].contains("bitrate") && lines[3].contains("9"));
+    // Line 5: bdd_probe_units output
+    assert!(lines[4].contains("total_units") && lines[4].contains("unit_entropy"));
 }
 
 #[test]
@@ -823,10 +855,7 @@ fn test_quoted_strings_in_input_tuples() {
 fn test_radix_numbers_in_input_tuples_and_integers() {
     // 1. Test hex, octal, binary, and negative literals in --input-tuples
     let mut child = Command::new(BDD_BIN)
-        .args([
-            "--input-tuples",
-            "--output-tuples",
-        ])
+        .args(["--input-tuples", "--output-tuples"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -844,11 +873,7 @@ fn test_radix_numbers_in_input_tuples_and_integers() {
 
     // 2. Test packing mixed-radix tuples to binary output
     let mut child2 = Command::new(BDD_BIN)
-        .args([
-            "--input-tuples",
-            "--output-pattern=8U8U8U",
-            "--output-hex",
-        ])
+        .args(["--input-tuples", "--output-pattern=8U8U8U", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -866,10 +891,7 @@ fn test_radix_numbers_in_input_tuples_and_integers() {
 
     // 3. Test radix numbers in --input-integers
     let mut child3 = Command::new(BDD_BIN)
-        .args([
-            "--input-integers",
-            "--output-hex",
-        ])
+        .args(["--input-integers", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -1574,4 +1596,166 @@ fn test_nested_pattern_parentheses() {
     let stdout_bare = String::from_utf8(output_bare.stdout).unwrap();
     assert!(stdout_bare.contains("Total Width: 3 bits"));
     assert!(stdout_bare.contains("Fields:      3"));
+}
+
+#[test]
+fn test_probe_units_and_crypto_keys() {
+    // 1. Test unit probe on counter stream
+    let out = Command::new(BDD_BIN)
+        .args(["--input-counter", "--count=256", "--probe-units"])
+        .output()
+        .expect("failed to run bdd --probe-units");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("bdd Unit Stream Prober"));
+    assert!(stdout.contains("Sample Size:         256 units"));
+    assert!(stdout.contains("Unit Width:          8 bits"));
+    assert!(stdout.contains("Shannon Entropy:     8.0000 / 8.0000 bits/unit"));
+    assert!(stdout.contains("Potential Maximum-Entropy Cryptographic Keys"));
+
+    // 2. Test JSON output format
+    let out_json = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=64",
+            "--probe-units",
+            "--output-json",
+        ])
+        .output()
+        .expect("failed to run bdd --probe-units --output-json");
+    assert!(out_json.status.success());
+    let stdout_json = String::from_utf8(out_json.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout_json).expect("valid json output");
+    assert_eq!(v["total_units"], 64);
+    assert_eq!(v["unit_bits"], 8);
+    assert!(v["crypto_key_candidates"].is_array());
+
+    // 3. Test finding embedded crypto key after input skip
+    let file_path = "/tmp/bdd_embedded_key_test.bin";
+    let mut file_data = vec![0u8; 64];
+    let key_bytes = [
+        0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77,
+        0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14,
+        0xdf, 0xf4,
+    ];
+    file_data.extend_from_slice(&key_bytes);
+    file_data.extend_from_slice(&[0u8; 64]);
+    std::fs::write(file_path, &file_data).unwrap();
+
+    // Run --probe-keys on the file
+    let out_key = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", file_path),
+            "--probe-keys=256",
+            "--output-json",
+        ])
+        .output()
+        .expect("failed to run bdd --probe-keys");
+    assert!(out_key.status.success());
+    let stdout_key = String::from_utf8(out_key.stdout).unwrap();
+    let v_key: serde_json::Value = serde_json::from_str(&stdout_key).expect("valid json");
+    let candidates = v_key["crypto_key_candidates"].as_array().unwrap();
+    assert!(!candidates.is_empty());
+    let top_candidate = &candidates[0];
+    assert_eq!(top_candidate["start_unit"], 64);
+    assert_eq!(top_candidate["bit_offset"], 512);
+    assert_eq!(top_candidate["bit_length"], 256);
+    assert_eq!(top_candidate["byte_length"], 32);
+    let expected_hex: String = key_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+    assert_eq!(top_candidate["hex_payload"], expected_hex);
+
+    // 4. Test probing after input skip bits: skip 512 bits (64 bytes), key now at unit 0
+    let out_skip = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", file_path),
+            "--input-skip-bits=512",
+            "--probe-keys=256",
+            "--output-json",
+        ])
+        .output()
+        .expect("failed to run bdd with skip and probe-keys");
+    assert!(out_skip.status.success());
+    let v_skip: serde_json::Value = serde_json::from_slice(&out_skip.stdout).unwrap();
+    assert_eq!(v_skip["crypto_key_candidates"][0]["start_unit"], 0);
+    assert_eq!(v_skip["crypto_key_candidates"][0]["bit_offset"], 0);
+
+    // 5. Test probe with pattern and probe-field
+    let out_pat = Command::new(BDD_BIN)
+        .args([
+            "--input-counter",
+            "--count=32",
+            "--input-pattern=16U,32U",
+            "--probe-field=1",
+            "--probe-units",
+            "--output-json",
+        ])
+        .output()
+        .expect("failed to run bdd with probe-field");
+    assert!(out_pat.status.success());
+    let v_pat: serde_json::Value = serde_json::from_slice(&out_pat.stdout).unwrap();
+    assert_eq!(v_pat["unit_bits"], 32);
+    assert_eq!(v_pat["total_units"], 32);
+}
+
+#[test]
+fn test_stream_memory_keys_demo() {
+    // 1. Test shell script contrib/shell/stream_memory_keys.sh
+    let out_sh = Command::new("bash")
+        .args([
+            "contrib/shell/stream_memory_keys.sh",
+            "--source",
+            "demo",
+            "--units",
+            "128",
+            "--json",
+        ])
+        .env("BDD_BIN", BDD_BIN)
+        .output()
+        .expect("failed to run contrib/shell/stream_memory_keys.sh");
+
+    assert!(
+        out_sh.status.success(),
+        "stream_memory_keys.sh failed with stderr: {}",
+        String::from_utf8_lossy(&out_sh.stderr)
+    );
+    let v_sh: serde_json::Value =
+        serde_json::from_slice(&out_sh.stdout).expect("valid json from stream_memory_keys.sh");
+    assert_eq!(v_sh["unit_bits"], 256);
+    assert_eq!(v_sh["total_units"], 128);
+    let candidates_sh = v_sh["crypto_key_candidates"]
+        .as_array()
+        .expect("crypto_key_candidates array");
+    assert!(!candidates_sh.is_empty());
+    assert_eq!(candidates_sh[0]["confidence"], "Very High");
+    assert_eq!(candidates_sh[0]["bit_length"], 256);
+
+    // 2. Test python script contrib/python/stream_memory_keys.py
+    let out_py = Command::new("python3")
+        .args([
+            "contrib/python/stream_memory_keys.py",
+            "--source",
+            "demo",
+            "--units",
+            "128",
+            "--json",
+        ])
+        .env("BDD_BIN", BDD_BIN)
+        .output()
+        .expect("failed to run contrib/python/stream_memory_keys.py");
+
+    assert!(
+        out_py.status.success(),
+        "stream_memory_keys.py failed with stderr: {}",
+        String::from_utf8_lossy(&out_py.stderr)
+    );
+    let v_py: serde_json::Value =
+        serde_json::from_slice(&out_py.stdout).expect("valid json from stream_memory_keys.py");
+    assert_eq!(v_py["unit_bits"], 256);
+    assert_eq!(v_py["total_units"], 128);
+    let candidates_py = v_py["crypto_key_candidates"]
+        .as_array()
+        .expect("crypto_key_candidates array");
+    assert!(!candidates_py.is_empty());
+    assert_eq!(candidates_py[0]["confidence"], "Very High");
+    assert_eq!(candidates_py[0]["bit_length"], 256);
 }

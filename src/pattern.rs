@@ -105,7 +105,7 @@ fn expand_single_token(s: &str) -> String {
             }
             if chars.peek() == Some(&'*') {
                 chars.next(); // consume '*'
-                // Optional whitespace after '*'
+                              // Optional whitespace after '*'
                 while let Some(&next_c) = chars.peek() {
                     if next_c.is_whitespace() {
                         chars.next();
@@ -145,7 +145,10 @@ fn expand_single_token(s: &str) -> String {
                                 out.push_str(&format!("{}:{}", n, expanded_inner));
                             }
                         } else {
-                            if !out.is_empty() && !out.ends_with(',') && expanded_inner.contains(',') {
+                            if !out.is_empty()
+                                && !out.ends_with(',')
+                                && expanded_inner.contains(',')
+                            {
                                 out.push(',');
                             }
                             out.push_str(&expanded_inner);

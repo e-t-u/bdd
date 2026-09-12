@@ -34,6 +34,7 @@ test: all
 	python3 python/decode_media.py
 	python3 python/decode_ai_weights.py
 	python3 python/decode_network.py
+	python3 python/stream_memory_keys.py --source demo --units 128
 	@echo "==> Testing C Programs..."
 	./c/decode_media
 	./c/decode_ai_weights
