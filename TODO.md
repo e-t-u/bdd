@@ -89,14 +89,16 @@ This document consolidates high-value feature improvements, API additions, and a
      Allow merge streams to unpack arbitrary bitfield patterns rather than only raw integers.
 
 ### 3.4 Future of Stream Arrows: Full Pipeline Unification (Sources, Slicers, Manipulators & Sinks)
-- **Status**: Architecture Planned / RFC Published ([`docs/RFC-stream-arrows-unification.md`](docs/RFC-stream-arrows-unification.md)). Target: v0.6.0.
+- **Status**: Architecture Planned & Specified. RFC Published ([`docs/RFC-unified-stream-architecture-v2.md`](docs/RFC-unified-stream-architecture-v2.md), superseding [`docs/RFC-stream-arrows-unification.md`](docs/RFC-stream-arrows-unification.md)). Target: v0.6.0.
 - **Vision**: Expressing entire end-to-end dataflows—from synthetic sources or Linux kernel sockets, through sub-byte bit slicers and in-flight manipulators, to structured JSON/hex sinks—as a single, human-readable pipeline string:
   ```bash
   bdd "zeros -> 8 -> xor(0xFF) -> json"
   bdd "netlink -> proc-event -> filter(what == 2) -> json"
   bdd "rand -> 256 -> hex" --count 10
-  bdd "file('broadcast.ts') -> 188B[11:13] -> 13 -> file('pids.bin')"
+  bdd "file('broadcast.ts') -> 188B[11:13] -> hex"
+  bdd "4U4U -> 16U"
   ```
+- **Unified Pipeline Model**: Eliminates redundant intermediate unit sizes (e.g. `8` and `16` in `"ones -> 4U4U -> 16U -> hex"`), introduces a strongly-typed pipeline transition model (`Bitstream` -> `BitUnit` -> `Tuple` -> `BitUnit` -> `Terminal`), and resolves all grammatical and dimensional ambiguities.
 
 ---
 
