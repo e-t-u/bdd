@@ -21,6 +21,8 @@ pub enum BddError {
     CannotOpenMergeFile(String),
     SeekFailed,
     IoError(String),
+    OutOfBounds(String),
+    InvalidBitWidth(usize),
 }
 
 impl BddError {
@@ -80,6 +82,8 @@ impl fmt::Display for BddError {
             BddError::CannotOpenMergeFile(path) => write!(f, "Can not open merge file {}", path),
             BddError::SeekFailed => write!(f, "seek failed"),
             BddError::IoError(msg) => write!(f, "IO error: {}", msg),
+            BddError::OutOfBounds(msg) => write!(f, "Bitstream out of bounds: {}", msg),
+            BddError::InvalidBitWidth(bits) => write!(f, "Invalid bit width: {}", bits),
         }
     }
 }

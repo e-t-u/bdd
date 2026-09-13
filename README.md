@@ -100,6 +100,24 @@ Because the output unit remains at its default of 8 bits, each 3-bit input unit 
 
 ---
 
+### Non-8-Bit-Aligned Bitstreams in the CLI
+
+A natural question when dealing with bitstream data is: **Can `bdd` handle streams and units that are not aligned to 8-bit byte boundaries?**
+
+**Yes, completely.** `bdd` is built from the ground up as a sub-byte bitstream processor. Alignment to 8-bit byte boundaries is never required:
+
+1. **Arbitrary Bit Offsets**: An input stream can begin at any bit offset using `--input-skip-bits=N` (or `N : unit` in stream arrow syntax). For example, `11 : 13` skips 11 bits and begins streaming 13-bit units across byte boundaries.
+2. **Dense Sub-Byte & Odd-Width Units**: Units of any bit width (e.g., 1-bit flags, 3-bit opcodes, 5-bit fields, 12-bit ADC readings, 13-bit PIDs) pack continuously across byte boundaries without inter-unit padding. For instance, eight 3-bit units pack tightly into exactly 3 bytes (24 bits).
+3. **Periodic Bit Gaps**: You can skip arbitrary unaligned bit gaps between units (`--input-gap=5` or `+5`).
+4. **End-of-Stream (EOF) Alignment Controls**:
+   - **Default Zero-Padding on Output**: Unix files, fifos, and pipes operate strictly on 8-bit bytes. When writing out an unaligned bitstream (e.g., 13 bits total), `bdd` zero-pads the remaining bits of the final byte (`101...000`) so that POSIX byte writes remain valid.
+   - **`--drop-partial-eof`**: When reading an input stream whose final unit is truncated (e.g., only 5 bits remaining when 12 bits are expected), `--drop-partial-eof` discards the incomplete trailing bits instead of zero-padding them into a spurious final unit.
+   - **`--input-assert-aligned`**: Strictly verifies that the input stream terminates exactly on an 8-bit byte boundary, aborting with exit code 1 (`Non-aligned end of file`) if stray unaligned bits remain at EOF.
+
+*(For direct in-memory bitstream manipulation in Rust, C, and Python without files or pipes, see [Chapter 11](#11-programmatic-interfaces-non-8-bit-aligned-bitstream-apis-rust-c--python)).*
+
+---
+
 ### Units, Skips, and Gaps (The Simple Model)
 
 In `bdd`, all stream dimensions are measured strictly in **bits**, not bytes. In the basic stream model, data is processed as a repeating sequence of **Units**:
@@ -1055,43 +1073,159 @@ The CLI, interactive Web GUI, and MCP server cover exploration, scripts, and aut
 
 ---
 
-## 11. Programmatic Interfaces: C API and Python SDK
+## 11. Programmatic Interfaces: Non-8-Bit-Aligned Bitstream APIs (Rust, C & Python)
 
-`bdd` exports clean C-ABI symbols in `libbdd.so` and includes an official C header ([`include/bdd.h`](include/bdd.h)) and a zero-dependency Python wrapper ([`python/bdd.py`](python/bdd.py)):
+The CLI, interactive Web GUI, and MCP server cover command-line exploration, shell scripts, and autonomous AI agents. But when developing embedded firmware, device drivers, real-time multimedia decoders, or AI inference engines, you often need to manipulate non-8-bit-aligned bitstreams **directly in memory** without creating files, pipes, or shell subprocesses.
 
-### Python (`ctypes` & `pyproject.toml`)
+`bdd` provides native, zero-copy, non-8-bit-aligned bitstream abstractions across **Rust**, **C / C++**, and **Python**.
 
-```python
-from bdd import Bdd
+---
 
-b = Bdd()
+### Rust Library API (`bdd::bits`)
 
-# Fast hardware bit-reversal:
-assert b.reverse_bits(0x0F, 8) == 0xF0
+The `bdd` crate exports high-performance in-memory bitstream primitives in [`bdd::bits`](src/bits.rs):
 
-# Unpack bitfields into Python tuple:
-fields = b.unpack("4U4U", 0xA5)   # -> (10, 5)
+- **`read_bits_u64(src, bit_offset, bit_count) -> Result<u64, BddError>`**: Reads up to 64 bits starting at an arbitrary non-aligned bit offset.
+- **`write_bits_u64(dst, bit_offset, bit_count, val) -> Result<(), BddError>`**: Writes up to 64 bits at an unaligned bit offset, preserving all untouched neighbor bits in boundary bytes.
+- **`read_bits_biguint(src, bit_offset, bit_count)`** & **`write_bits_biguint(...)`**: Arbitrary-width bit reads/writes (> 64 bits) into `BigUint`.
+- **`copy_bits(src, s_off, dst, d_off, count) -> Result<(), BddError>`**: Copies bits between buffers with completely independent bit alignments.
+- **`BitStreamReader<'a>`**: Zero-allocation cursor for sequential and random-access bitstream parsing (`read_bits`, `read_tuple`, `seek_bit`, `skip_bits`, `slice_bits`).
+- **`BitStreamWriter`**: Dynamic bit accumulator that tracks exact bit lengths across byte boundaries (`write_bits`, `write_tuple`, `finish() -> (Vec<u8>, usize)`).
 
-# Pack Python tuple into raw integer:
-unit = b.pack("4U4U", (10, 5))    # -> 0xA5
+#### Rust Example: Unaligned 12-Bit ADC Streaming & Header Bitfield Mutation
 
-# Native AI float conversion (FP16, BF16, FP8, FP4):
-val = b.decode_f16(0x3C00)        # -> 1.0
-bits = b.encode_f16(1.0)          # -> 0x3C00
+```rust
+use bdd::bits::{BitStreamReader, BitStreamWriter, read_bits_u64, write_bits_u64};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Reading unaligned bits crossing byte boundaries:
+    // Extract 13-bit MPEG PID starting at bit offset 11:
+    let packet = [0x47, 0x1F, 0xFF, 0x10];
+    let pid = read_bits_u64(&packet, 11, 13)?;
+    println!("Extracted MPEG PID: 0x{:X}", pid);
+
+    // 2. Sequential in-memory bitstream reading with BitStreamReader:
+    // Raw 3-byte payload holding two dense 12-bit ADC samples (0xABC, 0xDEF):
+    let raw_adc = [0xAB, 0xCD, 0xEF]; // 24 bits
+    let mut reader = BitStreamReader::new(&raw_adc);
+    let sample0 = reader.read_bits(12)?; // 0xABC (2748)
+    let sample1 = reader.read_bits(12)?; // 0xDEF (3567)
+    assert!(reader.is_empty());
+
+    // 3. Building an unaligned bitstream with BitStreamWriter:
+    let mut writer = BitStreamWriter::new();
+    writer.write_bits(0b101, 3)?;    // 3-bit status flag
+    writer.write_bits(sample0, 12)?; // 12-bit sensor sample
+    writer.write_bits(1, 1)?;        // 1-bit parity flag
+    
+    // Finish returns the packed byte buffer AND the exact unaligned bit count:
+    let (bytes, total_bits) = writer.finish();
+    assert_eq!(total_bits, 16);
+    assert_eq!(bytes.len(), 2);
+
+    // 4. In-place bitfield mutation without altering surrounding bits:
+    let mut header = [0xFF, 0x00];
+    // Overwrite 4 bits at bit offset 6 with 0b0011 (3):
+    write_bits_u64(&mut header, 6, 4, 3)?;
+    assert_eq!(header[0], 0xFC); // bits 0..5 preserved (111111), bits 6..7 = 00
+    assert_eq!(header[1], 0xC0); // bits 0..1 = 11, bits 2..7 preserved (000000)
+
+    Ok(())
+}
 ```
 
-### C / C++ API
+---
 
+### C / C++ API ([`include/bdd.h`](include/bdd.h))
+
+The official C header exports clean C-ABI functions in `libbdd.so` for non-8-bit-aligned bit manipulation:
+
+| C Function | Description |
+|---|---|
+| `bdd_read_bits_u64(src, len, bit_off, count, &val)` | Reads up to 64 bits from an unaligned bit offset in buffer |
+| `bdd_write_bits_u64(dst, len, bit_off, count, val)` | Writes up to 64 bits at an unaligned offset without altering neighbors |
+| `bdd_copy_bits(src, s_len, s_off, dst, d_len, d_off, count)` | Copies bits across buffers with different bit alignments |
+| `bdd_unpack_buffer(pattern, src, len, bit_off, out_fields, max)` | Unpacks structured fields directly from memory at any bit offset |
+| `bdd_pack_buffer(pattern, fields, num, dst, len, bit_off)` | Packs structured fields into buffer at any bit offset |
+| `bdd_pattern_total_bits(pattern)` | Returns the exact bit width of a pattern string |
+| `bdd_decode_f16()`, `bdd_encode_fp4()`, etc. | Zero-dependency AI float converters (FP16, BF16, FP8, FP4) |
+
+#### C Example: In-Memory Bitfield Slicing & Mutation
 ```c
 #include "bdd.h"
 #include <stdio.h>
+#include <assert.h>
 
-int main() {
-    uint64_t fields[2];
-    bdd_unpack_u64("4U4U", 0xA5, fields, 2);
-    printf("Field 0: %lu, Field 1: %lu\n", fields[0], fields[1]); // 10, 5
+int main(void) {
+    uint8_t packet[4] = { 0x47, 0x1F, 0xFF, 0x10 };
+    uint64_t pid = 0;
+
+    // Read 13-bit PID at bit offset 11 across byte boundaries:
+    bdd_read_bits_u64(packet, sizeof(packet), 11, 13, &pid);
+    printf("Extracted 13-bit PID: 0x%lX\n", (unsigned long)pid);
+
+    // Write a 5-bit priority tag at bit offset 27 without touching other bits:
+    bdd_write_bits_u64(packet, sizeof(packet), 27, 5, 0x1F);
+
+    // Unpack multi-field structured tuple directly from memory:
+    uint64_t fields[4];
+    uint8_t telemetry[2] = { 0xAB, 0xCD };
+    int count = bdd_unpack_buffer("3U1x2u3M", telemetry, sizeof(telemetry), 0, fields, 4);
+    printf("Unpacked %d fields: [%lu, %lu, %lu, %lu]\n",
+           count, fields[0], fields[1], fields[2], fields[3]);
+
     return 0;
 }
+```
+
+---
+
+### Python SDK (`python/bdd.py` / `pip install bdd`)
+
+The zero-dependency Python wrapper provides high-level `BitStreamReader` and `BitStreamWriter` classes alongside low-level bit operations:
+
+#### Python Example: Slicing ADC Telemetry & Streaming Bits
+```python
+import bdd
+
+# 1. Low-level unaligned buffer reads and writes:
+data = b"\xAC\xF0"  # 10101100 11110000
+# Read 4 bits across byte boundary (bits 6..9):
+val = bdd.read_bits(data, bit_offset=6, bit_count=4)
+print("Unaligned slice:", val)  # -> 3
+
+# 2. In-memory sequential streaming with BitStreamReader:
+# Slicing 12-bit ADC samples packed tightly in 3 bytes (0xABC, 0xDEF):
+raw_adc = b"\xAB\xCD\xEF"
+reader = bdd.BitStreamReader(raw_adc)
+
+# Read individual units:
+sample0 = reader.read(12)  # 0xABC (2748)
+sample1 = reader.read(12)  # 0xDEF (3567)
+assert reader.is_empty()
+
+# Iterate over arbitrary-width units:
+stream = bdd.BitStreamReader(b"\x12\x34\x56\x78")
+for sample in stream.iter_units(unit_bits=12):
+    print("12-bit unit:", hex(sample))
+
+# 3. Packing unaligned bitstreams with BitStreamWriter:
+writer = bdd.BitStreamWriter()
+writer.write(0b101, bits=3)    # 3-bit status
+writer.write(0xABC, bits=12)   # 12-bit sensor reading
+writer.write(1, bits=1)        # 1-bit parity
+
+packed_bytes, exact_bits = writer.finish()
+print(f"Packed {exact_bits} bits into {len(packed_bytes)} bytes: {packed_bytes.hex()}")
+# -> Packed 16 bits into 2 bytes: b579
+
+# 4. Direct in-memory pattern unpacking:
+fields = bdd.unpack_buffer("3U2u3M", b"\xF5", bit_offset=0)
+print("Unpacked pattern fields:", fields)  # -> (7, 1, 1, 3)
+
+# 5. Native AI float format conversion:
+val = bdd.get_bdd().decode_f16(0x3C00)   # FP16 -> 1.0
+bits = bdd.get_bdd().encode_fp4(1.0)     # 1.0 -> NVFP4
 ```
 
 #### The Next Challenge: Engine Architecture & Performance Guarantees
