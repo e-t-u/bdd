@@ -40,7 +40,9 @@ contrib/
 │   ├── bdd_ps.py               # Process status inspector slicing /proc/[pid]/pagemap, auxv & signal masks
 │   ├── bdd_top.py              # Interactive top-like process monitor using bit-sliced metrics
 │   ├── bdd_netlink_proc.py     # Linux Netlink process connector socket monitor
-│   └── stream_memory_keys.py   # Stream raw memory (physical, kernel, PID) and probe crypto keys
+│   ├── stream_memory_keys.py   # Stream raw memory (physical, kernel, PID) and probe crypto keys
+│   ├── json_to_c.py            # Translates bdd pattern JSON explanations to packed C99 structs
+│   └── json_to_rust.py         # Translates bdd pattern JSON explanations to packed Rust structs
 └── c/                          # Native C programs linking against libbdd.so
     ├── decode_media.c          # bdd_unpack_u64, bdd_pack_u64, and bit reversal
     ├── decode_ai_weights.c     # Native FP4, FP6, FP8, BF16, and FP16 float decoders
@@ -367,39 +369,39 @@ Linux provides the **Netlink Process Connector** (`AF_NETLINK` / `CN_IDX_PROC`),
                  ▼                                                             ▼
 ┌─────────────────────────────────┐           ┌─────────────────────────────────────────────────┐
 │       Tier 1: Native Rust       │           │          Tier 2: Python Analytics Layer         │
-│    bdd --input-netlink          │           │            bdd_netlink_proc.py                  │
+│   sudo ./contrib/bdd-netlink   │           │            bdd_netlink_proc.py                  │
 ├─────────────────────────────────┤           ├─────────────────────────────────────────────────┤
 │ • Zero external dependencies    │           │ • Stateful PID tracking (fork -> exit duration) │
 │ • Multi-gigabit line-rate speed │           │ • Asynchronous /proc/[pid]/cmdline resolution   │
 │ • Zero GC, zero runtime cost    │           │ • ANSI terminal badge colorization              │
 │ • Strips nlmsghdr & cn_msg      │           │ • SIEM & EDR JSON schema enrichment             │
-│ • Direct NDJSON stream output   │           │ • ENOBUFS kernel overrun recovery               │
+│ • Pipes into bdd presets        │           │ • ENOBUFS kernel overrun recovery               │
 └─────────────────────────────────┘           └─────────────────────────────────────────────────┘
 ```
 
-#### Tier 1: Native Rust Kernel Telemetry Engine (`bdd --input-netlink`)
-Starting with modern releases, `bdd` includes a native kernel Netlink ingestion driver implemented directly in safe Rust. It requires **zero external libraries, zero Python runtimes, and zero C dependencies**.
+#### Tier 1: Standalone High-Speed Rust Netlink Utility (`contrib/bdd-netlink`)
+Kernel Netlink ingestion is provided by the dedicated high-performance Rust utility in [`contrib/rust/bdd-netlink`](rust/bdd-netlink) (compiled to `./bdd-netlink`). It streams raw binary process connector events directly to stdout to pipe into `bdd`:
 
 ```bash
 # Ingest kernel process events directly into structured JSON:
-sudo bdd --input-netlink --output-json
+sudo ./bdd-netlink | bdd --preset netlink-proc-event --output-json
 
 # Stream raw binary proc_event records with full kernel headers:
-sudo bdd --input-netlink=raw --output-hex
+sudo ./bdd-netlink --raw | bdd --output-hex
 
-# Slice specific fields directly from the kernel stream (e.g., CPU ID and Event Code):
-sudo bdd --input-netlink "netlink-proc-event" --output-tuples
+# Filter specifically for process execution events (exec) into visual ANSI inspector:
+sudo ./bdd-netlink --filter exec | bdd "netlink-proc-event -> visual"
 ```
 
 - **Header Preset (`--preset=netlink-proc-event`)**:
   Unpacks the 16-byte `proc_event` header from the Netlink message payload:
   `timestamp_ns:64U,cpu:32U,what:32U` with `--input-little-endian`.
 - **Wire Protocol & Slicing**:
-  `bdd` binds to `AF_NETLINK` / `CN_IDX_PROC`, allocates an 8 MiB socket receive buffer, sends `PROC_CN_MCAST_LISTEN`, and strips the 36-byte framing overhead (`nlmsghdr` + `cn_msg`) on the fly.
-- **Graceful Teardown**: Upon receiving `SIGINT` (`Ctrl+C`), `bdd` transmits `PROC_CN_MCAST_IGNORE` back to the kernel, releasing multicast resources cleanly.
+  `bdd-netlink` binds to `AF_NETLINK` / `CN_IDX_PROC`, allocates an 8 MiB socket receive buffer, sends `PROC_CN_MCAST_LISTEN`, and strips the 36-byte framing overhead (`nlmsghdr` + `cn_msg`) on the fly.
+- **Graceful Teardown**: Upon receiving `SIGINT` (`Ctrl+C`), `bdd-netlink` transmits `PROC_CN_MCAST_IGNORE` back to the kernel, releasing multicast resources cleanly.
 
 #### Tier 2: Python Analytics & SIEM Enrichment Layer (`contrib/python/bdd_netlink_proc.py`)
-While `bdd` in Rust operates as an ultra-high-speed, zero-copy packet ingestion engine, real-world security operations centers (SOC) and site reliability engineers (SRE) require stateful correlation and environmental enrichment:
+While `bdd-netlink` in Rust operates as an ultra-high-speed, zero-copy packet ingestion engine, real-world security operations centers (SOC) and site reliability engineers (SRE) require stateful correlation and environmental enrichment:
 
 ```bash
 # Launch the interactive terminal monitor with high-visibility ANSI badges:
@@ -419,7 +421,7 @@ sudo python3 contrib/python/bdd_netlink_proc.py --json
 
 #### Side-by-Side Comparison
 
-| Feature / Dimension | Native Rust Engine (`bdd --input-netlink`) | Python Analytics Layer (`bdd_netlink_proc.py`) |
+| Feature / Dimension | Rust Utility (`bdd-netlink \| bdd`) | Python Analytics Layer (`bdd_netlink_proc.py`) |
 |---|---|---|
 | **Primary Focus** | Line-rate ingestion, bit-slicing, and low-latency piping | Stateful correlation, command resolution, and SOC analytics |
 | **Dependencies** | **Zero** (Pure Rust, direct `libc` system calls) | Python 3 + Linux Kernel |
@@ -433,7 +435,7 @@ sudo python3 contrib/python/bdd_netlink_proc.py --json
 #### Production Integration Recipes
 ```bash
 # 1. High-speed pipeline: Pipe raw kernel events into a compressed log with zstd:
-sudo bdd --input-netlink --output-json | zstd -c > kernel_events.json.zst
+sudo ./bdd-netlink | bdd --preset netlink-proc-event --output-json | zstd -c > kernel_events.json.zst
 
 # 2. Security audit: Alert immediately on non-root users executing setuid binaries:
 sudo python3 contrib/python/bdd_netlink_proc.py --json \

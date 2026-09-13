@@ -8,7 +8,7 @@ use crate::error::BddError;
 use crate::field::Field;
 use crate::pattern::{TuplePacker, TupleUnpacker};
 use num_bigint::BigUint;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::{One, ToPrimitive, Zero};
 
 /// Reads up to 64 bits from a byte slice at an arbitrary non-8-bit-aligned bit offset.
 ///
@@ -450,6 +450,14 @@ impl BitStreamWriter {
         self.write_biguint(&unit, packer.total_bits)
     }
 
+    /// Writes a [`BitValue`] to the stream.
+    pub fn write_bit_value(&mut self, val: &BitValue, n: usize) -> Result<(), BddError> {
+        match val {
+            BitValue::Inline(v) => self.write_bits(*v, n),
+            BitValue::Big(b) => self.write_biguint(b, n),
+        }
+    }
+
     /// Borrows the underlying byte slice. Note: the final byte may contain trailing padding bits.
     pub fn as_bytes(&self) -> &[u8] {
         &self.buffer
@@ -464,6 +472,321 @@ impl BitStreamWriter {
     pub fn finish(self) -> (Vec<u8>, usize) {
         let bits = self.total_bits;
         (self.buffer, bits)
+    }
+}
+
+/// Represents a bit-exact integer or bitstream unit, optimized to eliminate heap allocations
+/// for units up to 64 bits.
+///
+/// Units with widths <= 64 bits are stored inline as `u64` register values (`BitValue::Inline`).
+/// Units with widths > 64 bits fall back to heap-allocated `BigUint` (`BitValue::Big`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BitValue {
+    Inline(u64),
+    Big(BigUint),
+}
+
+impl BitValue {
+    /// Creates a zero bit value.
+    #[inline]
+    pub const fn zero() -> Self {
+        BitValue::Inline(0)
+    }
+
+    /// Creates a bit value of 1.
+    #[inline]
+    pub const fn one() -> Self {
+        BitValue::Inline(1)
+    }
+
+    /// Creates a bitmask with `bits` low bits set to 1.
+    #[inline]
+    pub fn mask_for(bits: usize) -> Self {
+        if bits == 0 {
+            BitValue::Inline(0)
+        } else if bits <= 64 {
+            let mask = if bits == 64 {
+                !0u64
+            } else {
+                (1u64 << bits) - 1
+            };
+            BitValue::Inline(mask)
+        } else {
+            BitValue::Big((BigUint::one() << bits) - 1u32)
+        }
+    }
+
+    /// Returns true if this value is stored inline without heap allocation.
+    #[inline]
+    pub const fn is_inline(&self) -> bool {
+        matches!(self, BitValue::Inline(_))
+    }
+
+    /// Returns true if this value is zero.
+    #[inline]
+    pub fn is_zero(&self) -> bool {
+        match self {
+            BitValue::Inline(v) => *v == 0,
+            BitValue::Big(b) => b.is_zero(),
+        }
+    }
+
+    /// Returns the value as `u64` if it fits.
+    #[inline]
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            BitValue::Inline(v) => Some(*v),
+            BitValue::Big(b) => b.to_u64(),
+        }
+    }
+
+    /// Alias for `as_u64()`.
+    #[inline]
+    pub fn to_u64(&self) -> Option<u64> {
+        self.as_u64()
+    }
+
+    /// Converts this value into a `BigUint`, cloning if necessary.
+    #[inline]
+    pub fn to_biguint(&self) -> BigUint {
+        match self {
+            BitValue::Inline(v) => BigUint::from(*v),
+            BitValue::Big(b) => b.clone(),
+        }
+    }
+
+    /// Consumes this value and turns it into a `BigUint`.
+    #[inline]
+    pub fn into_biguint(self) -> BigUint {
+        match self {
+            BitValue::Inline(v) => BigUint::from(v),
+            BitValue::Big(b) => b,
+        }
+    }
+
+    /// Returns the minimum number of bits required to represent this value.
+    #[inline]
+    pub fn bit_length(&self) -> usize {
+        match self {
+            BitValue::Inline(v) => 64 - v.leading_zeros() as usize,
+            BitValue::Big(b) => b.bits() as usize,
+        }
+    }
+
+    /// Masks this value to the specified bit width.
+    #[inline]
+    pub fn mask_bits(self, bits: usize) -> Self {
+        if bits == 0 {
+            return BitValue::Inline(0);
+        }
+        match self {
+            BitValue::Inline(v) => {
+                let mask = if bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << bits) - 1
+                };
+                BitValue::Inline(v & mask)
+            }
+            BitValue::Big(b) => {
+                if bits <= 64 {
+                    if let Some(v) = b.to_u64() {
+                        let mask = if bits == 64 {
+                            !0u64
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        return BitValue::Inline(v & mask);
+                    }
+                }
+                let mask = (BigUint::one() << bits) - 1u32;
+                BitValue::from(b & mask)
+            }
+        }
+    }
+
+    /// Reverses the lowest `bits` bits of this value.
+    #[inline]
+    pub fn reverse_bits(&self, bits: usize) -> Self {
+        if bits == 0 {
+            return self.clone();
+        }
+        if bits <= 64 {
+            if let Some(v) = self.as_u64() {
+                return BitValue::Inline(crate::field::reverse_bits_u64(v, bits));
+            }
+        }
+        let big = self.to_biguint();
+        BitValue::from(crate::field::reverse_bits(&big, bits))
+    }
+}
+
+impl Default for BitValue {
+    #[inline]
+    fn default() -> Self {
+        BitValue::Inline(0)
+    }
+}
+
+impl From<u64> for BitValue {
+    #[inline]
+    fn from(v: u64) -> Self {
+        BitValue::Inline(v)
+    }
+}
+
+impl From<u32> for BitValue {
+    #[inline]
+    fn from(v: u32) -> Self {
+        BitValue::Inline(v as u64)
+    }
+}
+
+impl From<u16> for BitValue {
+    #[inline]
+    fn from(v: u16) -> Self {
+        BitValue::Inline(v as u64)
+    }
+}
+
+impl From<u8> for BitValue {
+    #[inline]
+    fn from(v: u8) -> Self {
+        BitValue::Inline(v as u64)
+    }
+}
+
+impl From<usize> for BitValue {
+    #[inline]
+    fn from(v: usize) -> Self {
+        BitValue::Inline(v as u64)
+    }
+}
+
+impl From<BigUint> for BitValue {
+    #[inline]
+    fn from(b: BigUint) -> Self {
+        if let Some(v) = b.to_u64() {
+            BitValue::Inline(v)
+        } else {
+            BitValue::Big(b)
+        }
+    }
+}
+
+impl From<&BigUint> for BitValue {
+    #[inline]
+    fn from(b: &BigUint) -> Self {
+        if let Some(v) = b.to_u64() {
+            BitValue::Inline(v)
+        } else {
+            BitValue::Big(b.clone())
+        }
+    }
+}
+
+impl From<BitValue> for BigUint {
+    #[inline]
+    fn from(bv: BitValue) -> Self {
+        bv.into_biguint()
+    }
+}
+
+impl std::fmt::Display for BitValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BitValue::Inline(v) => write!(f, "{}", v),
+            BitValue::Big(b) => write!(f, "{}", b),
+        }
+    }
+}
+
+impl std::fmt::LowerHex for BitValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BitValue::Inline(v) => write!(f, "{:x}", v),
+            BitValue::Big(b) => write!(f, "{:x}", b),
+        }
+    }
+}
+
+impl std::fmt::UpperHex for BitValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BitValue::Inline(v) => write!(f, "{:X}", v),
+            BitValue::Big(b) => write!(f, "{:X}", b),
+        }
+    }
+}
+
+impl std::fmt::Binary for BitValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BitValue::Inline(v) => write!(f, "{:b}", v),
+            BitValue::Big(b) => write!(f, "{:b}", b),
+        }
+    }
+}
+
+impl std::ops::BitAnd for BitValue {
+    type Output = BitValue;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (BitValue::Inline(a), BitValue::Inline(b)) => BitValue::Inline(a & b),
+            (a, b) => BitValue::from(a.to_biguint() & b.to_biguint()),
+        }
+    }
+}
+
+impl std::ops::BitOr for BitValue {
+    type Output = BitValue;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (BitValue::Inline(a), BitValue::Inline(b)) => BitValue::Inline(a | b),
+            (a, b) => BitValue::from(a.to_biguint() | b.to_biguint()),
+        }
+    }
+}
+
+impl std::ops::BitXor for BitValue {
+    type Output = BitValue;
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (BitValue::Inline(a), BitValue::Inline(b)) => BitValue::Inline(a ^ b),
+            (a, b) => BitValue::from(a.to_biguint() ^ b.to_biguint()),
+        }
+    }
+}
+
+impl std::ops::Shl<usize> for BitValue {
+    type Output = BitValue;
+    fn shl(self, rhs: usize) -> Self::Output {
+        match self {
+            BitValue::Inline(v) => {
+                if rhs < 64 && (v.leading_zeros() as usize) >= rhs {
+                    BitValue::Inline(v << rhs)
+                } else {
+                    BitValue::Big(BigUint::from(v) << rhs)
+                }
+            }
+            BitValue::Big(b) => BitValue::Big(b << rhs),
+        }
+    }
+}
+
+impl std::ops::Shr<usize> for BitValue {
+    type Output = BitValue;
+    fn shr(self, rhs: usize) -> Self::Output {
+        match self {
+            BitValue::Inline(v) => {
+                if rhs >= 64 {
+                    BitValue::Inline(0)
+                } else {
+                    BitValue::Inline(v >> rhs)
+                }
+            }
+            BitValue::Big(b) => BitValue::from(b >> rhs),
+        }
     }
 }
 
@@ -578,5 +901,43 @@ mod tests {
         assert_eq!(unpacked[1], Field::UInt(BigUint::from(2u32))); // 2u roundtripped
         assert_eq!(unpacked[2], Field::UInt(BigUint::from(1u32))); // sign
         assert_eq!(unpacked[3], Field::UInt(BigUint::from(1u32))); // mag
+    }
+
+    #[test]
+    fn test_bit_value() {
+        let v1 = BitValue::from(42u64);
+        assert!(v1.is_inline());
+        assert_eq!(v1.as_u64(), Some(42));
+        assert_eq!(v1.to_biguint(), BigUint::from(42u32));
+
+        let v2 = BitValue::from(BigUint::from(100u32));
+        assert!(v2.is_inline());
+        assert_eq!(v2.as_u64(), Some(100));
+
+        let large: BigUint = (BigUint::one() << 128usize) | BigUint::from(5u32);
+        let v_large = BitValue::from(large.clone());
+        assert!(!v_large.is_inline());
+        assert_eq!(v_large.to_biguint(), large);
+
+        // Masking
+        let masked = v1.clone().mask_bits(4);
+        assert_eq!(masked.as_u64(), Some(42 & 0xF));
+
+        // Bit reversal
+        let rev = BitValue::from(0b1000u64).reverse_bits(4);
+        assert_eq!(rev.as_u64(), Some(0b0001));
+
+        // Bitwise operations
+        let a = BitValue::from(0b1100u64);
+        let b = BitValue::from(0b1010u64);
+        assert_eq!((a.clone() & b.clone()).as_u64(), Some(0b1000));
+        assert_eq!((a.clone() | b.clone()).as_u64(), Some(0b1110));
+        assert_eq!((a ^ b).as_u64(), Some(0b0110));
+
+        // Shift
+        let s = BitValue::from(1u64) << 4;
+        assert_eq!(s.as_u64(), Some(16));
+        let sr = s >> 2;
+        assert_eq!(sr.as_u64(), Some(4));
     }
 }

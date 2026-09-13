@@ -30,9 +30,11 @@ check-fmt:
 install:
 	cargo install --path .
 	ln -sf ~/.cargo/bin/bdd ~/.local/bin/bdd
+	mkdir -p ~/.config/bdd
+	cp -f presets.json ~/.config/bdd/presets.json
 
 web: release
-	./bdd --serve
+	cargo run --manifest-path web/Cargo.toml
 
 web-py: release
 	python3 web/server.py

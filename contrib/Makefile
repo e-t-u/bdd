@@ -5,9 +5,13 @@ LDLIBS ?= -lbdd -lm
 
 C_BINS = c/decode_media c/decode_ai_weights c/decode_network
 
-.PHONY: all samples c-bins test pdf clean clean-data
+.PHONY: all samples c-bins rust-bins test pdf clean clean-data
 
-all: samples c-bins
+all: samples c-bins rust-bins
+
+rust-bins:
+	cargo build --release -p bdd-netlink
+	cp -f ../target/release/bdd-netlink ./bdd-netlink
 
 samples:
 	@echo "==> Generating sample binary files..."
@@ -35,6 +39,9 @@ test: all
 	python3 python/decode_ai_weights.py
 	python3 python/decode_network.py
 	python3 python/stream_memory_keys.py --source demo --units 128
+	@echo "==> Testing JSON Translators (C and Rust)..."
+	../target/release/bdd --explain-pattern "sync:8u,pid:13u" --output-json | python3 python/json_to_c.py --name TestPacket | grep -q "MpegTsHeader\|TestPacket"
+	../target/release/bdd --explain-pattern "sync:8u,pid:13u" --output-json | python3 python/json_to_rust.py --name TestPacket | grep -q "pub struct TestPacket"
 	@echo "==> Testing C Programs..."
 	./c/decode_media
 	./c/decode_ai_weights
@@ -42,7 +49,7 @@ test: all
 	@echo "==> All contrib demonstrations passed successfully!"
 
 clean:
-	rm -f $(C_BINS) README.pdf
+	rm -f $(C_BINS) bdd-netlink README.pdf
 
 clean-data:
 	rm -f data/*

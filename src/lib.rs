@@ -13,21 +13,18 @@ pub mod explain;
 pub mod ffi;
 pub mod field;
 #[cfg(feature = "small-floats")]
-pub mod float_types;
+pub use bdd_small_floats as float_types;
 pub mod manipulator;
-pub mod mcp;
 pub mod pattern;
 pub mod preset;
 pub mod probe;
-#[cfg(feature = "server")]
-pub mod server;
 pub mod sink;
 pub mod stream;
 pub mod stream_pattern;
 
 pub use bits::{
     copy_bits, read_bits_biguint, read_bits_u64, write_bits_biguint, write_bits_u64,
-    BitStreamReader, BitStreamWriter,
+    BitStreamReader, BitStreamWriter, BitValue,
 };
 pub use engine::run_pipeline;
 pub use error::BddError;

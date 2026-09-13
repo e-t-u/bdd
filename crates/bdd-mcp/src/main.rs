@@ -1,14 +1,14 @@
-//! Model Context Protocol (MCP) server implementation for bdd.
+//! Model Context Protocol (MCP) server for bdd.
 //!
 //! Provides a standard JSON-RPC 2.0 stdio server interface enabling AI models
 //! and coding assistants (Antigravity, Claude, Cursor) to slice, unpack, inspect,
-//! and probe binary streams natively via tool calls.
+//! probe, transcode, and generate binary streams natively via tool calls.
 
-use crate::cli::{validate_and_process, Cli};
-use crate::error::BddError;
-use crate::explain::{explain_pattern, format_explanation_json};
-use crate::preset::all_presets;
-use crate::probe::{format_probe_json, probe_buffer};
+use bdd::cli::{validate_and_process, Cli};
+use bdd::error::BddError;
+use bdd::explain::{explain_pattern, format_explanation_json};
+use bdd::preset::all_presets;
+use bdd::probe::{format_probe_json, probe_buffer};
 use clap::Parser;
 use serde_json::{json, Value};
 use std::fs::File;
@@ -27,7 +27,7 @@ impl Write for SharedBuffer {
     }
 }
 
-pub fn run_mcp_server() -> Result<(), BddError> {
+fn run_mcp_server() -> Result<(), BddError> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let reader = stdin.lock();
@@ -329,8 +329,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             let config = validate_and_process(cli).map_err(|e| e.to_string())?;
 
             let buf = SharedBuffer::default();
-            crate::engine::run_pipeline_to_writer(config, buf.clone())
-                .map_err(|e| e.to_string())?;
+            bdd::engine::run_pipeline_to_writer(config, buf.clone()).map_err(|e| e.to_string())?;
             let output_bytes = buf.0.lock().unwrap().clone();
             let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
             Ok(output_str)
@@ -375,10 +374,8 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             let cli = Cli::try_parse_from(&cli_args).map_err(|e| e.to_string())?;
             let config = validate_and_process(cli).map_err(|e| e.to_string())?;
 
-            // Capture output
             let buf = SharedBuffer::default();
-            crate::engine::run_pipeline_to_writer(config, buf.clone())
-                .map_err(|e| e.to_string())?;
+            bdd::engine::run_pipeline_to_writer(config, buf.clone()).map_err(|e| e.to_string())?;
             let output_bytes = buf.0.lock().unwrap().clone();
             let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
             Ok(output_str)
@@ -416,7 +413,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
                 Some(ip.to_string())
             } else if let Some(pr) = args.get("input_preset").and_then(|p| p.as_str()) {
                 cli_args.push(format!("--preset={}", pr));
-                crate::preset::find_preset(pr).map(|p| p.pattern.to_string())
+                bdd::preset::find_preset(pr).map(|p| p.pattern.to_string())
             } else {
                 None
             };
@@ -428,7 +425,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             if let Some(op) = args.get("output_pattern").and_then(|p| p.as_str()) {
                 cli_args.push(format!("--output-pattern={}", op));
             } else if let Some(opr) = args.get("output_preset").and_then(|p| p.as_str()) {
-                if let Some(p) = crate::preset::find_preset(opr) {
+                if let Some(p) = bdd::preset::find_preset(opr) {
                     cli_args.push(format!("--output-pattern={}", p.pattern));
                 } else {
                     return Err(format!("Unknown output preset '{}'", opr));
@@ -467,8 +464,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             config.inline_manipulators.extend(inline_manips);
 
             let buf = SharedBuffer::default();
-            crate::engine::run_pipeline_to_writer(config, buf.clone())
-                .map_err(|e| e.to_string())?;
+            bdd::engine::run_pipeline_to_writer(config, buf.clone()).map_err(|e| e.to_string())?;
             drop(temp_file);
             let output_bytes = buf.0.lock().unwrap().clone();
             let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
@@ -513,12 +509,19 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             config.raw_args = cli_args;
 
             let buf = SharedBuffer::default();
-            crate::engine::run_pipeline_to_writer(config, buf.clone())
-                .map_err(|e| e.to_string())?;
+            bdd::engine::run_pipeline_to_writer(config, buf.clone()).map_err(|e| e.to_string())?;
             let output_bytes = buf.0.lock().unwrap().clone();
             let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
             Ok(output_str.trim_end().to_string())
         }
         _ => Err(format!("Unknown tool '{}'", name)),
     }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = run_mcp_server() {
+        eprintln!("{}", e);
+        std::process::exit(e.exit_code());
+    }
+    Ok(())
 }

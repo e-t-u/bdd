@@ -1,3 +1,4 @@
+use crate::bits::BitValue;
 use crate::cli::ValidatedConfig;
 use crate::counter::Counter;
 use crate::error::BddError;
@@ -9,14 +10,76 @@ use crate::sink::{
     JsonOutputStream, TupleDirectOutput, TupleSink, UnitSink, VisualOutputStream,
 };
 use crate::stream::{
-    BddReader, CounterStream, FileInputStream, IntegerInputStream, NetlinkReader, OneStream,
-    RandomStream, RewindableBufRead, StreamConfig, StreamSeekBufReader, TupleDirectInput,
-    UnitStream, ZeroStream,
+    open_rewindable_file, BddReader, CounterStream, FileInputStream, IntegerInputStream, OneStream,
+    PaddedUnitStream, RandomStream, RewindableBufRead, StreamConfig, StreamSeekBufReader,
+    TupleDirectInput, UnitStream, ZeroStream,
 };
 use num_bigint::BigUint;
 use num_traits::Zero;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
+
+/// Construct a UnitStream from a parsed StreamSpec and source name.
+pub fn create_unit_stream_from_spec(
+    source_name: &str,
+    spec: &crate::stream_pattern::StreamSpec,
+    default_unit: usize,
+    seek_allowed: bool,
+    use_mmap: bool,
+) -> Result<Box<dyn UnitStream>, BddError> {
+    let u_size = spec.unit_size.unwrap_or(default_unit);
+    let stream: Box<dyn UnitStream> = match source_name {
+        "zeros" => Box::new(ZeroStream::new_with_unit(Counter::new(0, None), u_size)),
+        "ones" => Box::new(OneStream::new(Counter::new(0, None), u_size)),
+        "rand" | "random" => Box::new(RandomStream::new(Counter::new(0, None), u_size)),
+        "counter" => Box::new(CounterStream::new(Counter::new(0, None), u_size)),
+        "stdin" | "-" => {
+            let reader = BddReader::from_stdin(seek_allowed);
+            let stream_conf = StreamConfig {
+                skip_bits: spec.skip.unwrap_or(0),
+                skip_units: 0,
+                gap: spec.gap.unwrap_or(0),
+                assert_aligned: false,
+                drop_partial_eof: false,
+                reverse_bytes: false,
+                reverse_unit: false,
+                unit_size: u_size,
+                seek_allowed,
+                repeat_count: 1,
+            };
+            let mut fs = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
+            fs.do_skip();
+            Box::new(fs)
+        }
+        path => {
+            let reader = match File::open(path) {
+                Ok(f) => BddReader::from_file_with_mmap(f, seek_allowed, use_mmap),
+                Err(_) => return Err(BddError::CannotOpenMergeFile(path.to_string())),
+            };
+            let stream_conf = StreamConfig {
+                skip_bits: spec.skip.unwrap_or(0),
+                skip_units: 0,
+                gap: spec.gap.unwrap_or(0),
+                assert_aligned: false,
+                drop_partial_eof: false,
+                reverse_bytes: false,
+                reverse_unit: false,
+                unit_size: u_size,
+                seek_allowed,
+                repeat_count: 1,
+            };
+            let mut fs = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
+            fs.do_skip();
+            Box::new(fs)
+        }
+    };
+
+    if spec.pad_zeros {
+        Ok(Box::new(PaddedUnitStream::new(stream, true)))
+    } else {
+        Ok(stream)
+    }
+}
 
 /// Runs the complete bdd pipeline based on validated configuration.
 pub fn run_pipeline(config: ValidatedConfig) -> Result<(), BddError> {
@@ -37,6 +100,108 @@ impl Drop for DiagnosticGuard {
     fn drop(&mut self) {
         crate::diag::flush_summary();
     }
+}
+
+fn apply_manipulators(
+    tuple: Vec<Field>,
+    manipulators: &[Box<dyn TupleManipulator>],
+) -> Option<Vec<Field>> {
+    let mut current = Some(tuple);
+    for m in manipulators {
+        if let Some(t) = current {
+            current = m.manipulate(t);
+        } else {
+            return None;
+        }
+    }
+    current
+}
+
+fn dispatch_demux_sinks(
+    demux_sinks: &mut [(usize, Box<dyn UnitSink>)],
+    tuple: &[Field],
+    unpacker: Option<&TupleUnpacker>,
+    default_unit_size: usize,
+) -> Result<(), BddError> {
+    for (f_idx, sink) in demux_sinks.iter_mut() {
+        if *f_idx < tuple.len() {
+            let val = tuple[*f_idx].as_bit_value();
+            let bits = if let Some(u) = unpacker {
+                if *f_idx < u.pattern_items.len() {
+                    u.pattern_items[*f_idx].bits
+                } else {
+                    default_unit_size
+                }
+            } else {
+                default_unit_size
+            };
+            sink.write_bit_value(val, bits)?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_output_unit(
+    tuple: Vec<Field>,
+    packer: Option<&TuplePacker>,
+    unpacker: Option<&TupleUnpacker>,
+    out_unit_size: usize,
+    has_output_unit: bool,
+) -> Result<(BitValue, usize), BddError> {
+    if let Some(p) = packer {
+        Ok((p.pack_bit_value(tuple)?, out_unit_size))
+    } else if tuple.len() == 1 {
+        let bits = match &tuple[0] {
+            Field::Bits(_, b) => *b,
+            _ => out_unit_size,
+        };
+        let eff_size = if has_output_unit { out_unit_size } else { bits };
+        Ok((tuple[0].as_bit_value(), eff_size))
+    } else if !tuple.is_empty() {
+        let mut acc = BitValue::Inline(0);
+        let mut total_bits = 0usize;
+        for (i, f) in tuple.iter().enumerate() {
+            let w = match f {
+                Field::Bits(_, b) => *b,
+                Field::Bytes(bytes) => bytes.len() * 8,
+                _ => unpacker
+                    .and_then(|u| u.field_widths().get(i).copied())
+                    .unwrap_or(8),
+            };
+            acc = (acc << w) | f.as_bit_value();
+            total_bits += w;
+        }
+        let eff_size = if has_output_unit {
+            out_unit_size
+        } else {
+            total_bits
+        };
+        Ok((acc, eff_size))
+    } else {
+        crate::diag::warn("No fields to output, assumed 0");
+        Ok((BitValue::Inline(0), out_unit_size))
+    }
+}
+
+fn drain_merge_streams(
+    merge_streams: &mut [Box<dyn UnitStream>],
+    mut unit_sink: Option<&mut Box<dyn UnitSink>>,
+) -> Result<bool, BddError> {
+    for ms in merge_streams {
+        let m_unit = ms.unit_size();
+        match ms.next_bit_value()? {
+            Some(u) => {
+                if let Some(sink) = unit_sink.as_deref_mut() {
+                    sink.write_bit_value(u, m_unit)?;
+                }
+            }
+            None => {
+                crate::diag::warn("Premature end of merge file");
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn run_pipeline_internal(
@@ -79,34 +244,52 @@ fn run_pipeline_internal(
         8
     };
 
-    let mut merge_streams: Vec<FileInputStream<BddReader>> = Vec::new();
-    for mfile in &config.merge_files {
-        let reader = if mfile == "-" {
-            BddReader::from_stdin(config.merge_use_seek)
-        } else {
-            match File::open(mfile) {
-                Ok(f) => BddReader::from_file(f, config.merge_use_seek),
-                Err(_) => {
-                    return Err(BddError::CannotOpenMergeFile(mfile.clone()));
+    let mut merge_streams: Vec<Box<dyn UnitStream>> = Vec::new();
+    if !config.merge_specs.is_empty() {
+        for spec in &config.merge_specs {
+            let src = spec.source.as_deref().unwrap_or("stdin");
+            let ms = create_unit_stream_from_spec(
+                src,
+                spec,
+                in_unit_size,
+                config.merge_use_seek,
+                config.merge_use_mmap,
+            )?;
+            merge_streams.push(ms);
+        }
+    } else {
+        for mfile in &config.merge_files {
+            let reader = if mfile == "-" {
+                BddReader::from_stdin(config.merge_use_seek)
+            } else {
+                match File::open(mfile) {
+                    Ok(f) => BddReader::from_file_with_mmap(
+                        f,
+                        config.merge_use_seek,
+                        config.merge_use_mmap,
+                    ),
+                    Err(_) => {
+                        return Err(BddError::CannotOpenMergeFile(mfile.clone()));
+                    }
                 }
-            }
-        };
-        let m_unit = config.merge_unit.unwrap_or(8);
-        let stream_conf = StreamConfig {
-            skip_bits: config.merge_skip_bits,
-            skip_units: config.merge_skip_units,
-            gap: config.merge_gap,
-            assert_aligned: config.merge_assert_aligned,
-            drop_partial_eof: config.merge_drop_partial_eof,
-            reverse_bytes: config.merge_reverse_bytes,
-            reverse_unit: config.merge_reverse_unit,
-            unit_size: m_unit,
-            seek_allowed: config.merge_use_seek,
-            repeat_count: 1,
-        };
-        let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
-        ms.do_skip();
-        merge_streams.push(ms);
+            };
+            let m_unit = config.merge_unit.unwrap_or(8);
+            let stream_conf = StreamConfig {
+                skip_bits: config.merge_skip_bits,
+                skip_units: config.merge_skip_units,
+                gap: config.merge_gap,
+                assert_aligned: config.merge_assert_aligned,
+                drop_partial_eof: config.merge_drop_partial_eof,
+                reverse_bytes: config.merge_reverse_bytes,
+                reverse_unit: config.merge_reverse_unit,
+                unit_size: m_unit,
+                seek_allowed: config.merge_use_seek,
+                repeat_count: 1,
+            };
+            let mut ms = FileInputStream::new(reader, stream_conf, Counter::new(0, None));
+            ms.do_skip();
+            merge_streams.push(Box::new(ms));
+        }
     }
 
     let field_names = unpacker.as_ref().and_then(|u| u.field_names());
@@ -289,7 +472,7 @@ fn run_pipeline_internal(
 
     if let Some(ms) = merge_streams.first_mut() {
         if config.merge_copy_first > 0 {
-            let bits = ms.read_bits(config.merge_copy_first as usize);
+            let bits = ms.read_bits(config.merge_copy_first as usize)?;
             if let Some(ref mut sink) = unit_sink {
                 sink.write_bits(bits, config.merge_copy_first as usize)?;
             }
@@ -310,89 +493,32 @@ fn run_pipeline_internal(
             }
         } else {
             match File::open(&config.input_file) {
-                Ok(f) => Box::new(BufReader::new(f)),
+                Ok(f) => open_rewindable_file(f, config.input_use_mmap),
                 Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
             }
         };
         let mut tuple_in = TupleDirectInput::new(in_reader, counter, config.input_repeat);
 
-        while let Some(mut tuple) = tuple_in.next_tuple()? {
-            let mut maybe_tuple = Some(tuple);
-            for m in &manipulators {
-                if let Some(t) = maybe_tuple {
-                    maybe_tuple = m.manipulate(t);
-                } else {
-                    break;
-                }
-            }
-            tuple = match maybe_tuple {
+        while let Some(tuple) = tuple_in.next_tuple()? {
+            let tuple = match apply_manipulators(tuple, &manipulators) {
                 Some(t) => t,
                 None => continue,
             };
 
-            for (f_idx, sink) in demux_sinks.iter_mut() {
-                if *f_idx < tuple.len() {
-                    let val = tuple[*f_idx].as_biguint();
-                    let bits = if let Some(ref u) = unpacker {
-                        if *f_idx < u.pattern_items.len() {
-                            u.pattern_items[*f_idx].bits
-                        } else {
-                            out_unit_size
-                        }
-                    } else {
-                        out_unit_size
-                    };
-                    sink.write_bits(val, bits)?;
-                }
-            }
+            dispatch_demux_sinks(&mut demux_sinks, &tuple, unpacker.as_ref(), out_unit_size)?;
 
             if let Some(ref mut tout) = tuple_sink {
                 tout.write_tuple(&tuple)?;
             } else {
-                let (unit, eff_unit_size) = if let Some(ref p) = packer {
-                    (p.pack(tuple)?, out_unit_size)
-                } else if tuple.len() == 1 {
-                    let bits = match &tuple[0] {
-                        Field::Bits(_, b) => *b,
-                        _ => out_unit_size,
-                    };
-                    (
-                        tuple[0].as_biguint(),
-                        if config.output_unit.is_some() {
-                            out_unit_size
-                        } else {
-                            bits
-                        },
-                    )
-                } else if !tuple.is_empty() {
-                    let mut acc = BigUint::zero();
-                    let mut total_bits = 0usize;
-                    for (i, f) in tuple.iter().enumerate() {
-                        let w = match f {
-                            Field::Bits(_, b) => *b,
-                            Field::Bytes(bytes) => bytes.len() * 8,
-                            _ => unpacker
-                                .as_ref()
-                                .and_then(|u| u.field_widths().get(i).copied())
-                                .unwrap_or(8),
-                        };
-                        acc = (acc << w) | f.as_biguint();
-                        total_bits += w;
-                    }
-                    (
-                        acc,
-                        if config.output_unit.is_some() {
-                            out_unit_size
-                        } else {
-                            total_bits
-                        },
-                    )
-                } else {
-                    crate::diag::warn("No fields to output, assumed 0");
-                    (BigUint::zero(), out_unit_size)
-                };
+                let (unit, eff_unit_size) = resolve_output_unit(
+                    tuple,
+                    packer.as_ref(),
+                    unpacker.as_ref(),
+                    out_unit_size,
+                    config.output_unit.is_some(),
+                )?;
                 if let Some(ref mut sink) = unit_sink {
-                    write_framed_unit(
+                    write_framed_bit_value(
                         sink.as_mut(),
                         unit,
                         eff_unit_size,
@@ -404,115 +530,96 @@ fn run_pipeline_internal(
                     )?;
                 }
             }
-            let mut premature_eof = false;
-            for ms in &mut merge_streams {
-                let m_unit = ms.config.unit_size;
-                match ms.next_unit()? {
-                    Some(u) => {
-                        if let Some(ref mut sink) = unit_sink {
-                            sink.write_bits(u, m_unit)?;
-                        }
-                    }
-                    None => {
-                        crate::diag::warn("Premature end of merge file");
-                        premature_eof = true;
-                        break;
-                    }
+
+            if drain_merge_streams(&mut merge_streams, unit_sink.as_mut())? {
+                break;
+            }
+        }
+    } else if config.overwrite && config.input_raw_unit.is_some() {
+        let raw_bits = config.input_raw_unit.unwrap() as usize;
+        let offset_bits = config.input_offset as usize;
+        let slice_bits = in_unit_size;
+
+        let mut raw_config = config.clone();
+        raw_config.input_raw_unit = None;
+        raw_config.input_offset = 0;
+        raw_config.input_skip_bits = 0;
+        raw_config.input_gap = 0;
+        let mut container_stream = create_unit_stream(&raw_config, raw_bits, counter)?;
+
+        // Overwrite mode: copy original initial skip bits to output as-is
+        if config.input_skip_bits > 0 {
+            let skip_bits = config.input_skip_bits as usize;
+            let skip_data = container_stream.read_bits(skip_bits)?;
+            if let Some(ref mut sink) = unit_sink {
+                sink.write_bits(skip_data, skip_bits)?;
+            }
+        }
+
+        while let Some(container) = container_stream.next_bit_value()? {
+            let shift = raw_bits.saturating_sub(offset_bits + slice_bits);
+            let unit = (container.clone() >> shift).mask_bits(slice_bits);
+
+            let tuple = if let Some(ref u) = unpacker {
+                u.unpack_bit_value(unit)
+            } else {
+                vec![Field::from(unit)]
+            };
+
+            let tuple = match apply_manipulators(tuple, &manipulators) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            dispatch_demux_sinks(&mut demux_sinks, &tuple, unpacker.as_ref(), out_unit_size)?;
+
+            let (out_unit, _) = resolve_output_unit(
+                tuple,
+                packer.as_ref(),
+                unpacker.as_ref(),
+                out_unit_size,
+                false,
+            )?;
+
+            let mask = BitValue::mask_for(slice_bits);
+            let full_mask = BitValue::mask_for(raw_bits);
+            let clear_mask = full_mask ^ (mask.clone() << shift);
+            let updated_container = (container & clear_mask) | ((out_unit & mask) << shift);
+
+            if let Some(ref mut sink) = unit_sink {
+                sink.write_bit_value(updated_container, raw_bits)?;
+            }
+
+            // Overwrite mode: copy original periodic gap bits to output as-is
+            if config.input_gap > 0 {
+                let gap_bits = config.input_gap as usize;
+                let gap_data = container_stream.read_bits(gap_bits)?;
+                if let Some(ref mut sink) = unit_sink {
+                    sink.write_bits(gap_data, gap_bits)?;
                 }
             }
-            if premature_eof {
+
+            if drain_merge_streams(&mut merge_streams, unit_sink.as_mut())? {
                 break;
             }
         }
     } else {
         let mut unit_stream = create_unit_stream(&config, in_unit_size, counter)?;
 
-        while let Some(unit) = unit_stream.next_unit()? {
-            let tuple = if let Some(ref u) = unpacker {
-                u.unpack(unit)
-            } else {
-                vec![Field::UInt(unit)]
-            };
+        let passthrough_fast_path = unpacker.is_none()
+            && manipulators.is_empty()
+            && demux_sinks.is_empty()
+            && tuple_sink.is_none()
+            && packer.is_none()
+            && merge_streams.is_empty();
 
-            let mut maybe_tuple = Some(tuple);
-            for m in &manipulators {
-                if let Some(t) = maybe_tuple {
-                    maybe_tuple = m.manipulate(t);
-                } else {
-                    break;
-                }
-            }
-            let tuple = match maybe_tuple {
-                Some(t) => t,
-                None => continue,
-            };
-
-            for (f_idx, sink) in demux_sinks.iter_mut() {
-                if *f_idx < tuple.len() {
-                    let val = tuple[*f_idx].as_biguint();
-                    let bits = if let Some(ref u) = unpacker {
-                        if *f_idx < u.pattern_items.len() {
-                            u.pattern_items[*f_idx].bits
-                        } else {
-                            out_unit_size
-                        }
-                    } else {
-                        out_unit_size
-                    };
-                    sink.write_bits(val, bits)?;
-                }
-            }
-
-            if let Some(ref mut tout) = tuple_sink {
-                tout.write_tuple(&tuple)?;
-            } else {
-                let (out_unit, eff_unit_size) = if let Some(ref p) = packer {
-                    (p.pack(tuple)?, out_unit_size)
-                } else if tuple.len() == 1 {
-                    let bits = match &tuple[0] {
-                        Field::Bits(_, b) => *b,
-                        _ => out_unit_size,
-                    };
-                    (
-                        tuple[0].as_biguint(),
-                        if config.output_unit.is_some() {
-                            out_unit_size
-                        } else {
-                            bits
-                        },
-                    )
-                } else if !tuple.is_empty() {
-                    let mut acc = BigUint::zero();
-                    let mut total_bits = 0usize;
-                    for (i, f) in tuple.iter().enumerate() {
-                        let w = match f {
-                            Field::Bits(_, b) => *b,
-                            Field::Bytes(bytes) => bytes.len() * 8,
-                            _ => unpacker
-                                .as_ref()
-                                .and_then(|u| u.field_widths().get(i).copied())
-                                .unwrap_or(8),
-                        };
-                        acc = (acc << w) | f.as_biguint();
-                        total_bits += w;
-                    }
-                    (
-                        acc,
-                        if config.output_unit.is_some() {
-                            out_unit_size
-                        } else {
-                            total_bits
-                        },
-                    )
-                } else {
-                    crate::diag::warn("No fields to output, assumed 0");
-                    (BigUint::zero(), out_unit_size)
-                };
+        if passthrough_fast_path {
+            while let Some(unit) = unit_stream.next_bit_value()? {
                 if let Some(ref mut sink) = unit_sink {
-                    write_framed_unit(
+                    write_framed_bit_value(
                         sink.as_mut(),
-                        out_unit,
-                        eff_unit_size,
+                        unit,
+                        out_unit_size,
                         config.output_raw_unit,
                         config.output_post_gap,
                         config.output_gap,
@@ -521,25 +628,48 @@ fn run_pipeline_internal(
                     )?;
                 }
             }
+        } else {
+            while let Some(unit) = unit_stream.next_bit_value()? {
+                let tuple = if let Some(ref u) = unpacker {
+                    u.unpack_bit_value(unit)
+                } else {
+                    vec![Field::from(unit)]
+                };
 
-            let mut premature_eof = false;
-            for ms in &mut merge_streams {
-                let m_unit = ms.config.unit_size;
-                match ms.next_unit()? {
-                    Some(u) => {
-                        if let Some(ref mut sink) = unit_sink {
-                            sink.write_bits(u, m_unit)?;
-                        }
-                    }
-                    None => {
-                        crate::diag::warn("Premature end of merge file");
-                        premature_eof = true;
-                        break;
+                let tuple = match apply_manipulators(tuple, &manipulators) {
+                    Some(t) => t,
+                    None => continue,
+                };
+
+                dispatch_demux_sinks(&mut demux_sinks, &tuple, unpacker.as_ref(), out_unit_size)?;
+
+                if let Some(ref mut tout) = tuple_sink {
+                    tout.write_tuple(&tuple)?;
+                } else {
+                    let (out_unit, eff_unit_size) = resolve_output_unit(
+                        tuple,
+                        packer.as_ref(),
+                        unpacker.as_ref(),
+                        out_unit_size,
+                        config.output_unit.is_some(),
+                    )?;
+                    if let Some(ref mut sink) = unit_sink {
+                        write_framed_bit_value(
+                            sink.as_mut(),
+                            out_unit,
+                            eff_unit_size,
+                            config.output_raw_unit,
+                            config.output_post_gap,
+                            config.output_gap,
+                            config.output_skip_bits,
+                            &mut prefix_written,
+                        )?;
                     }
                 }
-            }
-            if premature_eof {
-                break;
+
+                if drain_merge_streams(&mut merge_streams, unit_sink.as_mut())? {
+                    break;
+                }
             }
         }
     }
@@ -560,16 +690,16 @@ fn run_pipeline_internal(
 fn write_zero_bits(sink: &mut dyn UnitSink, mut bits: u64) -> Result<(), BddError> {
     while bits > 0 {
         let chunk = bits.min(64) as usize;
-        sink.write_bits(num_bigint::BigUint::default(), chunk)?;
+        sink.write_u64(0, chunk)?;
         bits -= chunk as u64;
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_framed_unit(
+fn write_framed_bit_value(
     sink: &mut dyn UnitSink,
-    unit: num_bigint::BigUint,
+    unit: BitValue,
     unit_size: usize,
     raw_unit: Option<u64>,
     post_gap: u64,
@@ -585,15 +715,10 @@ fn write_framed_unit(
     }
 
     if let Some(raw) = raw_unit {
-        let mask = if unit_size > 0 {
-            (num_bigint::BigUint::from(1u32) << unit_size) - 1u32
-        } else {
-            num_bigint::BigUint::default()
-        };
-        let framed = (unit & mask) << (post_gap as usize);
-        sink.write_bits(framed, raw as usize)?;
+        let framed = unit.mask_bits(unit_size) << (post_gap as usize);
+        sink.write_bit_value(framed, raw as usize)?;
     } else {
-        sink.write_bits(unit, unit_size)?;
+        sink.write_bit_value(unit, unit_size)?;
     }
 
     if gap > 0 {
@@ -603,31 +728,35 @@ fn write_framed_unit(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments, dead_code)]
+fn write_framed_unit(
+    sink: &mut dyn UnitSink,
+    unit: num_bigint::BigUint,
+    unit_size: usize,
+    raw_unit: Option<u64>,
+    post_gap: u64,
+    gap: u64,
+    skip_bits: u64,
+    prefix_written: &mut bool,
+) -> Result<(), BddError> {
+    write_framed_bit_value(
+        sink,
+        BitValue::from(unit),
+        unit_size,
+        raw_unit,
+        post_gap,
+        gap,
+        skip_bits,
+        prefix_written,
+    )
+}
+
 pub fn create_unit_stream(
     config: &ValidatedConfig,
     in_unit_size: usize,
     counter: Counter,
 ) -> Result<Box<dyn UnitStream>, BddError> {
-    let unit_stream: Box<dyn UnitStream> = if let Some(ref nl_spec) = config.input_netlink {
-        let raw_headers = nl_spec == "raw";
-        let nl_reader = NetlinkReader::open_proc_connector(raw_headers)?;
-        let bdd_reader = BddReader::new_streaming(nl_reader);
-        let stream_conf = StreamConfig {
-            skip_bits: config.input_skip_bits,
-            skip_units: config.input_skip_units,
-            gap: config.input_gap,
-            assert_aligned: config.input_assert_aligned,
-            drop_partial_eof: config.input_drop_partial_eof,
-            reverse_bytes: config.input_reverse_bytes,
-            reverse_unit: config.input_reverse_unit,
-            unit_size: in_unit_size,
-            seek_allowed: false,
-            repeat_count: config.input_repeat,
-        };
-        let mut fs = FileInputStream::new(bdd_reader, stream_conf, counter);
-        fs.do_skip();
-        Box::new(fs)
-    } else if config.input_zeros {
+    let unit_stream: Box<dyn UnitStream> = if config.input_zeros {
         Box::new(ZeroStream::new(counter))
     } else if config.input_ones {
         Box::new(OneStream::new(counter, in_unit_size))
@@ -646,7 +775,7 @@ pub fn create_unit_stream(
             }
         } else {
             match File::open(&config.input_file) {
-                Ok(f) => Box::new(BufReader::new(f)),
+                Ok(f) => open_rewindable_file(f, config.input_use_mmap),
                 Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
             }
         };
@@ -666,7 +795,9 @@ pub fn create_unit_stream(
             }
         } else {
             match File::open(&config.input_file) {
-                Ok(f) => BddReader::from_file(f, config.input_use_seek),
+                Ok(f) => {
+                    BddReader::from_file_with_mmap(f, config.input_use_seek, config.input_use_mmap)
+                }
                 Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
             }
         };
@@ -731,7 +862,7 @@ fn run_unit_probe_internal(
             }
         } else {
             match File::open(&config.input_file) {
-                Ok(f) => Box::new(BufReader::new(f)),
+                Ok(f) => open_rewindable_file(f, config.input_use_mmap),
                 Err(_) => return Err(BddError::CannotOpenInputFile(config.input_file.clone())),
             }
         };
@@ -791,8 +922,6 @@ fn run_unit_probe_internal(
                     "zero stream".to_string()
                 } else if config.input_ones {
                     "ones stream".to_string()
-                } else if config.input_netlink.is_some() {
-                    "netlink connector stream".to_string()
                 } else {
                     "stdin".to_string()
                 }

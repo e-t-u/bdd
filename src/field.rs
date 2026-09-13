@@ -1,3 +1,4 @@
+use crate::bits::BitValue;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{Num, One, ToPrimitive, Zero};
 use std::fmt;
@@ -96,6 +97,94 @@ impl Field {
             }
         }
     }
+
+    /// Convert this field to a 64-bit unsigned integer without heap allocation.
+    #[inline]
+    pub fn as_u64(&self) -> u64 {
+        match self {
+            Field::UInt(u) => u.to_u64().unwrap_or(0),
+            Field::Bits(u, _) => u.to_u64().unwrap_or(0),
+            Field::Int(i) => {
+                if i >= &BigInt::zero() {
+                    i.to_u64().unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+            Field::Float(f) => {
+                if *f >= 0.0 {
+                    *f as u64
+                } else {
+                    0
+                }
+            }
+            Field::Bytes(bytes) => {
+                let mut val = 0u64;
+                for &b in bytes.iter().take(8) {
+                    val = (val << 8) | (b as u64);
+                }
+                val
+            }
+        }
+    }
+
+    /// Convert this field to a BitValue without allocating if value fits in u64.
+    pub fn as_bit_value(&self) -> BitValue {
+        match self {
+            Field::UInt(u) => {
+                if let Some(v) = u.to_u64() {
+                    BitValue::Inline(v)
+                } else {
+                    BitValue::Big(u.clone())
+                }
+            }
+            Field::Bits(u, bits) => {
+                if *bits <= 64 {
+                    BitValue::Inline(u.to_u64().unwrap_or(0))
+                } else {
+                    BitValue::Big(u.clone())
+                }
+            }
+            Field::Int(i) => {
+                if i >= &BigInt::zero() {
+                    if let Some(v) = i.to_u64() {
+                        BitValue::Inline(v)
+                    } else {
+                        BitValue::Big(i.to_biguint().unwrap_or_default())
+                    }
+                } else {
+                    BitValue::Inline(0)
+                }
+            }
+            Field::Float(f) => {
+                if *f >= 0.0 {
+                    BitValue::Inline(*f as u64)
+                } else {
+                    BitValue::Inline(0)
+                }
+            }
+            Field::Bytes(bytes) => {
+                if bytes.len() <= 8 {
+                    let mut val = 0u64;
+                    for &b in bytes {
+                        val = (val << 8) | (b as u64);
+                    }
+                    BitValue::Inline(val)
+                } else {
+                    BitValue::Big(self.as_biguint())
+                }
+            }
+        }
+    }
+}
+
+impl From<BitValue> for Field {
+    fn from(bv: BitValue) -> Self {
+        match bv {
+            BitValue::Inline(u) => Field::UInt(BigUint::from(u)),
+            BitValue::Big(b) => Field::UInt(b),
+        }
+    }
 }
 
 impl fmt::Display for Field {
@@ -114,6 +203,27 @@ impl fmt::Display for Field {
     }
 }
 
+/// Reverses the lowest `bits` bits of a 64-bit value using native CPU instructions.
+#[inline]
+pub fn reverse_bits_u64(val: u64, bits: usize) -> u64 {
+    if bits == 0 {
+        return val;
+    }
+    let high = if bits >= 64 { 0 } else { val >> bits };
+    let mask = if bits >= 64 {
+        !0u64
+    } else {
+        (1u64 << bits) - 1
+    };
+    let low = val & mask;
+    let rev = low.reverse_bits() >> (64 - bits);
+    if bits >= 64 {
+        rev
+    } else {
+        (high << bits) | rev
+    }
+}
+
 /// Reverses the lowest `bits` bits of `val`, keeping any higher bits in place.
 pub fn reverse_bits(val: &BigUint, bits: usize) -> BigUint {
     if bits == 0 {
@@ -123,20 +233,7 @@ pub fn reverse_bits(val: &BigUint, bits: usize) -> BigUint {
     // Fast-path: native register bit-reversal for units <= 64 bits that fit in u64
     if bits <= 64 {
         if let Some(v) = val.to_u64() {
-            let high = if bits == 64 { 0 } else { v >> bits };
-            let mask = if bits == 64 {
-                !0u64
-            } else {
-                (1u64 << bits) - 1
-            };
-            let low = v & mask;
-            let rev = low.reverse_bits() >> (64 - bits);
-            let res = if bits == 64 {
-                rev
-            } else {
-                (high << bits) | rev
-            };
-            return BigUint::from(res);
+            return BigUint::from(reverse_bits_u64(v, bits));
         }
     }
 

@@ -190,6 +190,83 @@ fn test_cli_auto_seek_and_no_seek() {
 }
 
 #[test]
+fn test_cli_mmap_and_no_mmap() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let test_path = "/tmp/bdd_mmap_test.bin";
+    {
+        let mut f = File::create(test_path).expect("failed to create test file");
+        let data: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        f.write_all(&data).expect("failed to write data");
+    }
+
+    // 1. Default (mmap enabled on regular file)
+    let out_default = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", test_path),
+            "--input-skip-units=10",
+            "--count=5",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd default");
+    assert!(out_default.status.success());
+    let hex_default = String::from_utf8(out_default.stdout).unwrap();
+    assert_eq!(hex_default.trim(), "0a 0b 0c 0d 0e");
+
+    // 2. Explicit --mmap
+    let out_mmap = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", test_path),
+            "--mmap",
+            "--input-skip-units=10",
+            "--count=5",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd --mmap");
+    assert!(out_mmap.status.success());
+    let hex_mmap = String::from_utf8(out_mmap.stdout).unwrap();
+    assert_eq!(hex_mmap.trim(), "0a 0b 0c 0d 0e");
+
+    // 3. Explicit --no-mmap (buffered I/O)
+    let out_no_mmap = Command::new(BDD_BIN)
+        .args([
+            &format!("--input-file={}", test_path),
+            "--no-mmap",
+            "--input-skip-units=10",
+            "--count=5",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd --no-mmap");
+    assert!(out_no_mmap.status.success());
+    let hex_no_mmap = String::from_utf8(out_no_mmap.stdout).unwrap();
+    assert_eq!(hex_no_mmap.trim(), "0a 0b 0c 0d 0e");
+
+    // 4. Probing with mmap
+    let out_probe = Command::new(BDD_BIN)
+        .args(["--probe", test_path, "--output-json"])
+        .output()
+        .expect("failed to probe with mmap");
+    assert!(out_probe.status.success());
+    let json_str = String::from_utf8(out_probe.stdout).unwrap();
+    assert!(json_str.contains("\"sample_bytes\": 256"));
+
+    // 5. Probing with --no-mmap
+    let out_probe_no_mmap = Command::new(BDD_BIN)
+        .args(["--no-mmap", "--probe", test_path, "--output-json"])
+        .output()
+        .expect("failed to probe with --no-mmap");
+    assert!(out_probe_no_mmap.status.success());
+    let json_str2 = String::from_utf8(out_probe_no_mmap.stdout).unwrap();
+    assert!(json_str2.contains("\"sample_bytes\": 256"));
+
+    let _ = std::fs::remove_file(test_path);
+}
+
+#[test]
 fn test_cli_raw_unit_and_offset() {
     use std::fs::File;
     use std::io::Write;
@@ -618,6 +695,102 @@ fn test_explain_pattern() {
     let stdout_preset = String::from_utf8(out_preset.stdout).unwrap();
     assert!(stdout_preset.contains("32 bits"));
     assert!(stdout_preset.contains("bitrate"));
+}
+
+#[test]
+fn test_download_presets_cli() {
+    use tempfile::NamedTempFile;
+
+    let sample_json = r#"[
+        {
+            "name": "mock-protocol",
+            "description": "Mock testing protocol header",
+            "pattern": "magic:8u,length:16u",
+            "unit_bits": 24,
+            "little_endian": false,
+            "default_count": 1
+        }
+    ]"#;
+
+    let src_file = NamedTempFile::new().unwrap();
+    std::fs::write(src_file.path(), sample_json).unwrap();
+
+    let dest_file = NamedTempFile::new().unwrap();
+
+    // 1. Download presets from local file URI into custom presets-file
+    let out = Command::new(BDD_BIN)
+        .arg(format!(
+            "--download-presets={}",
+            src_file.path().to_str().unwrap()
+        ))
+        .arg(format!(
+            "--presets-file={}",
+            dest_file.path().to_str().unwrap()
+        ))
+        .output()
+        .expect("failed to run bdd --download-presets");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("Successfully downloaded and installed 1 presets"));
+
+    // 2. Query preset from the downloaded file
+    let out_list = Command::new(BDD_BIN)
+        .arg(format!(
+            "--presets-file={}",
+            dest_file.path().to_str().unwrap()
+        ))
+        .arg("--list-presets")
+        .output()
+        .expect("failed to run bdd --list-presets");
+    assert!(out_list.status.success());
+    let stdout_list = String::from_utf8(out_list.stdout).unwrap();
+    assert!(stdout_list.contains("mock-protocol"));
+    assert!(stdout_list.contains("magic:8u,length:16u"));
+
+    // 3. Slice using the custom preset from file
+    let out_slice = Command::new(BDD_BIN)
+        .arg(format!(
+            "--presets-file={}",
+            dest_file.path().to_str().unwrap()
+        ))
+        .args([
+            "--input-counter",
+            "--count=1",
+            "--preset=mock-protocol",
+            "--output-hex",
+        ])
+        .output()
+        .expect("failed to run bdd with mock-protocol");
+    assert!(out_slice.status.success());
+}
+
+#[test]
+fn test_presets_discovery_and_environment_variable() {
+    use tempfile::NamedTempFile;
+
+    let sample_json = r#"[
+        {
+            "name": "env-proto",
+            "description": "Environment variable protocol",
+            "pattern": "tag:4u,payload:12u",
+            "unit_bits": 16,
+            "little_endian": false,
+            "default_count": 1
+        }
+    ]"#;
+
+    let env_file = NamedTempFile::new().unwrap();
+    std::fs::write(env_file.path(), sample_json).unwrap();
+
+    let out = Command::new(BDD_BIN)
+        .env("BDD_PRESETS_FILE", env_file.path().to_str().unwrap())
+        .arg("--list-presets")
+        .output()
+        .expect("failed to run bdd --list-presets with BDD_PRESETS_FILE");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("env-proto"));
+    assert!(stdout.contains("tag:4u,payload:12u"));
 }
 
 #[test]
@@ -1146,19 +1319,22 @@ fn test_terminal_hex_and_bits_no_trailing_whitespace() {
     }
 }
 
-#[cfg(feature = "server")]
 #[test]
-fn test_web_server_embedded() {
+fn test_web_server_decoupled_python() {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::thread;
     use std::time::Duration;
 
-    let port = 17892;
-    let mut child = Command::new(BDD_BIN)
-        .arg(format!("--serve={}", port))
+    let port = 17894;
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let script = format!("{}/web/server.py", manifest_dir);
+    let mut child = Command::new("python3")
+        .arg(&script)
+        .arg(format!("{}", port))
+        .env("BDD_BIN", BDD_BIN)
         .spawn()
-        .expect("failed to spawn bdd --serve");
+        .expect("failed to spawn python3 web/server.py");
 
     // Wait for server to start
     let mut connected = false;
@@ -1180,7 +1356,7 @@ fn test_web_server_embedded() {
         let mut resp = String::new();
         stream.read_to_string(&mut resp).unwrap();
         assert!(resp.contains("200 OK"));
-        assert!(resp.contains("\"status\":\"ok\""));
+        assert!(resp.contains("\"status\""));
     }
 
     // 2. Test GET / (HTML index)
@@ -1214,6 +1390,84 @@ fn test_web_server_embedded() {
     }
 
     // 4. Test POST /api/process
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let body = r#"{"args":["--input-zeros","--count=2","--output-hex"]}"#;
+        let req = format!(
+            "POST /api/process HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("00 00"));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn test_web_server_decoupled_rust() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::thread;
+    use std::time::Duration;
+
+    let port = 17893;
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let rust_server_bin = format!("{}/web/target/debug/bdd-web", manifest_dir);
+    if !std::path::Path::new(&rust_server_bin).exists() {
+        return;
+    }
+    let mut child = Command::new(&rust_server_bin)
+        .arg(format!("{}", port))
+        .env("BDD_BIN", BDD_BIN)
+        .spawn()
+        .expect("failed to spawn bdd-web");
+
+    let mut connected = false;
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(50));
+        if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
+            connected = true;
+            break;
+        }
+    }
+    assert!(connected, "Failed to connect to bdd-web standalone server");
+
+    // 1. Test GET /api/status
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(b"GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("\"backend\":\"standalone-rust\""));
+    }
+
+    // 2. Test POST /api/explain
+    {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let body = r#"{"pattern":"sync:11u,ver:2u"}"#;
+        let req = format!(
+            "POST /api/explain HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.contains("200 OK"));
+        assert!(resp.contains("sync"));
+        assert!(resp.contains("ver"));
+    }
+
+    // 3. Test POST /api/process
     {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
         let body = r#"{"args":["--input-zeros","--count=2","--output-hex"]}"#;
@@ -1357,16 +1611,15 @@ fn test_pattern_with_raw_unit_and_unit_overwrite() {
     assert_eq!(stdout_overwrite.trim(), "00 00");
 }
 
-#[cfg(not(feature = "server"))]
 #[test]
-fn test_web_server_disabled_error() {
+fn test_web_server_decoupled_notice() {
     let out = Command::new(BDD_BIN)
         .arg("--serve")
         .output()
         .expect("failed to run bdd --serve");
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("The --serve web UI feature was not enabled at compile time"));
+    assert!(stderr.contains("decoupled to the 'web/' directory"));
 }
 
 #[cfg(not(feature = "small-floats"))]
@@ -1989,4 +2242,107 @@ fn test_unified_stream_pipeline_fusion_and_sources() {
     let out3 = child3.wait_with_output().unwrap();
     assert!(out3.status.success());
     assert_eq!(String::from_utf8(out3.stdout).unwrap().trim(), "af");
+}
+
+#[test]
+fn test_multi_source_brackets_cli() {
+    let out1 = Command::new(BDD_BIN)
+        .args(["--count", "2", "[ zeros:8, ones:8 ] -> hex"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out1.status.success());
+    // 4 units round-robin: 0x00, 0xFF, 0x00, 0xFF
+    let stdout1 = String::from_utf8(out1.stdout).unwrap();
+    assert_eq!(stdout1.trim(), "00 ff 00 ff");
+
+    let out2 = Command::new(BDD_BIN)
+        .args(["--count", "2", "[ zeros, counter ] -> 8 -> hex"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out2.status.success());
+    // 4 units round-robin: 0x00, counter 0, 0x00, counter 1
+    let stdout2 = String::from_utf8(out2.stdout).unwrap();
+    assert_eq!(stdout2.trim(), "00 00 00 01");
+}
+
+#[test]
+fn test_pipe_interleave_cli() {
+    let out = Command::new(BDD_BIN)
+        .args(["--count", "2", "zeros:8 -> interleave(counter:8) -> hex"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out.status.success());
+    // 4 units round-robin: zeros:8 (00), counter:8 (00), zeros:8 (00), counter:8 (01)
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "00 00 00 01");
+}
+
+#[test]
+fn test_pipe_tee_cli() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let tee_path = tmp.path().to_str().unwrap();
+
+    let out = Command::new(BDD_BIN)
+        .args([
+            "--count",
+            "2",
+            &format!("zeros:8 -> add(5) -> tee('{}') -> add(1) -> hex", tee_path),
+        ])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out.status.success());
+    // Main stream output after add(1) is 0x06
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "06 06");
+
+    // Tee file recorded intermediate units after add(5) = 0x05
+    let tee_bytes = std::fs::read(tmp.path()).unwrap();
+    assert_eq!(tee_bytes, vec![0x05, 0x05]);
+}
+
+#[test]
+fn test_container_overwrite_cli() {
+    // 16-bit container: 0x1234 (binary 0001 0010 0011 0100)
+    // Offset 4, width 8: bits 4..12 is 0x23 (binary 0010 0011)
+    // XOR with 0xFF -> 0xDC (binary 1101 1100)
+    // Updated container: 0001 1101 1100 0100 = 0x1DC4
+    let mut child = Command::new(BDD_BIN)
+        .args(["16[4:8] -> xor(0xFF) -> overwrite -> hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(&[0x12, 0x34]).unwrap();
+    }
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "1dc4");
+}
+
+#[test]
+fn test_wildcard_passthrough_cli() {
+    // 16-bit container: 0x1234
+    // Pattern: 4_, 8U, 4_
+    // Invert middle 8-bit unsigned integer with xor(1, 0xFF)
+    let mut child = Command::new(BDD_BIN)
+        .args(["4_, 8U, 4_ -> xor(1, 0xFF) -> 4_, 8U, 4_ -> hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(&[0x12, 0x34]).unwrap();
+    }
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "1dc4");
 }

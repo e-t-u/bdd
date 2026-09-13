@@ -58,13 +58,29 @@ fn type_code_description(c: char) -> &'static str {
         'k' => "Auto-incrementing Counter (Little-Endian bits)",
         'V' => "Raw Bit Vector (Big-Endian bits)",
         'v' => "Raw Bit Vector (Little-Endian bits)",
+        '_' => "Raw unparsed passthrough bits",
         _ => "Unknown",
     }
 }
 
 /// Computes the structured explanation of a pattern.
 pub fn explain_pattern(pattern_str: &str) -> Result<PatternExplanation, BddError> {
-    let items = parse_input_pattern(pattern_str)?;
+    let items = if pattern_str.contains('[') {
+        let framed = crate::pattern::FramedPattern::parse(pattern_str)?;
+        if !framed.fields.is_empty() {
+            framed.fields
+        } else if let Some(u) = framed.framing.unit_size {
+            vec![crate::pattern::PatternItem {
+                name: None,
+                bits: u,
+                char_code: 'U',
+            }]
+        } else {
+            parse_input_pattern(pattern_str)?
+        }
+    } else {
+        parse_input_pattern(pattern_str)?
+    };
     let total_bits: usize = items.iter().map(|p| p.bits).sum();
     let total_bytes = total_bits as f64 / 8.0;
     let is_byte_aligned = total_bits.is_multiple_of(8);

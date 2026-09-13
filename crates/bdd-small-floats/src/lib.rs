@@ -1,4 +1,4 @@
-//! Conversion routines for AI and GPU floating point formats:
+//! Specialized AI, GPU, and sub-byte floating-point codecs:
 //! - IEEE 754 Half-precision FP16 (16H / 16h)
 //! - Google Brain Bfloat16 BF16 (16Y / 16y)
 //! - OCP FP8 E4M3FN (8E / 8e)
@@ -324,6 +324,10 @@ mod tests {
         assert_eq!(encode_f16(1.0), 0x3C00);
         assert_eq!(encode_f16(-1.0), 0xBC00);
         assert_eq!(encode_f16(2.0), 0x4000);
+        assert_eq!(decode_f16(0x0000), 0.0);
+        assert_eq!(decode_f16(0x7C00), f64::INFINITY);
+        assert_eq!(decode_f16(0xFC00), f64::NEG_INFINITY);
+        assert!(decode_f16(0x7E00).is_nan());
     }
 
     #[test]
@@ -338,6 +342,27 @@ mod tests {
     fn test_fp8_e4m3() {
         assert_eq!(decode_fp8_e4m3(0x38), 1.0);
         assert_eq!(encode_fp8_e4m3(1.0), 0x38);
+        assert_eq!(decode_fp8_e4m3(0xB8), -1.0);
+        assert_eq!(encode_fp8_e4m3(-1.0), 0xB8);
+        assert!(decode_fp8_e4m3(0x7F).is_nan());
+    }
+
+    #[test]
+    fn test_fp8_e5m2() {
+        assert_eq!(decode_fp8_e5m2(0x3C), 1.0);
+        assert_eq!(encode_fp8_e5m2(1.0), 0x3C);
+        assert_eq!(decode_fp8_e5m2(0xBC), -1.0);
+        assert_eq!(encode_fp8_e5m2(-1.0), 0xBC);
+        assert_eq!(decode_fp8_e5m2(0x7C), f64::INFINITY);
+        assert_eq!(decode_fp8_e5m2(0xFC), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_fp6_e3m2() {
+        assert_eq!(decode_fp6_e3m2(0x0C), 1.0);
+        assert_eq!(encode_fp6_e3m2(1.0), 0x0C);
+        assert_eq!(decode_fp6_e3m2(0x2C), -1.0);
+        assert_eq!(encode_fp6_e3m2(-1.0), 0x2C);
     }
 
     #[test]

@@ -1,0 +1,13 @@
+[package]
+name = "bdd-small-floats"
+version = "0.5.3"
+edition = "2021"
+description = "Specialized AI, GPU, and sub-byte floating-point codecs (FP16, BF16, FP8, FP6, FP4)"
+authors = ["Esa Turtiainen"]
+license = "GPL-3.0"
+repository = "https://github.com/e-t-u/bdd"
+readme = "README.md"
+keywords = ["float", "fp8", "fp16", "bfloat16", "nvfp4"]
+categories = ["data-structures", "encoding"]
+
+[dependencies]

@@ -1,7 +1,11 @@
 use crate::error::BddError;
 use crate::field::Field;
+use crate::sink::{FileOutputStream, UnitSink};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, ToPrimitive, Zero};
+use std::fs::File;
+use std::io::BufWriter;
+use std::sync::Mutex;
 
 fn resolve_index(len: usize, idx: isize) -> Option<usize> {
     if idx >= 0 {
@@ -1161,6 +1165,60 @@ impl TupleManipulator for FilterManipulator {
     }
 }
 
+/// Non-destructive stream tapping manipulator that duplicates passing tuples
+/// to an external file or sink (like Unix tee) while passing the tuple onward untouched.
+pub struct TeeManipulator {
+    sink: Mutex<Box<dyn UnitSink + Send>>,
+}
+
+impl TeeManipulator {
+    pub fn new(path: &str) -> Result<Self, BddError> {
+        let mut clean_path = path.trim();
+        if clean_path.starts_with("file(") && clean_path.ends_with(')') {
+            clean_path = clean_path[5..clean_path.len() - 1].trim();
+        }
+        let clean_path = clean_path.trim_matches('\'').trim_matches('"');
+        let writer: Box<dyn std::io::Write + Send> = if clean_path == "-" || clean_path == "stdout"
+        {
+            Box::new(std::io::stdout())
+        } else {
+            let f = File::create(clean_path).map_err(|e| {
+                BddError::CliError(format!("Cannot open tee file '{}': {}", clean_path, e))
+            })?;
+            Box::new(BufWriter::new(f))
+        };
+        let sink = Box::new(FileOutputStream::new(writer, false, false));
+        Ok(Self {
+            sink: Mutex::new(sink),
+        })
+    }
+}
+
+impl TupleManipulator for TeeManipulator {
+    fn manipulate(&self, tuple: Vec<Field>) -> Option<Vec<Field>> {
+        if let Ok(mut sink) = self.sink.lock() {
+            for f in &tuple {
+                let (val, bits) = match f {
+                    Field::Bits(b, bits) => (b.clone(), *bits),
+                    Field::Bytes(bytes) => (f.as_biguint(), bytes.len() * 8),
+                    Field::Float(fl) => (BigUint::from(fl.to_bits()), 64),
+                    Field::UInt(_) | Field::Int(_) => (f.as_biguint(), 8),
+                };
+                let _ = sink.write_bits(val, bits);
+            }
+        }
+        Some(tuple)
+    }
+}
+
+impl Drop for TeeManipulator {
+    fn drop(&mut self) {
+        if let Ok(mut sink) = self.sink.lock() {
+            let _ = sink.flush_stream();
+        }
+    }
+}
+
 /// Inspects command-line arguments to construct an ordered manipulation pipeline.
 pub fn build_pipeline_from_args(
     args: &[String],
@@ -1208,6 +1266,7 @@ pub fn build_pipeline_from_args(
             "--div" => handle_opt!(DivManipulator),
             "--mod" => handle_opt!(ModManipulator),
             "--filter" => handle_opt!(FilterManipulator),
+            "--tee" => handle_opt!(TeeManipulator),
             _ => {}
         }
         i += 1;
@@ -1303,6 +1362,7 @@ pub fn build_manipulator_from_spec_with_schema(
         "div" => Ok(Box::new(DivManipulator::new(&field_or_single(arg))?)),
         "mod" => Ok(Box::new(ModManipulator::new(&field_or_single(arg))?)),
         "filter" => Ok(Box::new(FilterManipulator::new(arg)?)),
+        "tee" => Ok(Box::new(TeeManipulator::new(arg)?)),
         _ => Err(BddError::CliError(format!(
             "Unknown manipulator '{}'",
             spec
@@ -1540,5 +1600,18 @@ mod tests {
         let f_clamp = ClampManipulator::new("0,-1.0,1.0:saturate").unwrap();
         let cf = f_clamp.manipulate(vec![Field::Float(2.5)]).unwrap();
         assert_eq!(cf[0], Field::Float(1.0));
+    }
+
+    #[test]
+    fn test_tee_manipulator() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let tee = TeeManipulator::new(tmp.path().to_str().unwrap()).unwrap();
+        let inp = vec![Field::Bits(BigUint::from(0xABu32), 8)];
+        let out = tee.manipulate(inp.clone()).unwrap();
+        assert_eq!(out, inp);
+        drop(tee);
+
+        let data = std::fs::read(tmp.path()).unwrap();
+        assert_eq!(data, vec![0xAB]);
     }
 }

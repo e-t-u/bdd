@@ -18,6 +18,7 @@ Both `.deb` and `.rpm` packages install the complete `bdd` toolchain:
 - **Static C Library**: `/usr/lib/libbdd.a` (or `/usr/lib64/libbdd.a`)
 - **pkg-config Configuration**: `/usr/lib/pkgconfig/bdd.pc` (or `/usr/lib64/pkgconfig/bdd.pc`)
 - **C Header**: `/usr/include/bdd.h`
+- **Format Presets**: `/usr/share/bdd/presets.json`
 - **Manpage**: `/usr/share/man/man1/bdd.1.gz`
 - **Documentation**: `/usr/share/doc/bdd/README.md` and `llms.txt`
 - **License**: `/usr/share/doc/bdd/copyright` or `/usr/share/licenses/bdd/LICENSE`

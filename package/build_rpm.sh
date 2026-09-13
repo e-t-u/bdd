@@ -33,6 +33,11 @@ mkdir -p "${RPM_TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 install -m 0755 "${REPO_ROOT}/target/release/bdd" "${RPM_TOPDIR}/SOURCES/bdd"
 strip "${RPM_TOPDIR}/SOURCES/bdd" 2>/dev/null || true
 
+if [ -f "${REPO_ROOT}/target/release/bdd-mcp" ]; then
+    install -m 0755 "${REPO_ROOT}/target/release/bdd-mcp" "${RPM_TOPDIR}/SOURCES/bdd-mcp"
+    strip "${RPM_TOPDIR}/SOURCES/bdd-mcp" 2>/dev/null || true
+fi
+
 install -m 0755 "${REPO_ROOT}/target/release/libbdd.so" "${RPM_TOPDIR}/SOURCES/libbdd.so"
 strip "${RPM_TOPDIR}/SOURCES/libbdd.so" 2>/dev/null || true
 
@@ -66,6 +71,9 @@ fi
 if [ -f "${REPO_ROOT}/LICENSE" ]; then
     install -m 0644 "${REPO_ROOT}/LICENSE" "${RPM_TOPDIR}/SOURCES/LICENSE"
 fi
+if [ -f "${REPO_ROOT}/presets.json" ]; then
+    install -m 0644 "${REPO_ROOT}/presets.json" "${RPM_TOPDIR}/SOURCES/presets.json"
+fi
 
 # Generate RPM spec file
 SPEC_FILE="${RPM_TOPDIR}/SPECS/bdd.spec"
@@ -93,8 +101,12 @@ mkdir -p %{buildroot}%{_includedir}
 mkdir -p %{buildroot}%{_mandir}/man1
 mkdir -p %{buildroot}%{_docdir}/%{name}
 mkdir -p %{buildroot}%{_licensedir}/%{name}
+mkdir -p %{buildroot}%{_datadir}/%{name}
 
 install -m 0755 %{_sourcedir}/bdd %{buildroot}%{_bindir}/bdd
+if [ -f %{_sourcedir}/bdd-mcp ]; then
+    install -m 0755 %{_sourcedir}/bdd-mcp %{buildroot}%{_bindir}/bdd-mcp
+fi
 install -m 0755 %{_sourcedir}/libbdd.so %{buildroot}%{_libdir}/libbdd.so
 if [ -f %{_sourcedir}/libbdd.a ]; then
     install -m 0644 %{_sourcedir}/libbdd.a %{buildroot}%{_libdir}/libbdd.a
@@ -111,18 +123,22 @@ fi
 if [ -f %{_sourcedir}/LICENSE ]; then
     install -m 0644 %{_sourcedir}/LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 fi
+if [ -f %{_sourcedir}/presets.json ]; then
+    install -m 0644 %{_sourcedir}/presets.json %{buildroot}%{_datadir}/%{name}/presets.json
+fi
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
 
 %files
 %license %{_licensedir}/%{name}/LICENSE
-%{_bindir}/bdd
+%{_bindir}/*
 %{_libdir}/libbdd.so
 %{_libdir}/libbdd.a
 %{_libdir}/pkgconfig/bdd.pc
 %{_includedir}/bdd.h
 %{_mandir}/man1/bdd.1*
+%{_datadir}/%{name}/presets.json
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/llms.txt
 

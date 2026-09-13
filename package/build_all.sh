@@ -28,7 +28,8 @@ echo -e "\n==> Step 4: Building C Library SDK (.tar.gz)..."
 echo -e "\n==> Step 5: Building Python packages (Wheel & Sdist)..."
 "${SCRIPT_DIR}/build_python.sh"
 
-echo -e "\n==> Step 6: Building Cargo Crate (.crate)..."
+echo -e "\n==> Step 6: Building Cargo Crates (.crate)..."
+cargo package --allow-dirty --manifest-path "${REPO_ROOT}/crates/bdd-small-floats/Cargo.toml"
 cargo package --allow-dirty --manifest-path "${REPO_ROOT}/Cargo.toml"
 cp "${REPO_ROOT}/target/package/"*.crate "${DIST_DIR}/"
 

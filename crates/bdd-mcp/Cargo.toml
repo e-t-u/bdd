@@ -1,0 +1,18 @@
+[package]
+name = "bdd-mcp"
+version = "0.5.3"
+edition = "2021"
+description = "Model Context Protocol (MCP) server for the bdd bitstream engine"
+authors = ["Esa Turtiainen"]
+license = "GPL-3.0"
+repository = "https://github.com/e-t-u/bdd"
+readme = "README.md"
+keywords = ["mcp", "llm", "agent", "bitstream", "binary"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+bdd = { path = "../..", default-features = true }
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"

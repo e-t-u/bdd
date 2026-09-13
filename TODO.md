@@ -53,6 +53,21 @@ This document consolidates high-value feature improvements, API additions, and a
 ### 2.1 Void / Raw Bit Vector Pattern Type (`V` / `v`) [COMPLETED]
 - **Current Behavior**: `V` (Big-Endian) and `v` (Little-Endian) represent opaque, unaligned bit vectors of arbitrary length (e.g. `13V`, `127V`, `1V`). Fields are unpacked and packed without numeric arithmetic coercion and formatted cleanly as bit sequences or `0b...` bitstrings in JSON/CSV.
 
+### 2.2 Direct Memory-Mapped File I/O (`mmap` Feature) [COMPLETED]
+- **Current Behavior**: Implemented zero-copy memory-mapped file access via `memmap2` behind an optional Cargo feature (`mmap`, enabled by default). Regular input and merge files are automatically memory mapped with kernel sequential readahead (`MADV_SEQUENTIAL`), providing zero-copy buffer slicing and instant $O(1)$ seeking across container gaps without `read()` syscall overhead. Seamlessly falls back to standard buffered streams on stdin, pipes, FIFOs, and 0-byte files. Can be toggled at runtime via `--mmap` and `--no-mmap` (and `--merge-mmap` / `--merge-no-mmap`), and can be disabled at compile time via `--no-default-features` for minimal or embedded platforms.
+
+### 2.3 Small-Integer Fast Path (`BitValue`) [COMPLETED]
+- **Motivation & Problem**: In earlier versions, all bitstream units were converted to heap-allocated `BigUint` instances regardless of size (even for 1-bit, 3-bit, 8-bit, or 32-bit units). This caused substantial memory allocator churn in the inner streaming loop, limiting 1-bit streams to ~36 Mbps and 8-bit streams to ~270 Mbps.
+- **Current Architecture**:
+  - Introduced `BitValue` (`Inline(u64)` for widths $\le 64$ bits, `Big(BigUint)` for arbitrary bignum widths $> 64$ bits) with zero heap allocations for $>95\%$ of typical workloads.
+  - Implemented fast-path register operations across streams (`next_bit_value`), sinks (`write_bit_value`, `write_u64`), pattern unpackers (`unpack_u64`, `unpack_bit_value`), and packers (`pack_u64`, `pack_bit_value`).
+  - Added a passthrough streaming fast-path in `engine.rs` bypassing field vector allocation when no manipulators or unpackers are active.
+- **Benchmark Improvements**:
+  - **1-bit single-bit resolution stream**: 36.33 Mbps $\rightarrow$ **231.31 Mbps** (**6.37x faster, +537%**)
+  - **Synthetic 8-bit stream generation**: 271.74 Mbps $\rightarrow$ **1.16 Gbps** (**4.26x faster, +326%**)
+  - **Unaligned 3-bit unpack to 8-bit**: 49.32 Mbps $\rightarrow$ **203.11 Mbps** (**4.12x faster, +312%**)
+  - **Tuple pipeline (`2U3U3U` $\rightarrow$ rearrange)**: 31.10 Mbps $\rightarrow$ **90.74 Mbps** (**2.92x faster, +192%**)
+
 ---
 
 ## 3. CLI & Output Ergonomics
@@ -136,7 +151,11 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Magic Signature Scanning**: Automated detection of 25+ binary magic signatures (ELF, PNG, JPEG, PDF, ZIP, MPEG-TS, GZIP, WASM, PCAP, etc.) during binary probing.
 - [x] **C & Rust Struct Code Generation (`--export-c` / `--export-rust`)**: Direct generation of packed C structs and Rust `#[repr(C, packed)]` definitions from arbitrary bitfield patterns or presets.
 - [x] **Shell Auto-Completion (`--completions <SHELL>`)**: Generation of auto-completion scripts for `bash`, `zsh`, `fish`, `powershell`, and `elvish` via `clap_complete`.
-- [x] **Model Context Protocol (MCP) Server Extensions**: Extended MCP stdio server with `bdd_transcode` (dynamic payload transcoding and bit-level transformations) and `bdd_generate` (synthetic vector generation).
-- [x] **Native Linux Netlink Telemetry Ingestion (`--input-netlink`)**: Native kernel connector process event streaming directly inside `bdd`.
-
+- [x] **Decoupled Netlink Process Ingestion to `contrib/` (`contrib/rust/bdd-netlink`)**: Decoupled kernel Netlink connector stream ingestion from core `bdd` into an ultra-fast, zero-dependency standalone Rust utility (`contrib/rust/bdd-netlink`, compiled to `contrib/bdd-netlink`). Preserved `netlink-proc-event` in default format presets (`presets.json`), enabling clean Unix piping (`sudo ./contrib/bdd-netlink | bdd --preset netlink-proc-event --output-json`) while eliminating unsafe OS-specific socket code from the core binary.
+- [x] **Decoupled Web UI Server (`web/`)**: Decoupled the interactive HTTP Web UI from the core `bdd` Rust crate into a dedicated, self-contained `web/` directory. Core crate binary has zero web server overhead. Decoupled server communicates exclusively via the `bdd` CLI through subprocess pipes (`web/server.py` with pure Python stdlib and zero external dependencies, and `web/Cargo.toml` / `web/src/main.rs` with minimal serde dependencies).
+- [x] **Decoupled Presets File & Remote Preset Downloading (`presets.json` / `--download-presets` / `--presets-file`)**: Extracted all protocol and float presets into an external `presets.json` file. Automatically downloads the default presets file from GitHub on first run (with fallback to embedded defaults when offline). Added `--download-presets [URL]` to fetch and install custom or updated preset files, and `--presets-file <PATH>` / `BDD_PRESETS_FILE` for alternate preset collections.
+- [x] **Standalone Small Floating-Point Crate (`bdd-small-floats` & `small-floats` feature)**: Extracted specialized sub-byte, AI, and GPU float codecs (FP16, BF16, OCP FP8 E4M3FN, OCP FP8 E5M2, OCP FP6 E3M2, NVIDIA Blackwell FP4 E2M1) into a dedicated, zero-dependency standalone crate (`crates/bdd-small-floats`). Verified that all float codec references in `bdd` (`src/pattern.rs`, `src/ffi.rs`, `src/preset.rs`, `src/cli.rs`) are strictly gated behind the `small-floats` Rust feature flag, enabling a minimal zero-cost binary when building with `--no-default-features`.
+- [x] **Decoupled Model Context Protocol Server (`crates/bdd-mcp`)**: Extracted MCP server from `src/mcp.rs` into a standalone companion crate and binary `crates/bdd-mcp` in `workspace.members`. Core `bdd --mcp` seamlessly delegates to `bdd-mcp` (or provides a helpful launch notice), isolating rapid LLM/agent protocol evolution from the core bitstream library.
+- [x] **Unified Pattern & Stream Framing AST (`FramedPattern` in `src/pattern.rs`)**: Unified the previously disjoint ASTs in `stream_pattern.rs` and `pattern.rs` into a single, cohesive `FramedPattern` AST where container framing (`188B[...]`, `[pre:unit:post]`, `skip:raw[offset:unit]+gap`) wraps field definitions (`8U,4S`, `sync:11u,pid:13u`). Replaced nearly 200 lines of duplicate parser code in `stream_pattern.rs` with `FramedPattern::parse`.
+- [x] **Decoupled Struct Transpilers to `contrib/` (`json_to_c.py` & `json_to_rust.py`)**: Provided standalone, template-driven tools in `contrib/python/` (`json_to_c.py` and `json_to_rust.py`) translating `--explain-pattern <PAT> --output-json` to packed C and Rust structs.
 

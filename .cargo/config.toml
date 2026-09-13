@@ -1,0 +1,2 @@
+[patch.crates-io]
+bdd-small-floats = { path = "crates/bdd-small-floats" }

@@ -1,25 +1,72 @@
 use crate::cli::parse_size_with_suffix;
 use crate::error::BddError;
+use crate::pattern::FramedPattern;
 
 /// Parsed specification for either the input or output side of a stream.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamSpec {
+    pub source: Option<String>,
+    pub framed: FramedPattern,
     pub skip: Option<u64>,
     pub raw_unit: Option<u64>,
     pub offset: Option<u64>,
     pub unit_size: Option<usize>,
     pub pattern: Option<String>,
     pub gap: Option<u64>,
+    pub pad_zeros: bool,
+    pub overwrite: bool,
 }
 
-/// Parsed stream I/O pattern combining optional source, input, inline manipulators, output, and optional sink.
+impl StreamSpec {
+    pub fn from_framed(framed: FramedPattern) -> Self {
+        let skip = framed.framing.skip;
+        let raw_unit = framed.framing.raw_unit;
+        let offset = framed.framing.offset;
+        let unit_size = framed.framing.unit_size;
+        let pattern = framed.raw_pattern.clone();
+        let gap = framed.framing.gap;
+        Self {
+            source: None,
+            skip,
+            raw_unit,
+            offset,
+            unit_size,
+            pattern,
+            gap,
+            pad_zeros: false,
+            overwrite: false,
+            framed,
+        }
+    }
+
+    pub fn sync_framed(&mut self) {
+        self.framed.framing.skip = self.skip;
+        self.framed.framing.raw_unit = self.raw_unit;
+        self.framed.framing.offset = self.offset;
+        self.framed.framing.unit_size = self.unit_size;
+        self.framed.framing.gap = self.gap;
+        if self.pattern != self.framed.raw_pattern {
+            self.framed.raw_pattern = self.pattern.clone();
+            if let Some(ref p) = self.pattern {
+                if let Ok(fields) = crate::pattern::parse_input_pattern(p) {
+                    self.framed.fields = fields;
+                }
+            }
+        }
+    }
+}
+
+/// Parsed stream I/O pattern combining optional source(s), input, inline manipulators, output, and optional sink.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamIoPattern {
     pub source: Option<String>,
     pub input: Option<StreamSpec>,
+    pub sources: Vec<StreamSpec>,
+    pub merge_specs: Vec<StreamSpec>,
     pub manipulators: Vec<String>,
     pub output: Option<StreamSpec>,
     pub sink: Option<String>,
+    pub overwrite: bool,
 }
 
 /// Checks if a token represents a pipeline source keyword or file.
@@ -29,12 +76,37 @@ pub fn is_source(s: &str) -> bool {
         || s == "zeros"
         || s == "ones"
         || s == "rand"
+        || s == "random"
         || s == "counter"
         || s.starts_with("counter(")
-        || s == "netlink"
-        || s.starts_with("netlink:")
         || s == "tuples"
         || (s.starts_with("file(") && s.ends_with(')'))
+        || (s.starts_with('\'') && s.ends_with('\''))
+        || (s.starts_with('"') && s.ends_with('"'))
+        || s.ends_with(".bin")
+        || s.ends_with(".ts")
+        || s.ends_with(".dat")
+        || s.ends_with(".raw")
+        || s.ends_with(".pcm")
+        || s.starts_with("./")
+        || s.starts_with('/')
+}
+
+/// Strips outer quotes or `file(...)` wrapper from a source specifier.
+pub fn extract_source_name(s: &str) -> String {
+    let s = s.trim();
+    if s.starts_with("file(") && s.ends_with(')') {
+        s[5..s.len() - 1]
+            .trim()
+            .trim_matches('\'')
+            .trim_matches('"')
+            .to_string()
+    } else if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"'))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Checks if a token represents a pipeline sink keyword or file.
@@ -52,6 +124,8 @@ pub fn is_sink(s: &str) -> bool {
         || s == "visual"
         || s == "integers"
         || (s.starts_with("file(") && s.ends_with(')'))
+        || (s.starts_with('\'') && s.ends_with('\''))
+        || (s.starts_with('"') && s.ends_with('"'))
 }
 
 /// Checks if a token represents an inline manipulator (e.g. `{0, 1|2}`, `xor(...)`, `add(...)`).
@@ -61,6 +135,11 @@ pub fn is_manipulator(s: &str) -> bool {
         || s == "not"
         || s == "abs"
         || s == "sign"
+        || s == "overwrite"
+        || s.starts_with("overwrite(")
+        || s.starts_with("interleave(")
+        || s.starts_with("merge(")
+        || s.starts_with("tee(")
         || s.starts_with("xor(")
         || s.starts_with("and(")
         || s.starts_with("or(")
@@ -86,10 +165,16 @@ pub fn is_manipulator(s: &str) -> bool {
 
 fn is_pure_pattern(s: &str) -> bool {
     let s = s.trim();
-    if s.is_empty() || is_manipulator(s) || is_source(s) || is_sink(s) {
+    if s.is_empty()
+        || s.contains('[')
+        || s.contains('+')
+        || is_manipulator(s)
+        || is_source(s)
+        || is_sink(s)
+    {
         return false;
     }
-    crate::pattern::TupleUnpacker::new(s).is_ok()
+    crate::pattern::parse_input_pattern(s).is_ok()
 }
 
 fn is_pure_slicer(s: &str) -> bool {
@@ -138,8 +223,128 @@ pub fn is_stream_io_pattern(s: &str) -> bool {
     false
 }
 
+/// Parse a stream specification that may include a source, e.g.:
+/// `zeros:8`, `file('a.bin'):64:188B[11:13]+8`, `zeros:8, pad:zeros`, `188B[11:13]:overwrite`.
+pub fn parse_stream_spec_with_source(s: &str) -> Result<StreamSpec, BddError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(StreamSpec::default());
+    }
+
+    // Check if inner arrow '->' exists: e.g. "zeros -> 8" or "file('a.bin') -> 16"
+    if let Some(arrow_idx) = s.find("->") {
+        let left = s[..arrow_idx].trim();
+        let right = s[arrow_idx + 2..].trim();
+        let mut left_spec = parse_stream_spec_with_source(left)?;
+        let right_spec = parse_stream_spec_with_source(right)?;
+        if left_spec.source.is_some() && right_spec.source.is_none() {
+            left_spec.unit_size = right_spec.unit_size.or(left_spec.unit_size);
+            left_spec.pattern = right_spec.pattern.or(left_spec.pattern);
+            left_spec.raw_unit = right_spec.raw_unit.or(left_spec.raw_unit);
+            left_spec.offset = right_spec.offset.or(left_spec.offset);
+            left_spec.gap = right_spec.gap.or(left_spec.gap);
+            left_spec.pad_zeros = left_spec.pad_zeros || right_spec.pad_zeros;
+            left_spec.overwrite = left_spec.overwrite || right_spec.overwrite;
+            return Ok(left_spec);
+        }
+    }
+
+    let mut pad_zeros = false;
+    let mut overwrite = false;
+
+    // Check modifiers: ":pad:zeros", ":pad_zeros", ":overwrite", ":as_is", ":as-is", or ", pad:zeros"
+    let mut clean_s = s.to_string();
+    if clean_s.contains(":pad:zeros") {
+        pad_zeros = true;
+        clean_s = clean_s.replace(":pad:zeros", "");
+    }
+    if clean_s.contains(":pad_zeros") {
+        pad_zeros = true;
+        clean_s = clean_s.replace(":pad_zeros", "");
+    }
+    if clean_s.contains(", pad:zeros") {
+        pad_zeros = true;
+        clean_s = clean_s.replace(", pad:zeros", "");
+    }
+    if clean_s.contains(",pad:zeros") {
+        pad_zeros = true;
+        clean_s = clean_s.replace(",pad:zeros", "");
+    }
+    if clean_s.contains(":overwrite") {
+        overwrite = true;
+        clean_s = clean_s.replace(":overwrite", "");
+    }
+    if clean_s.contains(":as_is") || clean_s.contains(":as-is") {
+        overwrite = true;
+        clean_s = clean_s.replace(":as_is", "").replace(":as-is", "");
+    }
+
+    let s = clean_s.trim();
+
+    // If pure source keyword
+    if is_source(s) {
+        return Ok(StreamSpec {
+            source: Some(extract_source_name(s)),
+            pad_zeros,
+            overwrite,
+            ..Default::default()
+        });
+    }
+
+    // Split on colons outside brackets [] and parentheses ()
+    let mut parts = Vec::new();
+    let mut depth = 0;
+    let mut last_idx = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '[' | '(' => depth += 1,
+            ']' | ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            ':' if depth == 0 => {
+                parts.push(s[last_idx..i].trim());
+                last_idx = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(s[last_idx..].trim());
+
+    if parts.len() == 1 {
+        let mut spec = parse_stream_spec(parts[0])?;
+        spec.pad_zeros = pad_zeros;
+        spec.overwrite = overwrite;
+        return Ok(spec);
+    }
+
+    let (source, start_idx) = if is_source(parts[0]) {
+        (Some(extract_source_name(parts[0])), 1)
+    } else {
+        (None, 0)
+    };
+
+    let remaining_parts = &parts[start_idx..];
+    if remaining_parts.is_empty() {
+        return Ok(StreamSpec {
+            source,
+            pad_zeros,
+            overwrite,
+            ..Default::default()
+        });
+    }
+
+    let remaining_s = remaining_parts.join(":");
+    let mut spec = parse_stream_spec(&remaining_s)?;
+    spec.source = source;
+    spec.pad_zeros = pad_zeros;
+    spec.overwrite = overwrite;
+    Ok(spec)
+}
+
 /// Parse a full stream I/O pattern, e.g. "123:8[2:4]+8 -> 5B:8[2:4]", "8 -> xor(0xFF) -> 8",
-/// or unified pipeline "stdin -> 4U4U -> {0|1} -> 16U -> hex".
+/// "[ zeros:8, ones:8 ] -> hex", or unified pipeline "stdin -> 4U4U -> {0|1} -> 16U -> hex".
 pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddError> {
     let trimmed = input_str.trim();
     if trimmed.is_empty() {
@@ -171,41 +376,123 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         i += 1;
     }
 
-    let mut segments: Vec<&str> = Vec::new();
+    let mut raw_segments: Vec<&str> = Vec::new();
     let mut prev_idx = 0;
     for &idx in &arrow_indices {
         let seg = trimmed[prev_idx..idx].trim();
         if !seg.is_empty() {
-            segments.push(seg);
+            raw_segments.push(seg);
         }
         prev_idx = idx + 2;
     }
     let last_seg = trimmed[prev_idx..].trim();
     if !last_seg.is_empty() {
-        segments.push(last_seg);
+        raw_segments.push(last_seg);
+    }
+
+    let mut sources = Vec::new();
+    let mut merge_specs = Vec::new();
+    let mut overwrite = false;
+
+    // Check if segment 0 is a multi-source bracket: e.g. "[ zeros:8, ones:8 ]"
+    if !raw_segments.is_empty()
+        && raw_segments[0].starts_with('[')
+        && raw_segments[0].ends_with(']')
+    {
+        let inner = &raw_segments[0][1..raw_segments[0].len() - 1].trim();
+        let mut depth = 0;
+        let mut has_comma = false;
+        let mut parts = Vec::new();
+        let mut last_idx = 0;
+        for (idx, c) in inner.char_indices() {
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                ',' if depth == 0 => {
+                    has_comma = true;
+                    parts.push(inner[last_idx..idx].trim());
+                    last_idx = idx + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(inner[last_idx..].trim());
+
+        if has_comma || (!parts.is_empty() && is_source(parts[0])) {
+            for part in parts {
+                if !part.is_empty() {
+                    sources.push(parse_stream_spec_with_source(part)?);
+                }
+            }
+            raw_segments.remove(0);
+        }
     }
 
     let mut source = None;
-    if segments.len() > 1 && is_source(segments[0]) {
-        source = Some(segments.remove(0).to_string());
+    if sources.is_empty() && raw_segments.len() > 1 && is_source(raw_segments[0]) {
+        source = Some(extract_source_name(raw_segments.remove(0)));
     }
 
     let mut sink = None;
-    if segments.len() > 1 && is_sink(segments.last().unwrap()) {
-        sink = Some(segments.pop().unwrap().to_string());
+    if (source.is_some() || !sources.is_empty() || raw_segments.len() > 1)
+        && !raw_segments.is_empty()
+        && is_sink(raw_segments.last().unwrap())
+    {
+        sink = Some(extract_source_name(raw_segments.pop().unwrap()));
+    }
+
+    // Filter and process intermediate segments for overwrite, interleave, and merge
+    let mut segments: Vec<&str> = Vec::new();
+    for seg in raw_segments {
+        let s_trim = seg.trim();
+        if s_trim == "overwrite" {
+            overwrite = true;
+        } else if s_trim.starts_with("overwrite(") && s_trim.ends_with(')') {
+            overwrite = true;
+            let inner = &s_trim[10..s_trim.len() - 1].trim();
+            if !inner.is_empty() {
+                segments.push(inner);
+            }
+        } else if s_trim.starts_with("interleave(") && s_trim.ends_with(')') {
+            let inner = &s_trim[11..s_trim.len() - 1].trim();
+            merge_specs.push(parse_stream_spec_with_source(inner)?);
+        } else if s_trim.starts_with("merge(") && s_trim.ends_with(')') {
+            let inner = &s_trim[6..s_trim.len() - 1].trim();
+            merge_specs.push(parse_stream_spec_with_source(inner)?);
+        } else {
+            segments.push(seg);
+        }
     }
 
     let mut input = None;
     let mut output = None;
     let mut manipulators = Vec::new();
 
+    if !sources.is_empty() {
+        source = sources[0].source.clone();
+        input = Some(sources[0].clone());
+        if sources[0].overwrite {
+            overwrite = true;
+        }
+        for s in sources.iter().skip(1) {
+            merge_specs.push(s.clone());
+        }
+    }
+
     if segments.is_empty() {
         return Ok(StreamIoPattern {
             source,
-            input: None,
+            input,
+            sources,
+            merge_specs,
             manipulators: Vec::new(),
             output: None,
             sink,
+            overwrite,
         });
     }
 
@@ -229,7 +516,38 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         in_spec.unit_size = Some(u_val);
         input = Some(in_spec);
     } else if !segments.is_empty() && !is_manipulator(segments[0]) {
-        input = Some(parse_stream_spec(segments.remove(0))?);
+        if input.is_none() {
+            let in_spec = parse_stream_spec_with_source(segments.remove(0))?;
+            if in_spec.source.is_some() && source.is_none() {
+                source = in_spec.source.clone();
+            }
+            if in_spec.overwrite {
+                overwrite = true;
+            }
+            input = Some(in_spec);
+        } else {
+            // Already have input from multi-source bracket (e.g. [zeros, ones] -> 8)
+            if is_pure_slicer(segments[0]) {
+                let u_val = parse_size_with_suffix(segments.remove(0), "unit size", true)? as usize;
+                if let Some(ref mut inp) = input {
+                    if inp.unit_size.is_none() {
+                        inp.unit_size = Some(u_val);
+                    }
+                }
+                for ms in &mut merge_specs {
+                    if ms.unit_size.is_none() {
+                        ms.unit_size = Some(u_val);
+                    }
+                }
+                for s in &mut sources {
+                    if s.unit_size.is_none() {
+                        s.unit_size = Some(u_val);
+                    }
+                }
+            } else {
+                segments.remove(0);
+            }
+        }
     }
 
     // Check if the last two segments form an explicit (pattern -> slicer) pair:
@@ -255,7 +573,11 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         out_spec.unit_size = Some(u_val);
         output = Some(out_spec);
     } else if !segments.is_empty() && !is_manipulator(segments.last().unwrap()) {
-        output = Some(parse_stream_spec(segments.pop().unwrap())?);
+        let out_spec = parse_stream_spec(segments.pop().unwrap())?;
+        if out_spec.overwrite {
+            overwrite = true;
+        }
+        output = Some(out_spec);
     }
 
     // Anything remaining in segments is an inline manipulator
@@ -266,9 +588,12 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
     Ok(StreamIoPattern {
         source,
         input,
+        sources,
+        merge_specs,
         manipulators,
         output,
         sink,
+        overwrite,
     })
 }
 
@@ -278,258 +603,8 @@ pub fn parse_stream_spec(s: &str) -> Result<StreamSpec, BddError> {
     if s.is_empty() {
         return Ok(StreamSpec::default());
     }
-
-    // Support legacy 5-colon positional syntax if exactly 4 colons without brackets:
-    // skip : raw : offset : unit : gap
-    if !s.contains('[') {
-        let colon_parts: Vec<&str> = s.split(':').map(|p| p.trim()).collect();
-        if colon_parts.len() == 5 {
-            let skip = Some(parse_size_with_suffix(colon_parts[0], "stream skip", true)?);
-            let raw = Some(parse_size_with_suffix(
-                colon_parts[1],
-                "stream raw unit",
-                true,
-            )?);
-            let offset = Some(parse_size_with_suffix(
-                colon_parts[2],
-                "stream offset",
-                true,
-            )?);
-            let (unit_size, pattern) = parse_unit_or_pattern(colon_parts[3])?;
-            let gap = Some(parse_size_with_suffix(colon_parts[4], "stream gap", true)?);
-            return Ok(StreamSpec {
-                skip,
-                raw_unit: raw,
-                offset,
-                unit_size,
-                pattern,
-                gap,
-            });
-        }
-    }
-
-    // 1. Find periodic gap ('+' outside brackets)
-    let mut depth = 0;
-    let mut plus_pos = None;
-    for (i, c) in s.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-            }
-            '+' if depth == 0 => plus_pos = Some(i),
-            _ => {}
-        }
-    }
-
-    let (s_remaining, gap) = if let Some(idx) = plus_pos {
-        let gap_str = s[idx + 1..].trim();
-        let gap_val = parse_size_with_suffix(gap_str, "stream gap", true)?;
-        (s[..idx].trim(), Some(gap_val))
-    } else {
-        (s, None)
-    };
-
-    // 2. Find initial skip (':' outside brackets)
-    let mut depth = 0;
-    let mut colon_pos = None;
-    for (i, c) in s_remaining.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-            }
-            ':' if depth == 0 => {
-                colon_pos = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    let (unit_part, skip) = if let Some(idx) = colon_pos {
-        let skip_str = s_remaining[..idx].trim();
-        let skip_val = parse_size_with_suffix(skip_str, "stream skip", true)?;
-        (s_remaining[idx + 1..].trim(), Some(skip_val))
-    } else {
-        (s_remaining, None)
-    };
-
-    // 3. Parse unit_part (Form A, Form B, or Bare Unit)
-    let unit_part = unit_part.trim();
-    if unit_part.is_empty() {
-        return Ok(StreamSpec {
-            skip,
-            gap,
-            ..Default::default()
-        });
-    }
-
-    if let (Some(open_idx), Some(close_idx)) = (unit_part.find('['), unit_part.rfind(']')) {
-        if open_idx > close_idx {
-            return Err(BddError::CliError(format!(
-                "Mismatched brackets in stream pattern: '{}'",
-                unit_part
-            )));
-        }
-        let prefix = unit_part[..open_idx].trim();
-        let inside = unit_part[open_idx + 1..close_idx].trim();
-        let inner_parts: Vec<&str> = if inside.contains(':') {
-            inside.split(':').map(|p| p.trim()).collect()
-        } else {
-            inside.split(',').map(|p| p.trim()).collect()
-        };
-
-        if !prefix.is_empty() {
-            // Form A: raw_size[offset : unit] or raw_size[offset : unit : post]
-            let raw_val = parse_size_with_suffix(prefix, "raw container size", true)?;
-            if inner_parts.len() < 2 || inner_parts.len() > 3 {
-                return Err(BddError::CliError(format!(
-                    "Form A container requires [offset:unit] or [offset:unit:post], found '[{}]'",
-                    inside
-                )));
-            }
-            let offset_val = parse_size_with_suffix(inner_parts[0], "container offset", true)?;
-            let (unit_size, pattern) = parse_unit_or_pattern(inner_parts[1])?;
-            let u_val = unit_size.unwrap_or(8) as u64;
-
-            if offset_val + u_val > raw_val {
-                return Err(BddError::CliError(format!(
-                    "Container offset ({}) + unit ({}) exceeds raw container size ({})",
-                    offset_val, u_val, raw_val
-                )));
-            }
-
-            let _post_gap = if inner_parts.len() == 3 {
-                let post = parse_size_with_suffix(inner_parts[2], "container post-gap", true)?;
-                if offset_val + u_val + post != raw_val {
-                    return Err(BddError::CliError(format!(
-                        "Container components (offset: {}, unit: {}, post: {}) do not sum to raw container size ({})",
-                        offset_val, u_val, post, raw_val
-                    )));
-                }
-                post
-            } else {
-                raw_val - offset_val - u_val
-            };
-
-            // Post-gap is internal to the raw unit container;
-            // The effective gap between extracted units is post_gap + stream_gap (if any).
-            // We store raw_unit, offset, unit_size, and external gap.
-            Ok(StreamSpec {
-                skip,
-                raw_unit: Some(raw_val),
-                offset: Some(offset_val),
-                unit_size,
-                pattern,
-                gap,
-            })
-        } else {
-            // Form B: [pre : unit : post] or [pre : unit]
-            if inner_parts.len() < 2 || inner_parts.len() > 3 {
-                return Err(BddError::CliError(format!(
-                    "Form B container requires [pre:unit:post] or [pre:unit], found '[{}]'",
-                    inside
-                )));
-            }
-            let pre_val = parse_size_with_suffix(inner_parts[0], "pre-gap", true)?;
-            let (unit_size, pattern) = parse_unit_or_pattern(inner_parts[1])?;
-            let u_val = unit_size.unwrap_or(8) as u64;
-            let post_val = if inner_parts.len() == 3 {
-                parse_size_with_suffix(inner_parts[2], "post-gap", true)?
-            } else {
-                0
-            };
-            let raw_val = pre_val + u_val + post_val;
-
-            Ok(StreamSpec {
-                skip,
-                raw_unit: Some(raw_val),
-                offset: Some(pre_val),
-                unit_size,
-                pattern,
-                gap,
-            })
-        }
-    } else {
-        // Bare unit or pattern
-        let (unit_size, pattern) = parse_unit_or_pattern(unit_part)?;
-        Ok(StreamSpec {
-            skip,
-            raw_unit: None,
-            offset: None,
-            unit_size,
-            pattern,
-            gap,
-        })
-    }
-}
-
-/// Disambiguate and parse a unit spec: either a numeric size (e.g. "8", "16", "188B")
-/// or a pattern string (e.g. "8U", "11u,5x", "24S").
-fn parse_unit_or_pattern(s: &str) -> Result<(Option<usize>, Option<String>), BddError> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok((None, None));
-    }
-
-    // If it contains commas or pattern type characters (U, u, S, s, etc.), try pattern parsing first
-    let has_pattern_chars = s.contains(',')
-        || s.chars().any(|c| {
-            matches!(
-                c,
-                'U' | 'u'
-                    | 'S'
-                    | 's'
-                    | 'M'
-                    | 'm'
-                    | 'F'
-                    | 'f'
-                    | 'D'
-                    | 'd'
-                    | 'E'
-                    | 'e'
-                    | 'Q'
-                    | 'q'
-                    | 'H'
-                    | 'h'
-                    | 'Y'
-                    | 'y'
-                    | 'C'
-                    | 'c'
-                    | 'K'
-                    | 'k'
-                    | 'z'
-                    | 'o'
-                    | 'r'
-                    | 'x'
-                    | 'X'
-            )
-        });
-
-    if has_pattern_chars {
-        // Try unpacking pattern grammar
-        if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(s) {
-            return Ok((Some(unpacker.total_bits), Some(s.to_string())));
-        }
-    }
-
-    // Try parsing as numeric size
-    match parse_size_with_suffix(s, "unit size", true) {
-        Ok(val) => Ok((Some(val as usize), None)),
-        Err(e) => {
-            // Fallback check: could it be a bare pattern?
-            if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(s) {
-                Ok((Some(unpacker.total_bits), Some(s.to_string())))
-            } else {
-                Err(e)
-            }
-        }
-    }
+    let framed = FramedPattern::parse(s)?;
+    Ok(StreamSpec::from_framed(framed))
 }
 
 #[cfg(test)]
@@ -698,5 +773,61 @@ mod tests {
         // Dimension mismatch error: "12 -> 4U4U -> hex"
         let err = parse_stream_io_pattern("12 -> 4U4U -> hex");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_multi_source_brackets_and_interleave() {
+        // Multi-source bracket: "[ zeros:8, ones:8 ] -> hex"
+        let p1 = parse_stream_io_pattern("[ zeros:8, ones:8 ] -> hex").unwrap();
+        assert_eq!(p1.sources.len(), 2);
+        assert_eq!(p1.sources[0].source, Some("zeros".to_string()));
+        assert_eq!(p1.sources[0].unit_size, Some(8));
+        assert_eq!(p1.sources[1].source, Some("ones".to_string()));
+        assert_eq!(p1.sources[1].unit_size, Some(8));
+        assert_eq!(p1.merge_specs.len(), 1);
+        assert_eq!(p1.merge_specs[0].source, Some("ones".to_string()));
+        assert_eq!(p1.sink, Some("hex".to_string()));
+
+        // Multi-source with downstream slicer: "[ zeros, counter ] -> 16 -> hex"
+        let p2 = parse_stream_io_pattern("[ zeros, counter ] -> 16 -> hex").unwrap();
+        assert_eq!(p2.sources.len(), 2);
+        assert_eq!(p2.sources[0].source, Some("zeros".to_string()));
+        assert_eq!(p2.sources[0].unit_size, Some(16));
+        assert_eq!(p2.sources[1].source, Some("counter".to_string()));
+        assert_eq!(p2.sources[1].unit_size, Some(16));
+        assert_eq!(p2.merge_specs[0].unit_size, Some(16));
+        assert_eq!(p2.sink, Some("hex".to_string()));
+
+        // Pipe interleave: "stdin:16 -> interleave(zeros:8) -> hex"
+        let p3 = parse_stream_io_pattern("stdin:16 -> interleave(zeros:8) -> hex").unwrap();
+        assert_eq!(p3.source, Some("stdin".to_string()));
+        assert_eq!(p3.input.unwrap().unit_size, Some(16));
+        assert_eq!(p3.merge_specs.len(), 1);
+        assert_eq!(p3.merge_specs[0].source, Some("zeros".to_string()));
+        assert_eq!(p3.merge_specs[0].unit_size, Some(8));
+        assert_eq!(p3.sink, Some("hex".to_string()));
+
+        // Pipe interleave with pad:zeros: "stdin:16 -> interleave(file('tags.bin'):8, pad:zeros) -> stdout"
+        let p4 = parse_stream_io_pattern(
+            "stdin:16 -> interleave(file('tags.bin'):8, pad:zeros) -> stdout",
+        )
+        .unwrap();
+        assert_eq!(p4.merge_specs.len(), 1);
+        assert_eq!(p4.merge_specs[0].source, Some("tags.bin".to_string()));
+        assert_eq!(p4.merge_specs[0].unit_size, Some(8));
+        assert!(p4.merge_specs[0].pad_zeros);
+
+        // Overwrite mode: "stream.ts -> 188B[11:13] -> xor(0x1FFF) -> overwrite -> stdout"
+        let p5 = parse_stream_io_pattern(
+            "file('stream.ts') -> 188B[11:13] -> xor(0x1FFF) -> overwrite -> stdout",
+        )
+        .unwrap();
+        assert_eq!(p5.source, Some("stream.ts".to_string()));
+        let inp5 = p5.input.as_ref().unwrap();
+        assert_eq!(inp5.raw_unit, Some(1504));
+        assert_eq!(inp5.offset, Some(11));
+        assert_eq!(inp5.unit_size, Some(13));
+        assert_eq!(p5.manipulators, vec!["xor(0x1FFF)"]);
+        assert!(p5.overwrite);
     }
 }

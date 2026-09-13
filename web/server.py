@@ -17,11 +17,13 @@ import tempfile
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 7788
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(WEB_DIR)
-BDD_BIN = os.path.join(REPO_DIR, "target", "release", "bdd")
-if not os.path.exists(BDD_BIN):
-    BDD_BIN = os.path.join(REPO_DIR, "target", "debug", "bdd")
-if not os.path.exists(BDD_BIN):
-    BDD_BIN = "bdd"
+BDD_BIN = os.environ.get("BDD_BIN")
+if not BDD_BIN or not os.path.exists(BDD_BIN):
+    BDD_BIN = os.path.join(REPO_DIR, "target", "release", "bdd")
+    if not os.path.exists(BDD_BIN):
+        BDD_BIN = os.path.join(REPO_DIR, "target", "debug", "bdd")
+    if not os.path.exists(BDD_BIN):
+        BDD_BIN = "bdd"
 
 class BddHttpHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -183,6 +185,7 @@ class BddHttpHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 if __name__ == "__main__":
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", PORT), BddHttpHandler) as httpd:
         print(f"⚡ bdd Python Web UI running on http://localhost:{PORT}")
         print(f"Serving files from: {WEB_DIR}")

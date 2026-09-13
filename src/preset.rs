@@ -1,188 +1,325 @@
-//! Built-in binary format presets and schemas for bdd.
+//! Binary format presets and schemas for bdd.
 //!
-//! Provides immediate unaligned bit patterns, unit sizing, endianness, and field names
+//! Presets provide immediate unaligned bit patterns, unit sizing, endianness, and field names
 //! for real-world multimedia containers, AI weight quantization formats, and network headers.
+//!
+//! Presets are stored in an external `presets.json` file. If missing, the default presets
+//! are downloaded automatically from the repository or seeded from embedded defaults.
+//! An option `--download-presets [URL]` allows fetching custom or updated preset files.
 
-#[derive(Debug, Clone, Copy)]
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+/// Default URL to download the official presets file from.
+pub const DEFAULT_PRESETS_URL: &str =
+    "https://raw.githubusercontent.com/e-t-u/bdd/main/presets.json";
+
+/// Embedded fallback presets JSON in case of offline first-run.
+pub const DEFAULT_PRESETS_JSON: &str = include_str!("../presets.json");
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preset {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub pattern: &'static str,
+    pub name: String,
+    pub description: String,
+    pub pattern: String,
     pub unit_bits: usize,
     pub little_endian: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_count: Option<u64>,
 }
 
-pub static PRESETS: &[Preset] = &[
-    Preset {
-        name: "mp3-header",
-        description: "MPEG Audio Frame Header (32-bit: sync, version, layer, bitrate, sampling rate, channels)",
-        pattern: "sync:11u,version:2u,layer:2u,crc:1u,bitrate:4u,samplerate:2u,padding:1u,private:1u,channel:2u,mode_ext:2u,copyright:1u,original:1u,emphasis:2u",
-        unit_bits: 32,
-        little_endian: false,
-        default_count: None,
-    },
-    Preset {
-        name: "mpeg-ts",
-        description: "MPEG Transport Stream 4-byte packet header (sync 0x47, TEI, PUSI, priority, 13-bit PID, counter)",
-        pattern: "sync:8u,tei:1u,pusi:1u,priority:1u,pid:13u,scrambling:2u,adapt_ctrl:2u,counter:4u",
-        unit_bits: 32,
-        little_endian: false,
-        default_count: None,
-    },
-    Preset {
-        name: "wav-header",
-        description: "RIFF/WAVE uncompressed audio 44-byte standard header",
-        pattern: "riff:32C,file_size:32U,wave:32C,fmt:32C,fmt_size:32U,audio_fmt:16U,channels:16U,sample_rate:32U,byte_rate:32U,block_align:16U,bits_per_sample:16U,data:32C,data_size:32U",
-        unit_bits: 352,
-        little_endian: true,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "jpeg-sof0",
-        description: "JPEG SOF0 Baseline Frame Header (sample precision, image height, image width, components)",
-        pattern: "precision:8u,height:16u,width:16u,components:8u",
-        unit_bits: 48,
-        little_endian: false,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "h264-nal",
-        description: "H.264 / AVC Network Abstraction Layer (NAL) 1-byte header",
-        pattern: "forbidden_zero:1u,nal_ref_idc:2u,nal_unit_type:5u",
-        unit_bits: 8,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "nvfp4",
-        description: "NVIDIA Blackwell / OCP FP4 (E2M1) packed sub-byte float pair (two 4-bit floats per byte)",
-        pattern: "w0:4E,w1:4E",
-        unit_bits: 8,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "fp6-e3m2",
-        description: "OCP Microscaling FP6 (E3M2) 4 unaligned 6-bit floats across 24 bits (3 bytes)",
-        pattern: "w0:6E,w1:6E,w2:6E,w3:6E",
-        unit_bits: 24,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "fp8-e4m3",
-        description: "OCP FP8 (E4M3FN) 8-bit floating-point weight",
-        pattern: "w0:8E",
-        unit_bits: 8,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "fp8-e5m2",
-        description: "OCP FP8 (E5M2) 8-bit floating-point weight",
-        pattern: "w0:8Q",
-        unit_bits: 8,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "bf16",
-        description: "Brain Floating Point 16-bit (Bfloat16) weight",
-        pattern: "w0:16Y",
-        unit_bits: 16,
-        little_endian: false,
-        default_count: None,
-    },
-    #[cfg(feature = "small-floats")]
-    Preset {
-        name: "fp16",
-        description: "IEEE 754 Half-Precision 16-bit float",
-        pattern: "w0:16H",
-        unit_bits: 16,
-        little_endian: false,
-        default_count: None,
-    },
-    Preset {
-        name: "ipv4-header",
-        description: "IPv4 20-byte base packet header (version, IHL, DSCP, length, identification, flags, TTL, protocol, IPs)",
-        pattern: "version:4U,ihl:4U,dscp:6U,ecn:2U,total_length:16U,id:16U,flags:3U,frag_offset:13U,ttl:8U,protocol:8U,checksum:16U,src_ip:32U,dst_ip:32U",
-        unit_bits: 160,
-        little_endian: false,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "udp-header",
-        description: "UDP 8-byte datagram header (source port, destination port, length, checksum)",
-        pattern: "src_port:16U,dst_port:16U,length:16U,checksum:16U",
-        unit_bits: 64,
-        little_endian: false,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "tcp-header",
-        description: "TCP 20-byte base segment header (ports, sequence, ack, flags, window, checksum, urgent)",
-        pattern: "src_port:16U,dst_port:16U,seq_num:32U,ack_num:32U,data_offset:4U,reserved:3U,ns:1B,cwr:1B,ece:1B,urg:1B,ack:1B,psh:1B,rst:1B,syn:1B,fin:1B,window_size:16U,checksum:16U,urg_ptr:16U",
-        unit_bits: 160,
-        little_endian: false,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "riscv-r-type",
-        description: "RISC-V 32-bit R-type instruction fields (funct7, rs2, rs1, funct3, rd, opcode)",
-        pattern: "funct7:7u,rs2:5u,rs1:5u,funct3:3u,rd:5u,opcode:7u",
-        unit_bits: 32,
-        little_endian: false,
-        default_count: None,
-    },
-    Preset {
-        name: "proc-pagemap",
-        description: "Linux /proc/[pid]/pagemap 64-bit page table entry (present, swapped, exclusive, dirty, pfn)",
-        pattern: "present:1b,swapped:1b,file_page:1b,3x,uffd_wp:1b,exclusive:1b,soft_dirty:1b,pfn:55u",
-        unit_bits: 64,
-        little_endian: true,
-        default_count: None,
-    },
-    Preset {
-        name: "proc-auxv",
-        description: "Linux ELF 64-bit Auxiliary Vector entry (type, val)",
-        pattern: "val:64U,type:64U",
-        unit_bits: 128,
-        little_endian: true,
-        default_count: None,
-    },
-    Preset {
-        name: "pci-config",
-        description: "PCI Configuration Space 16-byte base header (vendor, device, command, status, class)",
-        pattern: "bist:8U,hdr_type:8U,latency:8U,cache_line:8U,class_code:8U,subclass:8U,prog_if:8U,rev_id:8U,status:16U,cmd:16U,device_id:16U,vendor_id:16U",
-        unit_bits: 128,
-        little_endian: true,
-        default_count: Some(1),
-    },
-    Preset {
-        name: "netlink-proc-event",
-        description: "Linux Netlink Process Connector proc_event header (what, cpu, timestamp_ns)",
-        pattern: "timestamp_ns:64U,cpu:32U,what:32U",
-        unit_bits: 128,
-        little_endian: true,
-        default_count: None,
-    },
-];
+static CUSTOM_PRESETS_PATH: RwLock<Option<PathBuf>> = RwLock::new(None);
+static GLOBAL_PRESETS: RwLock<Option<&'static [Preset]>> = RwLock::new(None);
 
-/// Find a preset by name (case-insensitive, allows hyphens and underscores).
-pub fn find_preset(name: &str) -> Option<&'static Preset> {
-    let normalized = name.to_lowercase().replace('_', "-");
-    PRESETS.iter().find(|p| p.name == normalized)
+/// Set an explicit custom path to the presets file and reload cache.
+pub fn set_custom_presets_path(path: PathBuf) {
+    let mut p = CUSTOM_PRESETS_PATH.write().unwrap();
+    *p = Some(path);
+    drop(p);
+    reload_presets();
+}
+
+/// Reset custom presets path override.
+pub fn reset_custom_presets_path() {
+    let mut p = CUSTOM_PRESETS_PATH.write().unwrap();
+    *p = None;
+    drop(p);
+    reload_presets();
+}
+
+/// Returns the user-writable presets file path for downloads and overrides:
+/// 1. Explicit override (`set_custom_presets_path` / `--presets-file`)
+/// 2. `BDD_PRESETS_FILE` environment variable
+/// 3. User config: `$XDG_CONFIG_HOME/bdd/presets.json` or `~/.config/bdd/presets.json`
+pub fn get_user_presets_file_path() -> PathBuf {
+    if let Some(ref p) = *CUSTOM_PRESETS_PATH.read().unwrap() {
+        return p.clone();
+    }
+    if let Ok(env_path) = std::env::var("BDD_PRESETS_FILE") {
+        if !env_path.trim().is_empty() {
+            return PathBuf::from(env_path);
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.trim().is_empty() {
+            return PathBuf::from(xdg).join("bdd").join("presets.json");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return PathBuf::from(home)
+                .join(".config")
+                .join("bdd")
+                .join("presets.json");
+        }
+    }
+    PathBuf::from("presets.json")
+}
+
+/// Find an existing presets file path according to standard FHS and XDG discovery order:
+/// 1. Explicit override (`set_custom_presets_path` / `--presets-file`)
+/// 2. `BDD_PRESETS_FILE` environment variable
+/// 3. Local `./presets.json` in current working directory
+/// 4. User config: `$XDG_CONFIG_HOME/bdd/presets.json` or `~/.config/bdd/presets.json`
+/// 5. System package shared data: `/usr/share/bdd/presets.json` (Debian & RPM packages)
+/// 6. System local shared data: `/usr/local/share/bdd/presets.json`
+/// 7. System configuration: `/etc/bdd/presets.json`
+pub fn find_existing_presets_file() -> Option<PathBuf> {
+    if let Some(ref p) = *CUSTOM_PRESETS_PATH.read().unwrap() {
+        if p.is_file() {
+            return Some(p.clone());
+        }
+    }
+    if let Ok(env_path) = std::env::var("BDD_PRESETS_FILE") {
+        let p = PathBuf::from(env_path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let cwd_file = PathBuf::from("presets.json");
+    if cwd_file.is_file() {
+        return Some(cwd_file);
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(xdg).join("bdd").join("presets.json");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home)
+            .join(".config")
+            .join("bdd")
+            .join("presets.json");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    for sys_path in &[
+        "/usr/share/bdd/presets.json",
+        "/usr/local/share/bdd/presets.json",
+        "/etc/bdd/presets.json",
+    ] {
+        let p = PathBuf::from(sys_path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Determine active presets file path (either existing found file or default user path).
+pub fn get_presets_file_path() -> PathBuf {
+    find_existing_presets_file().unwrap_or_else(get_user_presets_file_path)
+}
+
+/// Fetch content from a URL, local path, or file URI as a string.
+pub fn download_url_to_string(url: &str) -> Result<String, String> {
+    if let Some(file_path) = url.strip_prefix("file://") {
+        return std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read local file '{}': {}", file_path, e));
+    }
+    if Path::new(url).is_file() {
+        return std::fs::read_to_string(url)
+            .map_err(|e| format!("Failed to read local file '{}': {}", url, e));
+    }
+
+    use std::process::Command;
+
+    // 1. Try curl
+    if let Ok(output) = Command::new("curl")
+        .args(["-fsSL", "--connect-timeout", "5", "--max-time", "15", url])
+        .output()
+    {
+        if output.status.success() {
+            let body = String::from_utf8_lossy(&output.stdout).to_string();
+            if !body.trim().is_empty() {
+                return Ok(body);
+            }
+        }
+    }
+
+    // 2. Try wget
+    if let Ok(output) = Command::new("wget")
+        .args(["-q", "-O", "-", "--timeout=15", url])
+        .output()
+    {
+        if output.status.success() {
+            let body = String::from_utf8_lossy(&output.stdout).to_string();
+            if !body.trim().is_empty() {
+                return Ok(body);
+            }
+        }
+    }
+
+    // 3. Try python3 urllib
+    let py_code = "import urllib.request, sys\n\
+try:\n\
+    with urllib.request.urlopen(sys.argv[1], timeout=15) as resp:\n\
+        sys.stdout.buffer.write(resp.read())\n\
+except Exception as e:\n\
+    sys.stderr.write(str(e))\n\
+    sys.exit(1)\n";
+    if let Ok(output) = Command::new("python3").args(["-c", py_code, url]).output() {
+        if output.status.success() {
+            let body = String::from_utf8_lossy(&output.stdout).to_string();
+            if !body.trim().is_empty() {
+                return Ok(body);
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to download from '{}': curl, wget, and python3 all failed or were unavailable",
+        url
+    ))
+}
+
+/// Download presets from a URL and save to target_path (or default presets file path).
+pub fn download_presets(url: &str, target_path: Option<&Path>) -> Result<(usize, PathBuf), String> {
+    let content = download_url_to_string(url)?;
+    let parsed: Vec<Preset> = serde_json::from_str(&content).map_err(|e| {
+        format!(
+            "Downloaded content from '{}' is not valid presets JSON: {}",
+            url, e
+        )
+    })?;
+
+    if parsed.is_empty() {
+        return Err(format!(
+            "Downloaded presets file from '{}' contains no presets",
+            url
+        ));
+    }
+
+    let dest = target_path
+        .map(PathBuf::from)
+        .unwrap_or_else(get_user_presets_file_path);
+
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    std::fs::write(&dest, &content).map_err(|e| {
+        format!(
+            "Failed to write downloaded presets to '{}': {}",
+            dest.display(),
+            e
+        )
+    })?;
+
+    set_custom_presets_path(dest.clone());
+
+    Ok((parsed.len(), dest))
+}
+
+fn filter_feature_presets(presets: Vec<Preset>) -> Vec<Preset> {
+    #[cfg(not(feature = "small-floats"))]
+    {
+        const SMALL_FLOAT_NAMES: &[&str] =
+            &["nvfp4", "fp6-e3m2", "fp8-e4m3", "fp8-e5m2", "bf16", "fp16"];
+        presets
+            .into_iter()
+            .filter(|p| !SMALL_FLOAT_NAMES.contains(&p.name.as_str()))
+            .collect()
+    }
+    #[cfg(feature = "small-floats")]
+    {
+        presets
+    }
+}
+
+/// Internal helper to load presets from file or automatically download/seed if missing.
+fn load_presets() -> Vec<Preset> {
+    // 1. If an existing presets file is found on filesystem, load and parse it
+    if let Some(path) = find_existing_presets_file() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = serde_json::from_str::<Vec<Preset>>(&content) {
+                return filter_feature_presets(parsed);
+            } else {
+                eprintln!(
+                    "[bdd] Warning: Failed to parse presets file at '{}'. Falling back to defaults.",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    let user_path = get_user_presets_file_path();
+
+    // 2. File does not exist anywhere: download default file automatically
+    if let Ok(downloaded) = download_url_to_string(DEFAULT_PRESETS_URL) {
+        if let Ok(parsed) = serde_json::from_str::<Vec<Preset>>(&downloaded) {
+            if let Some(parent) = user_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&user_path, &downloaded);
+            return filter_feature_presets(parsed);
+        }
+    }
+
+    // 3. If download unavailable (offline/testing), seed default file and return defaults
+    if let Some(parent) = user_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&user_path, DEFAULT_PRESETS_JSON);
+    let parsed: Vec<Preset> = serde_json::from_str(DEFAULT_PRESETS_JSON).unwrap_or_default();
+    filter_feature_presets(parsed)
+}
+
+/// Force reloading presets from disk into global static cache.
+pub fn reload_presets() {
+    let mut write_guard = GLOBAL_PRESETS.write().unwrap();
+    let loaded = load_presets();
+    let leaked: &'static [Preset] = Box::leak(loaded.into_boxed_slice());
+    *write_guard = Some(leaked);
 }
 
 /// Returns all available presets.
 pub fn all_presets() -> &'static [Preset] {
-    PRESETS
+    let read_guard = GLOBAL_PRESETS.read().unwrap();
+    if let Some(slice) = *read_guard {
+        return slice;
+    }
+    drop(read_guard);
+
+    let mut write_guard = GLOBAL_PRESETS.write().unwrap();
+    if let Some(slice) = *write_guard {
+        return slice;
+    }
+    let loaded = load_presets();
+    let leaked: &'static [Preset] = Box::leak(loaded.into_boxed_slice());
+    *write_guard = Some(leaked);
+    leaked
+}
+
+/// Find a preset by name (case-insensitive, allows hyphens and underscores).
+pub fn find_preset(name: &str) -> Option<&'static Preset> {
+    let normalized = name.to_lowercase().replace('_', "-");
+    all_presets()
+        .iter()
+        .find(|p| p.name.to_lowercase().replace('_', "-") == normalized)
 }
 
 /// Formats the list of available presets as an aligned human-readable table.
@@ -190,19 +327,74 @@ pub fn format_presets_table() -> String {
     let mut out = String::new();
     out.push_str("Available bdd Binary Format Presets:\n");
     out.push_str(&format!(
-        "{:<14}  {:<8}  {:<50}  {}\n",
+        "{:<19}  {:<8}  {:<50}  {}\n",
         "NAME", "UNIT", "DESCRIPTION", "PATTERN"
     ));
     out.push_str(&format!(
-        "{:-<14}  {:-<8}  {:-<50}  {:-<30}\n",
+        "{:-<19}  {:-<8}  {:-<50}  {:-<30}\n",
         "", "", "", ""
     ));
-    for p in PRESETS {
+    for p in all_presets() {
         let unit_str = format!("{}b ({}B)", p.unit_bits, p.unit_bits / 8);
         out.push_str(&format!(
-            "{:<14}  {:<8}  {:<50}  {}\n",
+            "{:<19}  {:<8}  {:<50}  {}\n",
             p.name, unit_str, p.description, p.pattern
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_embedded_default_presets_valid() {
+        let parsed: Vec<Preset> = serde_json::from_str(DEFAULT_PRESETS_JSON).expect("valid JSON");
+        assert!(parsed.len() >= 19);
+        let names: Vec<_> = parsed.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"mp3-header"));
+        assert!(names.contains(&"mpeg-ts"));
+        assert!(names.contains(&"ipv4-header"));
+    }
+
+    #[test]
+    fn test_find_preset_normalization() {
+        let p1 = find_preset("mp3-header").expect("found mp3-header");
+        let p2 = find_preset("MP3_HEADER").expect("found MP3_HEADER");
+        assert_eq!(p1.name, p2.name);
+        assert_eq!(p1.unit_bits, 32);
+    }
+
+    #[test]
+    fn test_download_presets_from_local_file() {
+        use tempfile::NamedTempFile;
+
+        let sample_json = r#"[
+            {
+                "name": "custom-proto",
+                "description": "Custom test protocol header",
+                "pattern": "magic:16u,len:16u",
+                "unit_bits": 32,
+                "little_endian": false,
+                "default_count": 1
+            }
+        ]"#;
+
+        let src_file = NamedTempFile::new().unwrap();
+        std::fs::write(src_file.path(), sample_json).unwrap();
+
+        let dest_file = NamedTempFile::new().unwrap();
+        let (count, dest_path) =
+            download_presets(src_file.path().to_str().unwrap(), Some(dest_file.path())).unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(dest_path, dest_file.path());
+
+        let p = find_preset("custom-proto").expect("find custom-proto");
+        assert_eq!(p.unit_bits, 32);
+        assert_eq!(p.pattern, "magic:16u,len:16u");
+
+        reset_custom_presets_path();
+    }
 }

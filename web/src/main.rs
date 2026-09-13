@@ -1,33 +1,29 @@
-//! Embedded lightweight HTTP web server for the bdd Web UI application.
+//! Decoupled standalone Web UI application server for bdd.
 //!
-//! Provides a single-binary zero-dependency browser application to upload binary files,
-//! select presets, configure bitstreams, visualize patterns, and execute slicing pipelines.
+//! Exclusively uses the `bdd` CLI executable via subprocess execution.
+//! Has zero dependencies on bdd library internals.
 
-use crate::explain::{explain_pattern, format_explanation_json};
-use crate::preset::all_presets;
-use crate::probe::{format_probe_json, probe_reader};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-const EMBEDDED_INDEX_HTML: &str = include_str!("../web/index.html");
-const EMBEDDED_STYLE_CSS: &str = include_str!("../web/style.css");
-const EMBEDDED_APP_JS: &str = include_str!("../web/app.js");
+const EMBEDDED_INDEX_HTML: &str = include_str!("../index.html");
+const EMBEDDED_STYLE_CSS: &str = include_str!("../style.css");
+const EMBEDDED_APP_JS: &str = include_str!("../app.js");
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct ProcessRequest {
     #[serde(default)]
     args: Vec<String>,
-    #[serde(default)]
-    file_name: Option<String>,
     #[serde(default)]
     file_base64: Option<String>,
     #[serde(default)]
@@ -53,45 +49,91 @@ struct ExplainRequest {
 #[derive(Deserialize)]
 struct ProbeRequest {
     #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
     file_base64: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
-/// Run the embedded HTTP web server on the specified port.
-pub fn run_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let bind_addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&bind_addr)?;
+/// Locate the bdd CLI binary
+fn find_bdd_binary() -> PathBuf {
+    if let Ok(path) = env::var("BDD_BIN") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return p;
+        }
+    }
 
-    println!("============================================================");
-    println!(" ⚡ bdd Web UI Application Server Running");
-    println!("============================================================");
-    println!("  URL: http://localhost:{}/", port);
-    println!("  URL: http://127.0.0.1:{}/", port);
-    println!("  Bound: {}", bind_addr);
-    println!("  Press Ctrl+C to stop.");
-    println!("============================================================");
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                thread::spawn(move || {
-                    handle_connection(stream);
-                });
-            }
-            Err(e) => {
-                eprintln!("[bdd web] Connection failed: {}", e);
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            // Check relative to target/debug or target/release
+            let sibling_bdd = parent.join("bdd");
+            if sibling_bdd.exists() {
+                return sibling_bdd;
             }
         }
     }
 
-    Ok(())
+    // Check project target directory
+    for rel in &[
+        "target/release/bdd",
+        "target/debug/bdd",
+        "../target/release/bdd",
+        "../target/debug/bdd",
+    ] {
+        let p = PathBuf::from(rel);
+        if p.exists() {
+            return p;
+        }
+    }
+
+    PathBuf::from("bdd")
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let mut reader = BufReader::new(&mut stream);
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let port: u16 = if args.len() > 1 {
+        args[1].parse().unwrap_or(7788)
+    } else {
+        7788
+    };
+
+    let bdd_bin = Arc::new(find_bdd_binary());
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = match TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind to {}: {}", addr, e);
+            std::process::exit(1);
+        }
+    };
+
+    println!(
+        "⚡ bdd Standalone Rust Web UI running on http://localhost:{}",
+        port
+    );
+    println!("   Using bdd CLI binary at: {}", bdd_bin.display());
+    println!("   Press Ctrl+C to stop.");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let bin = Arc::clone(&bdd_bin);
+                thread::spawn(move || {
+                    handle_connection(stream, &bin);
+                });
+            }
+            Err(e) => {
+                eprintln!("Connection failed: {}", e);
+            }
+        }
+    }
+}
+
+fn handle_connection(stream: TcpStream, bdd_bin: &Path) {
+    let mut reader = BufReader::new(&stream);
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+
+    if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
         return;
     }
 
@@ -99,35 +141,31 @@ fn handle_connection(mut stream: TcpStream) {
     if parts.len() < 2 {
         return;
     }
+
     let method = parts[0];
-    let path = parts[1];
+    let raw_path = parts[1];
+    let path = raw_path.split('?').next().unwrap_or("/");
 
     let mut content_length = 0usize;
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+        let mut header_line = String::new();
+        if reader.read_line(&mut header_line).is_err()
+            || header_line == "\r\n"
+            || header_line.is_empty()
+        {
             break;
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some(val) = trimmed.strip_prefix("Content-Length:") {
-            content_length = val.trim().parse().unwrap_or(0);
-        } else if let Some(val) = trimmed.strip_prefix("content-length:") {
-            content_length = val.trim().parse().unwrap_or(0);
+        let lower = header_line.to_lowercase();
+        if lower.starts_with("content-length:") {
+            if let Some(val) = header_line.split(':').nth(1) {
+                content_length = val.trim().parse().unwrap_or(0);
+            }
         }
     }
 
     let mut body = vec![0u8; content_length];
-    if content_length > 0 && reader.read_exact(&mut body).is_err() {
-        send_response(
-            &stream,
-            "400 Bad Request",
-            "application/json",
-            br#"{"error":"Incomplete body"}"#,
-        );
-        return;
+    if content_length > 0 {
+        let _ = reader.read_exact(&mut body);
     }
 
     if method == "OPTIONS" {
@@ -137,8 +175,7 @@ fn handle_connection(mut stream: TcpStream) {
 
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => {
-            let content =
-                fs::read_to_string("web/index.html").unwrap_or_else(|_| EMBEDDED_INDEX_HTML.into());
+            let content = load_asset("web/index.html", EMBEDDED_INDEX_HTML);
             send_response(
                 &stream,
                 "200 OK",
@@ -147,8 +184,7 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
         ("GET", "/style.css") => {
-            let content =
-                fs::read_to_string("web/style.css").unwrap_or_else(|_| EMBEDDED_STYLE_CSS.into());
+            let content = load_asset("web/style.css", EMBEDDED_STYLE_CSS);
             send_response(
                 &stream,
                 "200 OK",
@@ -157,8 +193,7 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
         ("GET", "/app.js") => {
-            let content =
-                fs::read_to_string("web/app.js").unwrap_or_else(|_| EMBEDDED_APP_JS.into());
+            let content = load_asset("web/app.js", EMBEDDED_APP_JS);
             send_response(
                 &stream,
                 "200 OK",
@@ -167,31 +202,12 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
         ("GET", "/api/status") => {
-            let status_json = format!(
-                r#"{{"status":"ok","version":"{}"}}"#,
-                env!("CARGO_PKG_VERSION")
-            );
-            send_response(
-                &stream,
-                "200 OK",
-                "application/json",
-                status_json.as_bytes(),
-            );
-        }
-        ("GET", "/api/presets") => {
-            let presets = all_presets();
-            let json = serde_json::json!(presets
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "name": p.name,
-                        "description": p.description,
-                        "pattern": p.pattern,
-                        "unit_bits": p.unit_bits,
-                        "little_endian": p.little_endian,
-                    })
-                })
-                .collect::<Vec<_>>());
+            let json = serde_json::json!({
+                "status": "ok",
+                "version": env!("CARGO_PKG_VERSION"),
+                "backend": "standalone-rust",
+                "cli": bdd_bin.to_string_lossy()
+            });
             send_response(
                 &stream,
                 "200 OK",
@@ -199,20 +215,55 @@ fn handle_connection(mut stream: TcpStream) {
                 json.to_string().as_bytes(),
             );
         }
+        ("GET", "/api/presets") => match Command::new(bdd_bin).arg("--list-presets").output() {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                let json = serde_json::json!({ "raw": text });
+                send_response(
+                    &stream,
+                    "200 OK",
+                    "application/json",
+                    json.to_string().as_bytes(),
+                );
+            }
+            Err(e) => {
+                let err = serde_json::json!({ "error": format!("Failed to run bdd: {}", e) });
+                send_response(
+                    &stream,
+                    "500 Internal Server Error",
+                    "application/json",
+                    err.to_string().as_bytes(),
+                );
+            }
+        },
         ("POST", "/api/explain") => {
             if let Ok(req) = serde_json::from_slice::<ExplainRequest>(&body) {
-                match explain_pattern(&req.pattern) {
-                    Ok(exp) => {
-                        let json = format_explanation_json(&exp);
-                        send_response(&stream, "200 OK", "application/json", json.as_bytes());
+                let out = Command::new(bdd_bin)
+                    .arg(format!("--explain-pattern={}", req.pattern))
+                    .arg("--output-json")
+                    .output();
+                match out {
+                    Ok(o) if o.status.success() => {
+                        send_response(&stream, "200 OK", "application/json", &o.stdout);
                     }
-                    Err(e) => {
-                        let err_json = serde_json::json!({"error": e.to_string()});
+                    Ok(o) => {
+                        let err = String::from_utf8_lossy(&o.stderr).to_string();
+                        let json = serde_json::json!({ "error": err });
                         send_response(
                             &stream,
                             "400 Bad Request",
                             "application/json",
-                            err_json.to_string().as_bytes(),
+                            json.to_string().as_bytes(),
+                        );
+                    }
+                    Err(e) => {
+                        let json =
+                            serde_json::json!({ "error": format!("Subprocess error: {}", e) });
+                        send_response(
+                            &stream,
+                            "500 Internal Server Error",
+                            "application/json",
+                            json.to_string().as_bytes(),
                         );
                     }
                 }
@@ -242,33 +293,55 @@ fn handle_connection(mut stream: TcpStream) {
                     if Path::new(t).exists() {
                         t.clone()
                     } else {
-                        let candidate = format!("contrib/data/{}", t);
-                        if Path::new(&candidate).exists() {
-                            candidate
-                        } else {
-                            t.clone()
-                        }
+                        format!("contrib/data/{}", t)
                     }
                 } else {
                     "contrib/data/sample.mp3".to_string()
                 };
 
-                let res = match File::open(&target_file) {
-                    Ok(mut f) => match probe_reader(&mut f, &target_file) {
-                        Ok(rep) => {
-                            let json = format_probe_json(&rep);
-                            format!(r#"{{"success":true,"report":{}}}"#, json)
-                        }
-                        Err(e) => format!(r#"{{"success":false,"error":"{}"}}"#, e),
-                    },
-                    Err(e) => format!(r#"{{"success":false,"error":"Cannot open file: {}"}}"#, e),
-                };
+                let out = Command::new(bdd_bin)
+                    .arg(format!("--probe={}", target_file))
+                    .arg("--output-json")
+                    .output();
 
                 if let Some(tp) = temp_path {
                     let _ = fs::remove_file(tp);
                 }
 
-                send_response(&stream, "200 OK", "application/json", res.as_bytes());
+                match out {
+                    Ok(o) if o.status.success() => {
+                        if let Ok(rep) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                            let json = serde_json::json!({ "success": true, "report": rep });
+                            send_response(
+                                &stream,
+                                "200 OK",
+                                "application/json",
+                                json.to_string().as_bytes(),
+                            );
+                        } else {
+                            send_response(&stream, "200 OK", "application/json", &o.stdout);
+                        }
+                    }
+                    Ok(o) => {
+                        let err = String::from_utf8_lossy(&o.stderr).to_string();
+                        let json = serde_json::json!({ "success": false, "error": err });
+                        send_response(
+                            &stream,
+                            "400 Bad Request",
+                            "application/json",
+                            json.to_string().as_bytes(),
+                        );
+                    }
+                    Err(e) => {
+                        let json = serde_json::json!({ "success": false, "error": format!("Subprocess error: {}", e) });
+                        send_response(
+                            &stream,
+                            "500 Internal Server Error",
+                            "application/json",
+                            json.to_string().as_bytes(),
+                        );
+                    }
+                }
             } else {
                 send_response(
                     &stream,
@@ -279,7 +352,7 @@ fn handle_connection(mut stream: TcpStream) {
             }
         }
         ("POST", "/api/process") => {
-            handle_api_process(&stream, &body);
+            handle_api_process(&stream, &body, bdd_bin);
         }
         _ => {
             send_response(
@@ -292,7 +365,18 @@ fn handle_connection(mut stream: TcpStream) {
     }
 }
 
-fn handle_api_process(stream: &TcpStream, body: &[u8]) {
+fn load_asset(rel_path: &str, embedded: &str) -> String {
+    if let Ok(content) = fs::read_to_string(rel_path) {
+        return content;
+    }
+    let alt = format!("../{}", rel_path);
+    if let Ok(content) = fs::read_to_string(&alt) {
+        return content;
+    }
+    embedded.to_string()
+}
+
+fn handle_api_process(stream: &TcpStream, body: &[u8], bdd_bin: &Path) {
     let req: ProcessRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => {
@@ -332,11 +416,7 @@ fn handle_api_process(stream: &TcpStream, body: &[u8]) {
         temp_output_path = Some(opath);
     }
 
-    let current_exe = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "./bdd".into());
-
-    let mut cmd = Command::new(current_exe);
+    let mut cmd = Command::new(bdd_bin);
     let mut stdin_content: Option<String> = req.tuples_text;
 
     let mut file_arg_added = false;

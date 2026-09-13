@@ -1,8 +1,9 @@
+use crate::bits::BitValue;
 use crate::counter::Counter;
 use crate::error::BddError;
-use crate::field::{parse_radix_bigint, reverse_bits, Field};
+use crate::field::{parse_radix_bigint, reverse_bits, reverse_bits_u64, Field};
 use num_bigint::{BigInt, BigUint};
-use num_traits::{One, Signed, Zero};
+use num_traits::{One, Signed, ToPrimitive, Zero};
 use rand::RngCore;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -65,6 +66,8 @@ pub trait StreamSeek {
 pub enum ReaderSource {
     Seekable(Box<dyn ReadSeek>),
     Streaming(Box<dyn Read>),
+    #[cfg(feature = "mmap")]
+    Mmap(std::io::Cursor<memmap2::Mmap>),
 }
 
 /// Unified reader for bdd that automatically seeks when backed by a seekable file/descriptor,
@@ -89,7 +92,35 @@ impl BddReader {
         }
     }
 
+    #[cfg(feature = "mmap")]
+    pub fn new_mmap(mmap: memmap2::Mmap, seek_allowed: bool) -> Self {
+        Self {
+            source: ReaderSource::Mmap(std::io::Cursor::new(mmap)),
+            seek_allowed,
+        }
+    }
+
     pub fn from_file(file: std::fs::File, seek_allowed: bool) -> Self {
+        Self::from_file_with_mmap(file, seek_allowed, true)
+    }
+
+    pub fn from_file_with_mmap(file: std::fs::File, seek_allowed: bool, allow_mmap: bool) -> Self {
+        #[cfg(feature = "mmap")]
+        if allow_mmap {
+            if let Ok(meta) = file.metadata() {
+                if meta.is_file() && meta.len() > 0 {
+                    if let Ok(mmap) = unsafe { memmap2::MmapOptions::new().map(&file) } {
+                        #[cfg(unix)]
+                        let _ = mmap.advise(memmap2::Advice::Sequential);
+                        return Self {
+                            source: ReaderSource::Mmap(std::io::Cursor::new(mmap)),
+                            seek_allowed,
+                        };
+                    }
+                }
+            }
+        }
+        let _ = allow_mmap;
         Self::new_seekable(BufReader::new(file), seek_allowed)
     }
 
@@ -108,7 +139,38 @@ impl BddReader {
     }
 
     pub fn is_seekable(&self) -> bool {
-        matches!(self.source, ReaderSource::Seekable(_))
+        match self.source {
+            ReaderSource::Seekable(_) => true,
+            #[cfg(feature = "mmap")]
+            ReaderSource::Mmap(_) => true,
+            ReaderSource::Streaming(_) => false,
+        }
+    }
+
+    pub fn is_mmap(&self) -> bool {
+        #[cfg(feature = "mmap")]
+        {
+            matches!(self.source, ReaderSource::Mmap(_))
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            false
+        }
+    }
+
+    pub fn as_slice(&self) -> Option<&[u8]> {
+        #[cfg(feature = "mmap")]
+        {
+            if let ReaderSource::Mmap(ref c) = self.source {
+                Some(c.get_ref().as_ref())
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            None
+        }
     }
 }
 
@@ -117,6 +179,8 @@ impl Read for BddReader {
         match &mut self.source {
             ReaderSource::Seekable(s) => s.read(buf),
             ReaderSource::Streaming(s) => s.read(buf),
+            #[cfg(feature = "mmap")]
+            ReaderSource::Mmap(c) => c.read(buf),
         }
     }
 }
@@ -133,6 +197,11 @@ impl StreamSeek for BddReader {
                 Err(_) => Ok(false),
             },
             ReaderSource::Streaming(_) => Ok(false),
+            #[cfg(feature = "mmap")]
+            ReaderSource::Mmap(c) => match c.seek(SeekFrom::Current(bytes as i64)) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            },
         }
     }
 
@@ -143,8 +212,31 @@ impl StreamSeek for BddReader {
                 Err(_) => Ok(false),
             },
             ReaderSource::Streaming(_) => Ok(false),
+            #[cfg(feature = "mmap")]
+            ReaderSource::Mmap(c) => match c.seek(SeekFrom::Start(0)) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            },
         }
     }
+}
+
+/// Opens a file as a RewindableBufRead, optionally memory mapping it for high-performance reading.
+pub fn open_rewindable_file(file: std::fs::File, allow_mmap: bool) -> Box<dyn RewindableBufRead> {
+    #[cfg(feature = "mmap")]
+    if allow_mmap {
+        if let Ok(meta) = file.metadata() {
+            if meta.is_file() && meta.len() > 0 {
+                if let Ok(mmap) = unsafe { memmap2::MmapOptions::new().map(&file) } {
+                    #[cfg(unix)]
+                    let _ = mmap.advise(memmap2::Advice::Sequential);
+                    return Box::new(std::io::Cursor::new(mmap));
+                }
+            }
+        }
+    }
+    let _ = allow_mmap;
+    Box::new(BufReader::new(file))
 }
 
 impl<T: AsRef<[u8]>> StreamSeek for std::io::Cursor<T> {
@@ -278,6 +370,83 @@ impl<R: Read> StreamSeek for StreamSeekBufReader<R> {
 /// Abstract iterator yielding units from an input source.
 pub trait UnitStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError>;
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
+        match self.next_unit()? {
+            Some(u) => Ok(Some(BitValue::from(u))),
+            None => Ok(None),
+        }
+    }
+    fn unit_size(&self) -> usize {
+        8
+    }
+    fn read_bits(&mut self, bits: usize) -> Result<BigUint, BddError> {
+        let mut acc = BigUint::zero();
+        let mut rem = bits;
+        while rem > 0 {
+            let u_size = self.unit_size().min(rem);
+            match self.next_unit()? {
+                Some(u) => {
+                    let mask = if u_size >= 64 {
+                        (BigUint::one() << u_size) - 1u32
+                    } else {
+                        BigUint::from((1u64 << u_size) - 1)
+                    };
+                    acc = (acc << u_size) | (&u & &mask);
+                    rem -= u_size;
+                }
+                None => break,
+            }
+        }
+        Ok(acc)
+    }
+}
+
+/// Wrapper around a UnitStream that optionally provides zeros infinitely upon EOF.
+pub struct PaddedUnitStream {
+    pub inner: Box<dyn UnitStream>,
+    pub pad_zeros: bool,
+}
+
+impl PaddedUnitStream {
+    pub fn new(inner: Box<dyn UnitStream>, pad_zeros: bool) -> Self {
+        Self { inner, pad_zeros }
+    }
+}
+
+impl UnitStream for PaddedUnitStream {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+        match self.inner.next_unit()? {
+            Some(u) => Ok(Some(u)),
+            None => {
+                if self.pad_zeros {
+                    Ok(Some(BigUint::zero()))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
+        match self.inner.next_bit_value()? {
+            Some(u) => Ok(Some(u)),
+            None => {
+                if self.pad_zeros {
+                    Ok(Some(BitValue::Inline(0)))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn unit_size(&self) -> usize {
+        self.inner.unit_size()
+    }
+
+    fn read_bits(&mut self, bits: usize) -> Result<BigUint, BddError> {
+        self.inner.read_bits(bits)
+    }
 }
 
 /// Bitstream reader extracting variable-width units from an underlying reader.
@@ -285,6 +454,10 @@ pub struct FileInputStream<R> {
     pub reader: R,
     pub buffer: BigUint,
     pub bits_in_buffer: usize,
+    fast_buf: u128,
+    read_buf: Box<[u8; 8192]>,
+    read_pos: usize,
+    read_len: usize,
     pub eof: bool,
     pub config: StreamConfig,
     pub counter: Counter,
@@ -297,6 +470,10 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             reader,
             buffer: BigUint::zero(),
             bits_in_buffer: 0,
+            fast_buf: 0,
+            read_buf: Box::new([0u8; 8192]),
+            read_pos: 0,
+            read_len: 0,
             eof: false,
             config,
             counter,
@@ -304,11 +481,26 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
         }
     }
 
+    #[inline(always)]
     fn read_byte(&mut self) -> u8 {
-        let mut buf = [0u8; 1];
-        match self.reader.read(&mut buf) {
-            Ok(1) => {
-                let mut val = buf[0];
+        if self.read_pos < self.read_len {
+            let mut val = self.read_buf[self.read_pos];
+            self.read_pos += 1;
+            if self.config.reverse_bytes {
+                val = val.reverse_bits();
+            }
+            val
+        } else {
+            self.fill_and_read_byte()
+        }
+    }
+
+    fn fill_and_read_byte(&mut self) -> u8 {
+        match self.reader.read(&mut self.read_buf[..]) {
+            Ok(n) if n > 0 => {
+                self.read_len = n;
+                self.read_pos = 1;
+                let mut val = self.read_buf[0];
                 if self.config.reverse_bytes {
                     val = val.reverse_bits();
                 }
@@ -328,9 +520,17 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             .saturating_add((self.config.unit_size as u64).saturating_mul(self.config.skip_units));
         let skip_bytes = total_skip_bits / 8;
         if skip_bytes > 0 {
-            let mut remaining = skip_bytes;
-            if self.config.seek_allowed {
-                if let Ok(true) = self.reader.try_seek(skip_bytes) {
+            let buffered = (self.read_len.saturating_sub(self.read_pos)) as u64;
+            let mut remaining = if skip_bytes <= buffered {
+                self.read_pos += skip_bytes as usize;
+                0
+            } else {
+                self.read_pos = 0;
+                self.read_len = 0;
+                skip_bytes - buffered
+            };
+            if remaining > 0 && self.config.seek_allowed {
+                if let Ok(true) = self.reader.try_seek(remaining) {
                     remaining = 0;
                 }
             }
@@ -356,9 +556,12 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             let b = self.read_byte();
             let mask = (BigUint::one() << self.bits_in_buffer) - 1u32;
             self.buffer = BigUint::from(b) & mask;
+            let f_mask = (1u128 << self.bits_in_buffer) - 1;
+            self.fast_buf = (b as u128) & f_mask;
         } else {
             let b = self.read_byte();
             self.buffer = BigUint::from(b);
+            self.fast_buf = b as u128;
             self.bits_in_buffer = 8;
         }
     }
@@ -376,20 +579,39 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
                 BigUint::zero()
             };
             self.buffer &= mask;
+            let f_mask = if self.bits_in_buffer > 0 {
+                if self.bits_in_buffer >= 128 {
+                    !0u128
+                } else {
+                    (1u128 << self.bits_in_buffer) - 1
+                }
+            } else {
+                0
+            };
+            self.fast_buf &= f_mask;
             return;
         }
 
         let remaining_gap = gap - (self.bits_in_buffer as u64);
         self.bits_in_buffer = 0;
         self.buffer = BigUint::zero();
+        self.fast_buf = 0;
 
         let gap_bytes = remaining_gap / 8;
         let rem_bits = (remaining_gap % 8) as usize;
 
         if gap_bytes > 0 {
-            let mut remaining = gap_bytes;
-            if self.config.seek_allowed {
-                if let Ok(true) = self.reader.try_seek(gap_bytes) {
+            let buffered = (self.read_len.saturating_sub(self.read_pos)) as u64;
+            let mut remaining = if gap_bytes <= buffered {
+                self.read_pos += gap_bytes as usize;
+                0
+            } else {
+                self.read_pos = 0;
+                self.read_len = 0;
+                gap_bytes - buffered
+            };
+            if remaining > 0 && self.config.seek_allowed {
+                if let Ok(true) = self.reader.try_seek(remaining) {
                     remaining = 0;
                 }
             }
@@ -418,10 +640,16 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             self.bits_in_buffer = 8 - rem_bits;
             let mask = (BigUint::one() << self.bits_in_buffer) - 1u32;
             self.buffer = BigUint::from(b) & mask;
+            let f_mask = (1u128 << self.bits_in_buffer) - 1;
+            self.fast_buf = (b as u128) & f_mask;
         }
     }
 
     pub fn read_bits(&mut self, bits: usize) -> BigUint {
+        if bits <= 64 {
+            let val = self.read_bits_u64(bits);
+            return BigUint::from(val);
+        }
         while self.bits_in_buffer < bits {
             let b = self.read_byte();
             self.buffer = (std::mem::take(&mut self.buffer) << 8) | BigUint::from(b);
@@ -439,12 +667,48 @@ impl<R: Read + StreamSeek> FileInputStream<R> {
             BigUint::zero()
         };
         self.buffer &= mask;
+        if self.bits_in_buffer <= 64 {
+            self.fast_buf = self.buffer.to_u64().unwrap_or(0) as u128;
+        }
         unit
     }
-}
 
-impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
-    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+    pub fn read_bits_u64(&mut self, bits: usize) -> u64 {
+        while self.bits_in_buffer < bits {
+            let b = self.read_byte();
+            self.fast_buf = (self.fast_buf << 8) | (b as u128);
+            self.bits_in_buffer += 8;
+        }
+        let right_edge = self.bits_in_buffer - bits;
+        let mut unit = (self.fast_buf >> right_edge) as u64;
+        let mask = if bits >= 64 {
+            !0u64
+        } else {
+            (1u64 << bits) - 1
+        };
+        unit &= mask;
+        if self.config.reverse_unit {
+            unit = reverse_bits_u64(unit, self.config.unit_size);
+        }
+        self.bits_in_buffer -= bits;
+        let rem_mask = if self.bits_in_buffer >= 128 {
+            !0u128
+        } else {
+            (1u128 << self.bits_in_buffer) - 1
+        };
+        self.fast_buf &= rem_mask;
+        self.buffer = BigUint::from(self.fast_buf as u64);
+        unit
+    }
+
+    pub fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
+        if self.config.unit_size <= 64 {
+            return self.next_bit_value_u64();
+        }
+        self.next_bit_value_bignum()
+    }
+
+    fn next_bit_value_u64(&mut self) -> Result<Option<BitValue>, BddError> {
         if self.eof {
             return Ok(None);
         }
@@ -461,6 +725,149 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 {
                     self.current_repeat += 1;
                     self.eof = false;
+                    self.read_pos = 0;
+                    self.read_len = 0;
+                    self.fast_buf = 0;
+                    self.buffer = BigUint::zero();
+                    self.bits_in_buffer = 0;
+                    self.do_skip();
+                    continue;
+                }
+                return Ok(None);
+            }
+
+            while self.bits_in_buffer < self.config.unit_size {
+                let b = self.read_byte();
+                if self.eof && self.config.drop_partial_eof {
+                    self.bits_in_buffer = 0;
+                    self.fast_buf = 0;
+                    self.buffer = BigUint::zero();
+                    if !self.counter.finished()
+                        && (self.config.repeat_count == 0
+                            || self.current_repeat < self.config.repeat_count)
+                        && self.reader.rewind()?
+                    {
+                        self.current_repeat += 1;
+                        self.eof = false;
+                        self.read_pos = 0;
+                        self.read_len = 0;
+                        self.do_skip();
+                        continue;
+                    }
+                    return Ok(None);
+                }
+                self.fast_buf = (self.fast_buf << 8) | (b as u128);
+                self.bits_in_buffer += 8;
+            }
+
+            let right_edge = self.bits_in_buffer - self.config.unit_size;
+            let mut unit = (self.fast_buf >> right_edge) as u64;
+            let mask = if self.config.unit_size >= 64 {
+                !0u64
+            } else {
+                (1u64 << self.config.unit_size) - 1
+            };
+            unit &= mask;
+
+            self.counter.next();
+            let included = self.counter.included();
+            if self.counter.finished() {
+                self.eof = true;
+            }
+
+            self.bits_in_buffer -= self.config.unit_size;
+            let rem_mask = if self.bits_in_buffer >= 128 {
+                !0u128
+            } else {
+                (1u128 << self.bits_in_buffer) - 1
+            };
+            self.fast_buf &= rem_mask;
+
+            if self.bits_in_buffer == 0 && self.config.gap == 0 {
+                let b = self.read_byte();
+                if self.eof {
+                    if included {
+                        if self.config.reverse_unit {
+                            unit = reverse_bits_u64(unit, self.config.unit_size);
+                        }
+                        if !self.counter.finished()
+                            && (self.config.repeat_count == 0
+                                || self.current_repeat < self.config.repeat_count)
+                            && self.reader.rewind()?
+                        {
+                            self.current_repeat += 1;
+                            self.eof = false;
+                            self.read_pos = 0;
+                            self.read_len = 0;
+                            self.fast_buf = 0;
+                            self.buffer = BigUint::zero();
+                            self.bits_in_buffer = 0;
+                            self.do_skip();
+                        }
+                        return Ok(Some(BitValue::Inline(unit)));
+                    } else {
+                        if !self.counter.finished()
+                            && (self.config.repeat_count == 0
+                                || self.current_repeat < self.config.repeat_count)
+                            && self.reader.rewind()?
+                        {
+                            self.current_repeat += 1;
+                            self.eof = false;
+                            self.read_pos = 0;
+                            self.read_len = 0;
+                            self.fast_buf = 0;
+                            self.buffer = BigUint::zero();
+                            self.bits_in_buffer = 0;
+                            self.do_skip();
+                            continue;
+                        }
+                        return Ok(None);
+                    }
+                }
+                self.fast_buf = b as u128;
+                self.bits_in_buffer = 8;
+            }
+
+            if self.config.gap > 0 {
+                self.skip_gap(self.config.gap);
+            }
+
+            if self.bits_in_buffer == 0 && !self.eof {
+                let b = self.read_byte();
+                if !self.eof {
+                    self.fast_buf = b as u128;
+                    self.bits_in_buffer = 8;
+                }
+            }
+
+            if included {
+                if self.config.reverse_unit {
+                    unit = reverse_bits_u64(unit, self.config.unit_size);
+                }
+                return Ok(Some(BitValue::Inline(unit)));
+            }
+        }
+    }
+
+    fn next_bit_value_bignum(&mut self) -> Result<Option<BitValue>, BddError> {
+        if self.eof {
+            return Ok(None);
+        }
+
+        loop {
+            if self.eof {
+                if self.config.assert_aligned {
+                    return Err(BddError::NonAlignedEof);
+                }
+                if !self.counter.finished()
+                    && (self.config.repeat_count == 0
+                        || self.current_repeat < self.config.repeat_count)
+                    && self.reader.rewind()?
+                {
+                    self.current_repeat += 1;
+                    self.eof = false;
+                    self.read_pos = 0;
+                    self.read_len = 0;
                     self.buffer = BigUint::zero();
                     self.bits_in_buffer = 0;
                     self.do_skip();
@@ -481,6 +888,8 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                     {
                         self.current_repeat += 1;
                         self.eof = false;
+                        self.read_pos = 0;
+                        self.read_len = 0;
                         self.do_skip();
                         continue;
                     }
@@ -521,11 +930,13 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                         {
                             self.current_repeat += 1;
                             self.eof = false;
+                            self.read_pos = 0;
+                            self.read_len = 0;
                             self.buffer = BigUint::zero();
                             self.bits_in_buffer = 0;
                             self.do_skip();
                         }
-                        return Ok(Some(unit));
+                        return Ok(Some(BitValue::from(unit)));
                     } else {
                         if !self.counter.finished()
                             && (self.config.repeat_count == 0
@@ -534,6 +945,8 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                         {
                             self.current_repeat += 1;
                             self.eof = false;
+                            self.read_pos = 0;
+                            self.read_len = 0;
                             self.buffer = BigUint::zero();
                             self.bits_in_buffer = 0;
                             self.do_skip();
@@ -562,33 +975,70 @@ impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
                 if self.config.reverse_unit {
                     unit = reverse_bits(&unit, self.config.unit_size);
                 }
-                return Ok(Some(unit));
+                return Ok(Some(BitValue::from(unit)));
             }
         }
     }
 }
 
+impl<R: Read + StreamSeek> UnitStream for FileInputStream<R> {
+    fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+        self.next_bit_value()
+            .map(|opt| opt.map(|bv| bv.into_biguint()))
+    }
+
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
+        self.next_bit_value()
+    }
+
+    fn unit_size(&self) -> usize {
+        self.config.unit_size
+    }
+
+    fn read_bits(&mut self, bits: usize) -> Result<BigUint, BddError> {
+        Ok(self.read_bits(bits))
+    }
+}
+
 pub struct ZeroStream {
     remaining: Option<u64>,
+    pub unit_size: usize,
 }
 
 impl ZeroStream {
     pub fn new(counter: Counter) -> Self {
         Self {
             remaining: counter.count,
+            unit_size: 8,
+        }
+    }
+
+    pub fn new_with_unit(counter: Counter, unit_size: usize) -> Self {
+        Self {
+            remaining: counter.count,
+            unit_size,
         }
     }
 }
 
 impl UnitStream for ZeroStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+        self.next_bit_value()
+            .map(|opt| opt.map(|bv| bv.into_biguint()))
+    }
+
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
         if let Some(rem) = &mut self.remaining {
             if *rem == 0 {
                 return Ok(None);
             }
             *rem -= 1;
         }
-        Ok(Some(BigUint::zero()))
+        Ok(Some(BitValue::Inline(0)))
+    }
+
+    fn unit_size(&self) -> usize {
+        self.unit_size
     }
 }
 
@@ -608,13 +1058,33 @@ impl OneStream {
 
 impl UnitStream for OneStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+        self.next_bit_value()
+            .map(|opt| opt.map(|bv| bv.into_biguint()))
+    }
+
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
         if let Some(rem) = &mut self.remaining {
             if *rem == 0 {
                 return Ok(None);
             }
             *rem -= 1;
         }
-        Ok(Some((BigUint::one() << self.unit_size) - 1u32))
+        if self.unit_size <= 64 {
+            let mask = if self.unit_size == 64 {
+                !0u64
+            } else {
+                (1u64 << self.unit_size) - 1
+            };
+            Ok(Some(BitValue::Inline(mask)))
+        } else {
+            Ok(Some(BitValue::Big(
+                (BigUint::one() << self.unit_size) - 1u32,
+            )))
+        }
+    }
+
+    fn unit_size(&self) -> usize {
+        self.unit_size
     }
 }
 
@@ -686,6 +1156,10 @@ impl UnitStream for RandomStream {
         unit &= unit_mask;
         Ok(Some(unit))
     }
+
+    fn unit_size(&self) -> usize {
+        self.unit_size
+    }
 }
 
 pub struct CounterStream {
@@ -706,16 +1180,34 @@ impl CounterStream {
 
 impl UnitStream for CounterStream {
     fn next_unit(&mut self) -> Result<Option<BigUint>, BddError> {
+        self.next_bit_value()
+            .map(|opt| opt.map(|bv| bv.into_biguint()))
+    }
+
+    fn next_bit_value(&mut self) -> Result<Option<BitValue>, BddError> {
         if let Some(rem) = &mut self.remaining {
             if *rem == 0 {
                 return Ok(None);
             }
             *rem -= 1;
         }
-        let mask = (BigUint::one() << self.unit_size) - 1u32;
-        let val = BigUint::from(self.current_val) & mask;
+        let val = self.current_val;
         self.current_val = self.current_val.wrapping_add(1);
-        Ok(Some(val))
+        if self.unit_size <= 64 {
+            let mask = if self.unit_size == 64 {
+                !0u64
+            } else {
+                (1u64 << self.unit_size) - 1
+            };
+            Ok(Some(BitValue::Inline(val & mask)))
+        } else {
+            let mask = (BigUint::one() << self.unit_size) - 1u32;
+            Ok(Some(BitValue::Big(BigUint::from(val) & mask)))
+        }
+    }
+
+    fn unit_size(&self) -> usize {
+        self.unit_size
     }
 }
 
@@ -926,211 +1418,6 @@ impl<R: BufRead + StreamSeek> TupleDirectInput<R> {
     }
 }
 
-/// Native Linux Netlink stream reader for kernel process connector events (`CN_IDX_PROC`).
-#[cfg(target_os = "linux")]
-pub struct NetlinkReader {
-    fd: std::os::fd::RawFd,
-    recv_buf: Vec<u8>,
-    pos: usize,
-    len: usize,
-    raw_headers: bool,
-    subscribed: bool,
-}
-
-#[cfg(target_os = "linux")]
-impl NetlinkReader {
-    pub fn open_proc_connector(raw_headers: bool) -> Result<Self, BddError> {
-        unsafe {
-            let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM, 11);
-            if fd < 0 {
-                let err = std::io::Error::last_os_error();
-                return Err(BddError::CliError(format!(
-                    "Failed to open Netlink connector socket: {}",
-                    err
-                )));
-            }
-
-            let rcvbuf_size: libc::c_int = 8 * 1024 * 1024;
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_RCVBUF,
-                &rcvbuf_size as *const _ as *const libc::c_void,
-                std::mem::size_of_val(&rcvbuf_size) as libc::socklen_t,
-            );
-
-            let mut addr: libc::sockaddr_nl = std::mem::zeroed();
-            addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-            addr.nl_pid = libc::getpid() as u32;
-            addr.nl_groups = 1;
-
-            if libc::bind(
-                fd,
-                &addr as *const _ as *const libc::sockaddr,
-                std::mem::size_of_val(&addr) as libc::socklen_t,
-            ) < 0
-            {
-                let err = std::io::Error::last_os_error();
-                libc::close(fd);
-                return Err(BddError::CliError(format!(
-                    "Failed to bind Netlink socket to CN_IDX_PROC: {}",
-                    err
-                )));
-            }
-
-            let mut reg_msg = Vec::with_capacity(40);
-            let nlmsg_len: u32 = 40;
-            let nlmsg_type: u16 = 0x3;
-            let nlmsg_flags: u16 = 0;
-            let nlmsg_seq: u32 = 0;
-            let nlmsg_pid: u32 = libc::getpid() as u32;
-
-            reg_msg.extend_from_slice(&nlmsg_len.to_ne_bytes());
-            reg_msg.extend_from_slice(&nlmsg_type.to_ne_bytes());
-            reg_msg.extend_from_slice(&nlmsg_flags.to_ne_bytes());
-            reg_msg.extend_from_slice(&nlmsg_seq.to_ne_bytes());
-            reg_msg.extend_from_slice(&nlmsg_pid.to_ne_bytes());
-
-            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
-            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
-            reg_msg.extend_from_slice(&0u32.to_ne_bytes());
-            reg_msg.extend_from_slice(&0u32.to_ne_bytes());
-            reg_msg.extend_from_slice(&4u16.to_ne_bytes());
-            reg_msg.extend_from_slice(&0u16.to_ne_bytes());
-
-            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
-
-            let sent = libc::send(
-                fd,
-                reg_msg.as_ptr() as *const libc::c_void,
-                reg_msg.len(),
-                0,
-            );
-            if sent < 0 {
-                let err = std::io::Error::last_os_error();
-                libc::close(fd);
-                return Err(BddError::CliError(format!(
-                    "Failed to register PROC_CN_MCAST_LISTEN: {}",
-                    err
-                )));
-            }
-
-            let mut ack_buf = [0u8; 1024];
-            libc::recv(
-                fd,
-                ack_buf.as_mut_ptr() as *mut libc::c_void,
-                ack_buf.len(),
-                0,
-            );
-
-            Ok(Self {
-                fd,
-                recv_buf: vec![0u8; 65536],
-                pos: 0,
-                len: 0,
-                raw_headers,
-                subscribed: true,
-            })
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Read for NetlinkReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        while self.pos >= self.len {
-            unsafe {
-                let n = libc::recv(
-                    self.fd,
-                    self.recv_buf.as_mut_ptr() as *mut libc::c_void,
-                    self.recv_buf.len(),
-                    0,
-                );
-                if n <= 0 {
-                    return Ok(0);
-                }
-                let total = n as usize;
-                if !self.raw_headers && total >= 36 {
-                    self.pos = 36;
-                    self.len = total;
-                } else {
-                    self.pos = 0;
-                    self.len = total;
-                }
-            }
-        }
-        let available = self.len - self.pos;
-        let to_copy = available.min(buf.len());
-        buf[..to_copy].copy_from_slice(&self.recv_buf[self.pos..self.pos + to_copy]);
-        self.pos += to_copy;
-        Ok(to_copy)
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for NetlinkReader {
-    fn drop(&mut self) {
-        if self.subscribed {
-            unsafe {
-                let mut reg_msg = Vec::with_capacity(40);
-                let nlmsg_len: u32 = 40;
-                let nlmsg_type: u16 = 0x3;
-                let nlmsg_flags: u16 = 0;
-                let nlmsg_seq: u32 = 0;
-                let nlmsg_pid: u32 = libc::getpid() as u32;
-
-                reg_msg.extend_from_slice(&nlmsg_len.to_ne_bytes());
-                reg_msg.extend_from_slice(&nlmsg_type.to_ne_bytes());
-                reg_msg.extend_from_slice(&nlmsg_flags.to_ne_bytes());
-                reg_msg.extend_from_slice(&nlmsg_seq.to_ne_bytes());
-                reg_msg.extend_from_slice(&nlmsg_pid.to_ne_bytes());
-
-                reg_msg.extend_from_slice(&1u32.to_ne_bytes());
-                reg_msg.extend_from_slice(&1u32.to_ne_bytes());
-                reg_msg.extend_from_slice(&0u32.to_ne_bytes());
-                reg_msg.extend_from_slice(&0u32.to_ne_bytes());
-                reg_msg.extend_from_slice(&4u16.to_ne_bytes());
-                reg_msg.extend_from_slice(&0u16.to_ne_bytes());
-
-                reg_msg.extend_from_slice(&2u32.to_ne_bytes());
-
-                libc::send(
-                    self.fd,
-                    reg_msg.as_ptr() as *const libc::c_void,
-                    reg_msg.len(),
-                    0,
-                );
-                libc::close(self.fd);
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub struct NetlinkReader;
-
-#[cfg(not(target_os = "linux"))]
-impl NetlinkReader {
-    pub fn open_proc_connector(_raw_headers: bool) -> Result<Self, BddError> {
-        Err(BddError::CliError(
-            "Netlink connector ingestion is only supported on Linux".to_string(),
-        ))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl Read for NetlinkReader {
-    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Netlink connector ingestion is only supported on Linux",
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,5 +1583,58 @@ mod tests {
         }
         assert_eq!(count, 24);
         assert_eq!(stream.next_unit().unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(feature = "mmap")]
+    fn test_bdd_reader_mmap() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"Hello Memory Mapped World!").unwrap();
+        tmp.flush().unwrap();
+
+        let file = File::open(tmp.path()).unwrap();
+        let mut reader = BddReader::from_file_with_mmap(file, true, true);
+        assert!(reader.is_mmap());
+        assert!(reader.is_seekable());
+        assert_eq!(reader.as_slice().unwrap(), b"Hello Memory Mapped World!");
+
+        let mut buf = [0u8; 5];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"Hello");
+
+        assert!(reader.try_seek(1).unwrap()); // skip space
+        let mut buf6 = [0u8; 6];
+        reader.read_exact(&mut buf6).unwrap();
+        assert_eq!(&buf6, b"Memory");
+
+        assert!(reader.rewind().unwrap());
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"Hello");
+
+        // Disabled mmap fallback test
+        let file2 = File::open(tmp.path()).unwrap();
+        let reader2 = BddReader::from_file_with_mmap(file2, true, false);
+        assert!(!reader2.is_mmap());
+        assert!(reader2.is_seekable());
+    }
+
+    #[test]
+    #[cfg(feature = "mmap")]
+    fn test_open_rewindable_file_mmap() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"123\n456\n").unwrap();
+        tmp.flush().unwrap();
+
+        let file = File::open(tmp.path()).unwrap();
+        let mut reader = open_rewindable_file(file, true);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(line, "123\n");
+        assert!(reader.rewind().unwrap());
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(line, "123\n");
     }
 }

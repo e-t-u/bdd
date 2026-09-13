@@ -33,13 +33,19 @@
 - `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers. On seekable files, gaps are skipped with O(1) kernel seek.
 - `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
 - `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
+- `--no-mmap`: Force disable zero-copy memory mapping on input/merge files (use standard buffered reads).
+- `--mmap`: Explicitly enable zero-copy memory-mapped file I/O on primary input (default: auto for regular files).
 - Size syntax supports multipliers and SI suffixes: `1024*188B`, `4k`, `10M`, `1G`, `16*8`, `1000000*24`.
 - **Sub-byte zero padding at EOF**: Unix byte I/O flushes 8-bit bytes. When writing sub-byte units (e.g. 1-bit or 3-bit units) whose count is not a multiple of 8, the last byte is zero-padded. Writing three 1-bit units yields an 8-bit byte on disk (`xxx00000`); reading it back as bits returns 8 units (3 original + 5 extra zero bits). Units written ≠ units read. When exact counts are needed, use `--count=N` when reading back the stream.
 
 ### Unified Stream Transformation Pipeline (`bdd "<source> -> <in> -> <manip...> -> <out> -> <sink>"`)
 - Syntax: `[source ->] [slicer / container ->] [in_pattern ->] [manipulators...] [-> out_pattern] [-> slicer] [-> sink]`
+- **Multi-Source Brackets**: `[ source1, source2, ... ] -> ...` interleaves streams round-robin. Each source supports the universal stream syntax: `Source [: Skip] : ContainerOrUnit [+ Gap] [: Modifiers]`. Omitted unit widths inherit downstream slicer size (e.g. `[ zeros, counter ] -> 16 -> hex`).
+- **In-Pipeline Merging**: `interleave(source)` or `merge(source)` interleaves streams inline. Add `pad:zeros` to prevent premature EOF when streams have unequal lengths (e.g. `interleave(file('tags.bin'):8, pad:zeros)`).
+- **Stream Tapping**: `tee('path')` non-destructively mirrors intermediate bitstream units to a file without altering downstream stages.
+- **In-Place Container Overwrite**: `overwrite` (or `overwrite(...)`, `--overwrite`) splices the modified slice back into the original container in place. Surrounding header/payload bits, initial skip offsets, and periodic gaps are preserved "as is" instead of zeroing out.
 - **Automatic Bit-Width Derivation**: Specifying `16H`, `4U4U`, `8E`, or `sync:11u,ver:2u` automatically dictates the unit bit length; redundant `--input-unit` or `--output-unit` flags are never needed.
-- **Sources**: `stdin`, `zeros`, `ones`, `rand`, `counter`, `netlink`, `tuples`, `file('path')`.
+- **Sources**: `stdin`, `zeros`, `ones`, `rand`, `counter`, `tuples`, `file('path')`.
 - **Sinks**: `stdout`, `hex`, `bits`, `json`, `json:object`, `csv`, `visual`, `integers`, `file('path')`.
 - **Tuple Projection & Field Fusion**:
   - `{1, 0}`: Swap fields 0 and 1.
@@ -51,6 +57,7 @@
   - Bitwise: `xor(...)`, `and(...)`, `or(...)`, `not(...)`, `shift_left(...)`, `shift_right(...)`, `remove_right(...)`.
   - Clamping & Rounding: `clamp(min, max:mode)`, `round(bits, mode)`, `cut-maxint(limit, mode)`.
   - Filter: `filter(field, op, val)`.
+  - Interleave & Tap: `interleave(...)`, `merge(...)`, `tee(...)`.
 - **Container Slicing Forms**:
   - Form A: `raw_size[offset:unit]` (e.g. `188B[11:13]`, `8[2:4]`).
   - Form B: `[pre:unit:post]` (e.g. `[2:4:2]`).
@@ -59,6 +66,10 @@
   - `bdd "4U4U -> {0|1} -> 8U -> hex"`: Slice nibbles, fuse to byte, emit hex.
   - `bdd "4U4U -> {1, 0} -> 4U4U -> hex"`: Swap high/low nibbles.
   - `bdd "zeros -> 8 -> xor(0xAA) -> hex" --count 4`: Emit `aa aa aa aa`.
+  - `bdd "[ zeros:8, ones:8 ] -> hex" --count 2`: Emit `00 ff 00 ff`.
+  - `bdd "zeros:8 -> add(5) -> tee('tap.bin') -> add(1) -> hex" --count 2`: Tap intermediate `05 05`, emit `06 06`.
+  - `bdd "16[4:8] -> xor(0xFF) -> overwrite -> hex"`: In-place container editing preserving surrounding bits.
+  - `bdd "4_, 8U, 4_ -> xor(1, 0xFF) -> 4_, 8U, 4_ -> hex"`: Opaque wildcard passthrough editing.
   - `bdd "16H -> 8E" < fp16.bin > fp8.bin`: Quantize FP16 to Hopper FP8.
   - `bdd "12 -> sub(512) -> mul(2) -> clamp(0, 255:saturate) -> 8" < adc.bin > dac.bin`
   - `bdd "188B[11:13] -> 13" < stream.ts`: Extract 13-bit MPEG PID from 188B packet.
@@ -78,6 +89,7 @@ Bit widths are optional; bare type letters use natural defaults (`B`=8, `f`/`F`=
 - `s`: Big-Endian Signed 2's complement integer (e.g. `16s`)
 - `S`: Little-Endian Signed 2's complement integer (e.g. `16S`)
 - `B`: Byte slice / Raw octets (e.g. `4B` = 32 bits byte buffer, bare `B` = 8 bits)
+- `_`: Wildcard Opaque Passthrough Bits (e.g. `4_`, `_11`, `_:13`, `184B_`). Preserves raw bits without parsing or type coercion.
 - `b`: Boolean bit flag (`1b`, bare `b` = 1 bit)
 - `x` / `X`: Input: skip/discard padding bits (e.g. `5x`). Output: consume and discard 1 tuple field without emitting bits.
 - `k` / `K`: Auto-incrementing unit sequence counter (default 8 bits). In output patterns, emits counter without consuming tuple fields. In input patterns, reads unsigned integer.
@@ -117,7 +129,10 @@ Use `--preset <NAME>` to instantly configure pattern, units, and named fields:
 | `tcp-header` | `src_port:16U,dst_port:16U,seq_num:32U,ack_num:32U,data_offset:4U,reserved:3U,ns:1B,cwr:1B,ece:1B,urg:1B,ack:1B,psh:1B,rst:1B,syn:1B,fin:1B,window_size:16U,checksum:16U,urg_ptr:16U` | 160 | TCP Base Segment Header with discrete sub-byte flags (20 bytes) |
 | `riscv-r-type` | `funct7:7u,rs2:5u,rs1:5u,funct3:3u,rd:5u,opcode:7u` | 32 | RISC-V 32-bit R-type Instruction |
 
+Presets are stored in `presets.json` (auto-downloaded on first run if missing).
 List all presets via CLI: `bdd --list-presets`
+Download/update presets: `bdd --download-presets [URL]`
+Use custom presets file: `bdd --presets-file <PATH>` (or BDD_PRESETS_FILE env var)
 
 ---
 
@@ -129,6 +144,10 @@ Analyzes bit layouts, byte alignments, offsets, and field types:
 bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
 # Or JSON for agent consumption:
 bdd --explain-pattern "sync:11u,version:2u" --output-json
+
+# Decoupled C & Rust struct generators in contrib/:
+bdd --explain-pattern "sync:8u,pid:13u" --output-json | python3 contrib/python/json_to_c.py --name MpegTsHeader
+bdd --explain-pattern "sync:8u,pid:13u" --output-json | python3 contrib/python/json_to_rust.py --name MpegTsHeader
 ```
 
 ### Binary Prober (`--probe`)
@@ -139,11 +158,11 @@ bdd --probe firmware.bin
 bdd --probe payload.dat --output-json
 ```
 
-### Interactive Web UI (`--serve`)
-Zero-dependency browser application embedded in binary:
+### Interactive Web UI (`web/`)
+Decoupled browser application in the `web/` directory:
 ```bash
-bdd --serve          # Launches web UI at http://localhost:7788 (aliases: --web, --gui)
-bdd --serve 8080     # Custom port
+python3 web/server.py [port]                                    # Python server
+cargo run --manifest-path web/Cargo.toml -- [port]              # Standalone Rust server
 ```
 
 ---
@@ -192,20 +211,29 @@ Interleave primary input with one or more secondary streams:
 
 ## 8. Model Context Protocol (MCP)
 
+The MCP server is decoupled into the standalone `bdd-mcp` companion binary (`crates/bdd-mcp`).
 Start native JSON-RPC 2.0 stdio server:
 ```bash
+bdd-mcp
+# Or via bdd CLI delegation:
 bdd --mcp
 ```
 
 ### Registered Tools
 1. `bdd_slice`: Extract, transcode, and format binary slices into text or JSON.
-   Arguments: `file_path`, `stdin_hex`, `preset`, `input_pattern`, `output_pattern`, `input_unit`, `input_raw_unit`, `input_offset`, `count`, `json_object`, `output_format`.
-2. `bdd_probe`: Compute entropy, periodicity strides, and heuristics for a binary file or hex sample.
-   Arguments: `file_path`, `sample_hex`, `as_json`.
-3. `bdd_explain_pattern`: Break down bit offsets and field schemas.
-   Arguments: `pattern`, `as_json`.
-4. `bdd_list_presets`: List all built-in binary and AI float presets.
+   Arguments: `file_path`, `pattern`, `preset`, `count`, `skip_units`, `skip_bits`, `raw_unit`, `offset`, `json_fields`.
+2. `bdd_probe`: Compute entropy, periodicity strides, and heuristics for a binary file.
+   Arguments: `file_path`.
+3. `bdd_probe_units`: Probe unit stream entropy and detect cryptographic keys.
+   Arguments: `file_path`, `unit_bits`, `skip_bits`, `skip_units`, `pattern`, `probe_field`, `key_search_bits`, `count`.
+4. `bdd_explain_pattern`: Break down bit offsets and field schemas.
+   Arguments: `pattern`.
+5. `bdd_list_presets`: List all built-in binary and AI float presets.
    Arguments: none.
+6. `bdd_transcode`: Transcode binary payload between patterns, presets, or formats.
+   Arguments: `input_hex`, `file_path`, `unit_bits`, `input_pattern`, `input_preset`, `output_pattern`, `output_preset`, `output_format`, `manipulators`, `count`.
+7. `bdd_generate`: Generate synthetic test vectors conforming to a bit pattern or preset.
+   Arguments: `pattern`, `preset`, `count`, `source`, `output_format`.
 
 ---
 
@@ -234,8 +262,9 @@ bdd --input-file in.bin --input-unit 8 --reverse-bits --output-file out.bin
 
 ---
 
-## 10. Cargo Features
+## 10. Cargo Features & Web UI
 
-- `server` (aliases: `web`, `serve`): Embedded HTTP/1.1 Web UI (`bdd --serve [port]`).
-- `small-floats` (alias: `small-float`): FP16, BF16, FP8 E4M3/E5M2, FP6, FP4 codecs.
-- Both enabled by default. Use `cargo build --release --no-default-features` for minimal footprint build.
+- `mmap`: Zero-copy memory-mapped file I/O (`memmap2`) for regular files.
+- `small-floats` (alias: `small-float`): FP16, BF16, FP8 E4M3/E5M2, FP6, FP4 codecs provided by standalone `crates/bdd-small-floats`.
+- Web UI: Decoupled to `web/` (`python3 web/server.py` or `cargo run --manifest-path web/Cargo.toml`).
+- Both features enabled by default. Use `cargo build --release --no-default-features` for minimal footprint build.

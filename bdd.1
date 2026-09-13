@@ -1,7 +1,7 @@
 .\" 
 .\" bdd.1 $Revision: 64 $
 .\" 
-.TH bdd 1 "13 September 2026" "0.5.1" "User commands"
+.TH bdd 1 "14 September 2026" "0.5.3" "User commands"
 
 .SH NAME
 bdd \- Bit stream copy and modify
@@ -129,6 +129,14 @@ Disable seeking specifically on the primary input stream, forcing sequential str
 .TP
 --input-use-seek, --input-seek
 Explicitly enable seeking on primary input (this is already the default whenever seeking is possible). Maintained for backwards compatibility.
+
+.TP
+--no-mmap, --do-not-mmap, --no-input-mmap
+Disable zero-copy memory-mapped file I/O on primary and merge inputs, falling back to standard buffered sequential reads.
+
+.TP
+--mmap, --input-mmap
+Explicitly enable zero-copy memory-mapped file I/O on primary input (default: enabled for regular files when the mmap Cargo feature is compiled in).
 
 .TP
 --reverse-input-bytes, --input-reverse-bytes
@@ -301,6 +309,14 @@ Select a predefined binary protocol or AI float format preset. Automatically con
 .TP
 --list-presets
 Print a formatted table of all available built-in presets with pattern definitions, unit widths, and descriptions, then exit.
+
+.TP
+--download-presets[=URL]
+Download and install presets JSON file from \fIURL\fR (defaults to the official GitHub repository) and save to the active presets file path (\fB~/.config/bdd/presets.json\fR). If \fIURL\fR is specified, downloads and installs custom presets from that remote URL or local file path.
+
+.TP
+--presets-file=PATH
+Specify an alternate local presets JSON file path instead of the default discovery locations. Can also be set via the \fBBDD_PRESETS_FILE\fR environment variable.
 
 S and s should be used with caution. If negative value is
 used in making a unit, it will cause an error. The only
@@ -555,6 +571,10 @@ Bit gap in zeros emitted between successive output raw unit containers (default:
 Initial prefix of zero bits emitted on output before the first unit is written (default: 0).
 
 .TP
+--overwrite, --as-is, --as_is
+In-place container editing mode. Instead of zeroing out unselected container bits, skips, and periodic gaps on output, preserves pre-offset bits, post-offset bits, initial skip offsets, and periodic framing gaps directly from the original input "as is". Only the sliced target bits are modified and spliced back into the container.
+
+.TP
 --output-little-endian
 Unit is written to the output stream least significant byte first.
 The default is network byte order or big-endian byte order
@@ -650,6 +670,14 @@ Disable seeking specifically on the merge input stream, forcing sequential strea
 .TP
 --merge-use-seek, --merge-seek
 Explicitly enable seeking on merge input (this is already the default whenever seeking is possible). Maintained for backwards compatibility.
+
+.TP
+--merge-no-mmap, --no-merge-mmap
+Disable zero-copy memory-mapped file I/O on merge inputs, falling back to standard buffered sequential reads.
+
+.TP
+--merge-mmap
+Explicitly enable zero-copy memory-mapped file I/O on merge inputs (default: enabled for regular files when the mmap Cargo feature is compiled in).
 
 .TP
 --merge-little-endian
@@ -777,7 +805,7 @@ Print the embedded concise AI model and agent guide (llms.txt) to standard outpu
 
 .TP
 --serve[=PORT], --web, --gui
-Launch the interactive Web UI application server (default port 7788). Allows exploring bit layouts, running slicing pipelines, visualizing hex dumps, and testing presets directly in any modern web browser.
+Print launch instructions for the decoupled interactive Web UI application server (located in the web/ directory). To start the web UI, run \fBpython3 web/server.py\fR or \fBcargo run --manifest-path web/Cargo.toml\fR.
 
 .TP
 -q, --quiet

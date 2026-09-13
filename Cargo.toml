@@ -1,6 +1,15 @@
+[workspace]
+members = [
+    ".",
+    "crates/bdd-small-floats",
+    "crates/bdd-mcp",
+    "web",
+    "contrib/rust/bdd-netlink",
+]
+
 [package]
 name = "bdd"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "Command line tool to interpret, manipulate, merge and create bit streams"
 authors = ["Esa Turtiainen"]
@@ -33,13 +42,16 @@ serde_json = "1.0"
 clap_complete = "4.5"
 tempfile = "3.10"
 libc = "0.2"
+memmap2 = { version = "0.9", optional = true }
+bdd-small-floats = { path = "crates/bdd-small-floats", version = "0.5.3", optional = true }
 
 [features]
-default = ["server", "small-floats"]
+default = ["server", "small-floats", "mmap"]
 server = []
 serve = ["server"]
 web = ["server"]
-small-floats = []
+mmap = ["dep:memmap2"]
+small-floats = ["dep:bdd-small-floats"]
 small-float = ["small-floats"]
 
 [profile.release]
@@ -51,3 +63,6 @@ panic = "abort"
 [[bench]]
 name = "throughput"
 harness = false
+
+[patch.crates-io]
+bdd-small-floats = { path = "crates/bdd-small-floats" }

@@ -75,6 +75,18 @@ pub struct Cli {
     #[arg(long, default_value_t = false, visible_alias = "input-seek")]
     pub input_use_seek: bool,
 
+    /// Force disable memory-mapped I/O on all input files (use standard buffered reads)
+    #[arg(long, default_value_t = false, visible_aliases = ["no-mmap", "do-not-mmap"])]
+    pub no_mmap: bool,
+
+    /// Disable memory-mapped I/O on primary input
+    #[arg(long, default_value_t = false, visible_alias = "no-input-mmap")]
+    pub input_no_mmap: bool,
+
+    /// Enable memory-mapped I/O on primary input (default: true if regular file and supported)
+    #[arg(long, default_value_t = false, visible_aliases = ["mmap", "input-mmap"])]
+    pub input_use_mmap: bool,
+
     #[arg(long, default_value_t = false)]
     pub input_little_endian: bool,
 
@@ -104,10 +116,6 @@ pub struct Cli {
     /// Read text input as newline-separated unsigned integers
     #[arg(long, default_value_t = false)]
     pub input_integers: bool,
-
-    /// Ingest binary telemetry from Linux Netlink socket (e.g. 'connector:proc' or 'raw')
-    #[arg(long, num_args = 0..=1, default_missing_value = "connector:proc", visible_aliases = ["netlink"])]
-    pub input_netlink: Option<String>,
 
     // Tuples
     #[arg(long)]
@@ -226,6 +234,10 @@ pub struct Cli {
     #[arg(long, visible_alias = "output-bit", default_value_t = false)]
     pub output_bits: bool,
 
+    /// Preserve container pre-offset and post-offset bits, skips, and gaps "as is" from original input instead of zeroing
+    #[arg(long, default_value_t = false, visible_aliases = ["as-is", "as_is"])]
+    pub overwrite: bool,
+
     #[arg(long, default_value_t = false)]
     pub output_json: bool,
 
@@ -245,14 +257,21 @@ pub struct Cli {
     /// Comma-separated field names for JSON object / CSV output
     #[arg(long, visible_alias = "json-keys")]
     pub json_fields: Option<String>,
-
     /// Use built-in format preset (e.g. 'mp3-header', 'mpeg-ts', 'nvfp4', 'wav-header')
     #[arg(long)]
     pub preset: Option<String>,
 
-    /// List all available built-in format presets
+    /// List all built-in format presets and exit
     #[arg(long, default_value_t = false)]
     pub list_presets: bool,
+
+    /// Download and install presets JSON file from URL (default: official repository)
+    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "URL", visible_aliases = ["update-presets", "fetch-presets"])]
+    pub download_presets: Option<String>,
+
+    /// Path to presets JSON file (overrides ~/.config/bdd/presets.json or ./presets.json)
+    #[arg(long, value_name = "PATH", visible_alias = "presets-path")]
+    pub presets_file: Option<std::path::PathBuf>,
 
     /// Explain pattern layout, field bit ranges, and byte alignment
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
@@ -298,7 +317,7 @@ pub struct Cli {
     #[arg(long, default_value_t = false, visible_aliases = ["ai-guide", "ai"])]
     pub llms: bool,
 
-    /// Start embedded interactive web browser GUI application
+    /// Start interactive web browser GUI application (decoupled to 'web/' directory)
     #[arg(long, num_args = 0..=1, default_missing_value = "7788", visible_aliases = ["web", "gui"])]
     pub serve: Option<u16>,
 
@@ -368,6 +387,14 @@ pub struct Cli {
     #[arg(long, default_value_t = false, visible_alias = "merge-seek")]
     pub merge_use_seek: bool,
 
+    /// Disable memory-mapped I/O on merge input files
+    #[arg(long, default_value_t = false, visible_alias = "no-merge-mmap")]
+    pub merge_no_mmap: bool,
+
+    /// Enable memory-mapped I/O on merge input files (default: true if regular file and supported)
+    #[arg(long, default_value_t = false, visible_alias = "merge-mmap")]
+    pub merge_use_mmap: bool,
+
     #[arg(long, default_value_t = false)]
     pub merge_little_endian: bool,
 
@@ -384,12 +411,15 @@ pub struct ValidatedConfig {
     pub input_file: String,
     pub output_file: String,
     pub input_unit: Option<usize>,
+    pub input_raw_unit: Option<u64>,
+    pub input_offset: u64,
     pub input_skip_bits: u64,
     pub input_skip_units: u64,
     pub input_gap: u64,
     pub input_assert_aligned: bool,
     pub input_drop_partial_eof: bool,
     pub input_use_seek: bool,
+    pub input_use_mmap: bool,
     pub input_reverse_bytes: bool,
     pub input_reverse_unit: bool,
     pub input_zeros: bool,
@@ -397,7 +427,6 @@ pub struct ValidatedConfig {
     pub input_random: bool,
     pub input_counter: bool,
     pub input_integers: bool,
-    pub input_netlink: Option<String>,
     pub input_pattern: Option<String>,
     pub input_tuples: bool,
     pub skip: u64,
@@ -452,6 +481,7 @@ pub struct ValidatedConfig {
     pub merge_assert_aligned: bool,
     pub merge_drop_partial_eof: bool,
     pub merge_use_seek: bool,
+    pub merge_use_mmap: bool,
     pub merge_reverse_bytes: bool,
     pub merge_reverse_unit: bool,
     pub raw_args: Vec<String>,
@@ -467,6 +497,8 @@ pub struct ValidatedConfig {
     pub probe_visual: bool,
     pub inline_manipulators: Vec<String>,
     pub mcp: bool,
+    pub overwrite: bool,
+    pub merge_specs: Vec<crate::stream_pattern::StreamSpec>,
 }
 
 fn check_exclusive(msg: &str, flags: &[bool]) -> Result<(), BddError> {
@@ -739,9 +771,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     let cli_explicit_output_unit = cli.output_unit.is_some();
     let mut inline_manipulators = Vec::new();
 
+    let mut merge_specs = Vec::new();
+
     if let Some(ref sp) = stream_pat {
         let parsed = crate::stream_pattern::parse_stream_io_pattern(sp)?;
         inline_manipulators = parsed.manipulators;
+        if parsed.overwrite {
+            cli.overwrite = true;
+        }
+        merge_specs = parsed.merge_specs.clone();
         if let Some(ref inp) = parsed.input {
             if cli.input_skip_bits.is_none() && inp.skip.is_some() {
                 cli.input_skip_bits = inp.skip.map(|v| v.to_string());
@@ -792,10 +830,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 s if s.starts_with("counter(") && s.ends_with(')') => {
                     cli.input_counter = true;
                 }
-                "netlink" => cli.input_netlink = Some("connector:proc".to_string()),
-                s if s.starts_with("netlink:") => {
-                    cli.input_netlink = Some(s["netlink:".len()..].to_string());
-                }
                 "tuples" => cli.input_tuples = true,
                 s if s.starts_with("file(") && s.ends_with(')') => {
                     let path = s[5..s.len() - 1]
@@ -804,7 +838,12 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                         .trim_matches('"');
                     cli.input_file = path.to_string();
                 }
-                _ => {}
+                other => {
+                    let path = other.trim().trim_matches('\'').trim_matches('"');
+                    if !path.is_empty() {
+                        cli.input_file = path.to_string();
+                    }
+                }
             }
         }
         if let Some(ref sink) = parsed.sink {
@@ -831,7 +870,29 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                         .trim_matches('"');
                     cli.output_file = path.to_string();
                 }
-                _ => {}
+                other => {
+                    let path = other.trim().trim_matches('\'').trim_matches('"');
+                    if !path.is_empty() {
+                        cli.output_file = path.to_string();
+                    }
+                }
+            }
+        }
+        if cli.overwrite {
+            if cli.output_raw_unit.is_none() {
+                cli.output_raw_unit = cli.input_raw_unit.clone();
+            }
+            if cli.output_offset.is_none() {
+                cli.output_offset = cli.input_offset.clone();
+            }
+            if cli.output_unit.is_none() {
+                cli.output_unit = cli.input_unit.clone();
+            }
+            if cli.output_gap.is_none() {
+                cli.output_gap = cli.input_gap.clone();
+            }
+            if cli.output_skip_bits.is_none() {
+                cli.output_skip_bits = cli.input_skip_bits.clone();
             }
         }
     }
@@ -851,6 +912,10 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
     if cli.output_pattern.is_none() && pos_out_pat.is_some() {
         cli.output_pattern = pos_out_pat;
+    }
+
+    if let Some(ref path) = cli.presets_file {
+        crate::preset::set_custom_presets_path(path.clone());
     }
 
     if let Some(ref preset_name) = cli.preset {
@@ -894,16 +959,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
-    if cli.input_netlink.is_some()
-        && cli.input_pattern.is_none()
-        && cli.preset.is_none()
-        && cli.input_unit.is_none()
-    {
-        cli.preset = Some("netlink-proc-event".to_string());
-    }
-
     check_exclusive(
-        "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter, --input-integers, --input-tuples, --input-netlink",
+        "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter, --input-integers, --input-tuples",
         &[
             cli.input_zeros,
             cli.input_ones,
@@ -911,7 +968,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             cli.input_counter,
             cli.input_integers,
             cli.input_tuples,
-            cli.input_netlink.is_some(),
         ],
     )?;
 
@@ -1066,48 +1122,56 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         .map(|v| v as usize)
         .or(pattern_input_unit);
 
-    let (input_skip_bits, input_skip_units, input_gap, resolved_input_unit) = if let Some(r) =
-        raw_unit
-    {
-        if r == 0 {
-            return Err(BddError::CliError(
-                "--input-raw-unit must be greater than 0".to_string(),
-            ));
-        }
-        let u = if let Some(unit) = input_unit {
-            if unit == 0 {
+    let (input_skip_bits, input_skip_units, input_gap, resolved_input_unit) =
+        if let Some(r) = raw_unit {
+            if r == 0 {
                 return Err(BddError::CliError(
-                    "--input-unit must be greater than 0".to_string(),
+                    "--input-raw-unit must be greater than 0".to_string(),
                 ));
             }
-            if input_offset + (unit as u64) > r {
-                return Err(BddError::CliError(format!(
+            let u = if let Some(unit) = input_unit {
+                if unit == 0 {
+                    return Err(BddError::CliError(
+                        "--input-unit must be greater than 0".to_string(),
+                    ));
+                }
+                if input_offset + (unit as u64) > r {
+                    return Err(BddError::CliError(format!(
                     "--input-offset ({}) + input unit/pattern ({}) exceeds --input-raw-unit ({})",
                     input_offset, unit, r
                 )));
-            }
-            unit
+                }
+                unit
+            } else {
+                if input_offset >= r {
+                    return Err(BddError::CliError(format!(
+                        "--input-offset ({}) must be less than --input-raw-unit ({})",
+                        input_offset, r
+                    )));
+                }
+                (r - input_offset) as usize
+            };
+            let skip_stride = r + input_gap_raw;
+            let (skip_bits, gap) = if cli.overwrite {
+                (
+                    input_skip_bits_raw + (input_skip_units_raw * skip_stride),
+                    input_gap_raw,
+                )
+            } else {
+                (
+                    input_skip_bits_raw + (input_skip_units_raw * skip_stride) + input_offset,
+                    r - (u as u64) + input_gap_raw,
+                )
+            };
+            (skip_bits, 0, gap, Some(u))
         } else {
-            if input_offset >= r {
-                return Err(BddError::CliError(format!(
-                    "--input-offset ({}) must be less than --input-raw-unit ({})",
-                    input_offset, r
-                )));
-            }
-            (r - input_offset) as usize
+            (
+                input_skip_bits_raw,
+                input_skip_units_raw,
+                input_gap_raw,
+                input_unit,
+            )
         };
-        let skip_stride = r + input_gap_raw;
-        let skip_bits = input_skip_bits_raw + (input_skip_units_raw * skip_stride) + input_offset;
-        let gap = r - (u as u64) + input_gap_raw;
-        (skip_bits, 0, gap, Some(u))
-    } else {
-        (
-            input_skip_bits_raw,
-            input_skip_units_raw,
-            input_gap_raw,
-            input_unit,
-        )
-    };
 
     let count = if count_is_cycle {
         let u = resolved_input_unit.or(pattern_input_unit).unwrap_or(8);
@@ -1291,6 +1355,30 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     let input_use_seek = !cli.input_no_seek && !cli.no_seek;
     let merge_use_seek = !cli.merge_no_seek && !cli.no_seek;
 
+    // Memory-mapped I/O by default on regular files when supported, unless explicitly disabled
+    let input_mmap_requested = cli.input_use_mmap;
+    let mut input_use_mmap = if cli.no_mmap || cli.input_no_mmap {
+        false
+    } else {
+        input_mmap_requested || cfg!(feature = "mmap")
+    };
+
+    if cli.input_file == "-" {
+        input_use_mmap = false;
+    }
+
+    let merge_mmap_requested = cli.merge_use_mmap;
+    let merge_use_mmap = if cli.no_mmap || cli.merge_no_mmap {
+        false
+    } else {
+        merge_mmap_requested || cfg!(feature = "mmap")
+    };
+
+    #[cfg(not(feature = "mmap"))]
+    if input_mmap_requested || merge_mmap_requested {
+        crate::diag::warn("Memory-mapped I/O was requested, but bdd was compiled without the 'mmap' feature. Falling back to standard buffered I/O.");
+    }
+
     let input_repeat = parse_number_argument(
         cli.input_repeat.as_deref(),
         "--input-repeat",
@@ -1303,12 +1391,15 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         input_file: cli.input_file,
         output_file: cli.output_file,
         input_unit: resolved_input_unit,
+        input_raw_unit: raw_unit,
+        input_offset,
         input_skip_bits,
         input_skip_units,
         input_gap,
         input_assert_aligned: cli.input_assert_aligned,
         input_drop_partial_eof: cli.input_drop_partial_eof,
         input_use_seek,
+        input_use_mmap,
         input_reverse_bytes: cli.input_reverse_bytes,
         input_reverse_unit: cli.input_reverse_unit,
         input_zeros: cli.input_zeros,
@@ -1316,7 +1407,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         input_random: cli.input_random,
         input_counter: cli.input_counter,
         input_integers: cli.input_integers,
-        input_netlink: cli.input_netlink,
         input_pattern: cli.input_pattern,
         input_tuples: cli.input_tuples,
         skip,
@@ -1371,6 +1461,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         merge_assert_aligned: cli.merge_assert_aligned,
         merge_drop_partial_eof: cli.merge_drop_partial_eof,
         merge_use_seek,
+        merge_use_mmap,
         merge_reverse_bytes: cli.merge_reverse_bytes,
         merge_reverse_unit: cli.merge_reverse_unit,
         raw_args: Vec::new(),
@@ -1397,6 +1488,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         probe_visual: cli.probe_visual,
         inline_manipulators,
         mcp: cli.mcp,
+        overwrite: cli.overwrite,
+        merge_specs,
     })
 }
 

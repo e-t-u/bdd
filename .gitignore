@@ -1,5 +1,5 @@
 # Rust
-/target/
+target/
 /bdd
 *.rs.bk
 
@@ -25,6 +25,7 @@ pip-log.txt
 !/contrib/c/*.h
 !/contrib/c/Makefile
 !/contrib/c/README*
+/contrib/bdd-netlink
 
 # IDEs, editors & OS
 .idea/

@@ -43,10 +43,15 @@ mkdir -p "${STAGING_DIR}/usr/lib/pkgconfig"
 mkdir -p "${STAGING_DIR}/usr/include"
 mkdir -p "${STAGING_DIR}/usr/share/man/man1"
 mkdir -p "${STAGING_DIR}/usr/share/doc/bdd"
+mkdir -p "${STAGING_DIR}/usr/share/bdd"
 
-# Install executable and library
 install -m 0755 "${REPO_ROOT}/target/release/bdd" "${STAGING_DIR}/usr/bin/bdd"
 strip "${STAGING_DIR}/usr/bin/bdd" 2>/dev/null || true
+
+if [ -f "${REPO_ROOT}/target/release/bdd-mcp" ]; then
+    install -m 0755 "${REPO_ROOT}/target/release/bdd-mcp" "${STAGING_DIR}/usr/bin/bdd-mcp"
+    strip "${STAGING_DIR}/usr/bin/bdd-mcp" 2>/dev/null || true
+fi
 
 install -m 0755 "${REPO_ROOT}/target/release/libbdd.so" "${STAGING_DIR}/usr/lib/libbdd.so"
 strip "${STAGING_DIR}/usr/lib/libbdd.so" 2>/dev/null || true
@@ -86,6 +91,11 @@ if [ -f "${REPO_ROOT}/llms.txt" ]; then
 fi
 if [ -f "${REPO_ROOT}/LICENSE" ]; then
     install -m 0644 "${REPO_ROOT}/LICENSE" "${STAGING_DIR}/usr/share/doc/bdd/copyright"
+fi
+
+# Install format presets
+if [ -f "${REPO_ROOT}/presets.json" ]; then
+    install -m 0644 "${REPO_ROOT}/presets.json" "${STAGING_DIR}/usr/share/bdd/presets.json"
 fi
 
 # Calculate installed size in KB

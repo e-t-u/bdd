@@ -1,0 +1,10 @@
+[package]
+name = "bdd-netlink"
+version = "0.5.3"
+edition = "2021"
+description = "High-performance Linux Netlink connector binary stream generator for bdd"
+authors = ["Esa Turtiainen"]
+license = "GPL-3.0"
+
+[dependencies]
+libc = "0.2"

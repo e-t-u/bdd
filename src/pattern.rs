@@ -1,5 +1,6 @@
+use crate::bits::BitValue;
 use crate::error::BddError;
-use crate::field::{reverse_bits, Field};
+use crate::field::{reverse_bits, reverse_bits_u64, Field};
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use rand::rngs::OsRng;
@@ -16,7 +17,7 @@ pub fn default_bits_for_type(c: char, is_output: bool) -> usize {
                 1
             }
         }
-        'u' | 'U' | 'b' | 'z' | 'o' | 'r' | 'V' | 'v' => 1,
+        'u' | 'U' | 'b' | 'z' | 'o' | 'r' | 'V' | 'v' | '_' => 1,
         'B' | 's' | 'S' | 'M' | 'q' | 'Q' | 'e' | 'E' | 'c' | 'C' | 'k' | 'K' => 8,
         'm' => 4,
         'h' | 'H' | 'y' | 'Y' => 16,
@@ -32,6 +33,414 @@ pub struct PatternItem {
     pub name: Option<String>,
     pub bits: usize,
     pub char_code: char,
+}
+
+/// Container framing metadata for periodic stream framing or unaligned record slicing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ContainerFraming {
+    pub skip: Option<u64>,
+    pub raw_unit: Option<u64>,
+    pub offset: Option<u64>,
+    pub unit_size: Option<usize>,
+    pub gap: Option<u64>,
+}
+
+/// Unified AST representing an optional stream container framing wrapping field definitions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FramedPattern {
+    pub framing: ContainerFraming,
+    pub fields: Vec<PatternItem>,
+    pub raw_pattern: Option<String>,
+}
+
+impl FramedPattern {
+    /// Returns the total bits described by the fields if present, or framing unit_size.
+    pub fn total_bits(&self) -> usize {
+        if !self.fields.is_empty() {
+            self.fields.iter().map(|p| p.bits).sum()
+        } else {
+            self.framing.unit_size.unwrap_or(0)
+        }
+    }
+
+    /// Returns true if container framing (skip, raw_unit, offset, gap) is active.
+    pub fn is_framed(&self) -> bool {
+        self.framing.raw_unit.is_some()
+            || self.framing.offset.is_some()
+            || self.framing.skip.is_some()
+            || self.framing.gap.is_some()
+    }
+
+    /// Parse a unified framed pattern specification.
+    pub fn parse(s: &str) -> Result<Self, BddError> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Ok(Self::default());
+        }
+
+        // Support legacy 5-colon positional syntax if exactly 4 colons without brackets:
+        // skip : raw : offset : unit : gap
+        if !s.contains('[') {
+            let colon_parts: Vec<&str> = s.split(':').map(|p| p.trim()).collect();
+            if colon_parts.len() == 5 {
+                let skip = Some(crate::cli::parse_size_with_suffix(
+                    colon_parts[0],
+                    "stream skip",
+                    true,
+                )?);
+                let raw = Some(crate::cli::parse_size_with_suffix(
+                    colon_parts[1],
+                    "stream raw unit",
+                    true,
+                )?);
+                let offset = Some(crate::cli::parse_size_with_suffix(
+                    colon_parts[2],
+                    "stream offset",
+                    true,
+                )?);
+                let parsed = parse_unit_or_fields(colon_parts[3])?;
+                let gap = Some(crate::cli::parse_size_with_suffix(
+                    colon_parts[4],
+                    "stream gap",
+                    true,
+                )?);
+                return Ok(Self {
+                    framing: ContainerFraming {
+                        skip,
+                        raw_unit: raw,
+                        offset,
+                        unit_size: parsed.unit_size,
+                        gap,
+                    },
+                    fields: parsed.fields,
+                    raw_pattern: parsed.raw_pattern,
+                });
+            }
+        }
+
+        // 1. Find periodic gap ('+' outside brackets)
+        let mut depth = 0;
+        let mut plus_pos = None;
+        for (i, c) in s.char_indices() {
+            match c {
+                '[' => depth += 1,
+                ']' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                '+' if depth == 0 => plus_pos = Some(i),
+                _ => {}
+            }
+        }
+
+        let (s_remaining, gap) = if let Some(idx) = plus_pos {
+            let gap_str = s[idx + 1..].trim();
+            let gap_val = crate::cli::parse_size_with_suffix(gap_str, "stream gap", true)?;
+            (s[..idx].trim(), Some(gap_val))
+        } else {
+            (s, None)
+        };
+
+        // 2. Find initial skip (':' outside brackets)
+        let mut depth = 0;
+        let mut colon_pos = None;
+        for (i, c) in s_remaining.char_indices() {
+            match c {
+                '[' => depth += 1,
+                ']' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                ':' if depth == 0 => {
+                    let prefix = s_remaining[..i].trim();
+                    if crate::cli::parse_size_with_suffix(prefix, "check", true).is_ok() {
+                        colon_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let (unit_part, skip) = if let Some(idx) = colon_pos {
+            let skip_str = s_remaining[..idx].trim();
+            let skip_val = crate::cli::parse_size_with_suffix(skip_str, "stream skip", true)?;
+            (s_remaining[idx + 1..].trim(), Some(skip_val))
+        } else {
+            (s_remaining, None)
+        };
+
+        // 3. Parse unit_part (Form A, Form B, or Bare Unit/Pattern)
+        let unit_part = unit_part.trim();
+        if unit_part.is_empty() {
+            return Ok(Self {
+                framing: ContainerFraming {
+                    skip,
+                    gap,
+                    ..Default::default()
+                },
+                fields: Vec::new(),
+                raw_pattern: None,
+            });
+        }
+
+        if let (Some(open_idx), Some(close_idx)) = (unit_part.find('['), unit_part.rfind(']')) {
+            if open_idx > close_idx {
+                return Err(BddError::CliError(format!(
+                    "Mismatched brackets in stream pattern: '{}'",
+                    unit_part
+                )));
+            }
+            let prefix = unit_part[..open_idx].trim();
+            let inside = unit_part[open_idx + 1..close_idx].trim();
+            let inner_parts = split_container_inner(inside);
+
+            if !prefix.is_empty() {
+                // Form A: raw_size[offset : unit] or raw_size[offset : unit : post]
+                let raw_val =
+                    crate::cli::parse_size_with_suffix(prefix, "raw container size", true)?;
+                if inner_parts.len() < 2 || inner_parts.len() > 3 {
+                    return Err(BddError::CliError(format!(
+                        "Form A container requires [offset:unit] or [offset:unit:post], found '[{}]'",
+                        inside
+                    )));
+                }
+                let offset_val =
+                    crate::cli::parse_size_with_suffix(inner_parts[0], "container offset", true)?;
+                let parsed = parse_unit_or_fields(inner_parts[1])?;
+                let u_val = parsed.unit_size.unwrap_or(8) as u64;
+
+                if offset_val + u_val > raw_val {
+                    return Err(BddError::CliError(format!(
+                        "Container offset ({}) + unit ({}) exceeds raw container size ({})",
+                        offset_val, u_val, raw_val
+                    )));
+                }
+
+                if inner_parts.len() == 3 {
+                    let post = crate::cli::parse_size_with_suffix(
+                        inner_parts[2],
+                        "container post-gap",
+                        true,
+                    )?;
+                    if offset_val + u_val + post != raw_val {
+                        return Err(BddError::CliError(format!(
+                            "Container components (offset: {}, unit: {}, post: {}) do not sum to raw container size ({})",
+                            offset_val, u_val, post, raw_val
+                        )));
+                    }
+                }
+
+                Ok(Self {
+                    framing: ContainerFraming {
+                        skip,
+                        raw_unit: Some(raw_val),
+                        offset: Some(offset_val),
+                        unit_size: parsed.unit_size,
+                        gap,
+                    },
+                    fields: parsed.fields,
+                    raw_pattern: parsed.raw_pattern,
+                })
+            } else {
+                // Form B: [pre : unit : post] or [pre : unit]
+                if inner_parts.len() < 2 || inner_parts.len() > 3 {
+                    return Err(BddError::CliError(format!(
+                        "Form B container requires [pre:unit:post] or [pre:unit], found '[{}]'",
+                        inside
+                    )));
+                }
+                let pre_val = crate::cli::parse_size_with_suffix(inner_parts[0], "pre-gap", true)?;
+                let parsed = parse_unit_or_fields(inner_parts[1])?;
+                let u_val = parsed.unit_size.unwrap_or(8) as u64;
+                let post_val = if inner_parts.len() == 3 {
+                    crate::cli::parse_size_with_suffix(inner_parts[2], "post-gap", true)?
+                } else {
+                    0
+                };
+                let raw_val = pre_val + u_val + post_val;
+
+                Ok(Self {
+                    framing: ContainerFraming {
+                        skip,
+                        raw_unit: Some(raw_val),
+                        offset: Some(pre_val),
+                        unit_size: parsed.unit_size,
+                        gap,
+                    },
+                    fields: parsed.fields,
+                    raw_pattern: parsed.raw_pattern,
+                })
+            }
+        } else {
+            // Bare unit or pattern
+            let parsed = parse_unit_or_fields(unit_part)?;
+            Ok(Self {
+                framing: ContainerFraming {
+                    skip,
+                    raw_unit: None,
+                    offset: None,
+                    unit_size: parsed.unit_size,
+                    gap,
+                },
+                fields: parsed.fields,
+                raw_pattern: parsed.raw_pattern,
+            })
+        }
+    }
+}
+
+fn split_container_inner(inside: &str) -> Vec<&str> {
+    let inside = inside.trim();
+    if inside.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(comma_pos) = inside.find(',') {
+        let first = inside[..comma_pos].trim();
+        if crate::cli::parse_size_with_suffix(first, "check", true).is_ok() {
+            let rest = inside[comma_pos + 1..].trim();
+            if let Some(last_comma) = rest.rfind(',') {
+                let last = rest[last_comma + 1..].trim();
+                let middle = rest[..last_comma].trim();
+                if crate::cli::parse_size_with_suffix(last, "check", true).is_ok()
+                    && (crate::cli::parse_size_with_suffix(middle, "check", true).is_ok()
+                        || parse_input_pattern(middle).is_ok())
+                {
+                    return vec![first, middle, last];
+                }
+            }
+            return vec![first, rest];
+        }
+    }
+
+    let chars: Vec<(usize, char)> = inside.char_indices().collect();
+    let mut paren_depth = 0;
+    let mut first_colon = None;
+    for &(i, c) in &chars {
+        if c == '(' {
+            paren_depth += 1;
+        } else if c == ')' && paren_depth > 0 {
+            paren_depth -= 1;
+        } else if c == ':' && paren_depth == 0 {
+            first_colon = Some(i);
+            break;
+        }
+    }
+
+    if let Some(c1) = first_colon {
+        let first = inside[..c1].trim();
+        let rest = inside[c1 + 1..].trim();
+
+        let mut last_colon = None;
+        let rest_chars: Vec<(usize, char)> = rest.char_indices().collect();
+        let mut p_depth = 0;
+        for &(i, c) in rest_chars.iter().rev() {
+            if c == ')' {
+                p_depth += 1;
+            } else if c == '(' && p_depth > 0 {
+                p_depth -= 1;
+            } else if c == ':' && p_depth == 0 {
+                last_colon = Some(i);
+                break;
+            }
+        }
+
+        if let Some(c2) = last_colon {
+            let potential_post = rest[c2 + 1..].trim();
+            let potential_unit = rest[..c2].trim();
+            if crate::cli::parse_size_with_suffix(potential_post, "check", true).is_ok()
+                && (crate::cli::parse_size_with_suffix(potential_unit, "check", true).is_ok()
+                    || parse_input_pattern(potential_unit).is_ok())
+            {
+                return vec![first, potential_unit, potential_post];
+            }
+        }
+
+        return vec![first, rest];
+    }
+
+    vec![inside]
+}
+
+#[derive(Default)]
+struct ParsedUnitFields {
+    unit_size: Option<usize>,
+    raw_pattern: Option<String>,
+    fields: Vec<PatternItem>,
+}
+
+fn parse_unit_or_fields(s: &str) -> Result<ParsedUnitFields, BddError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(ParsedUnitFields::default());
+    }
+
+    let has_pattern_chars = s.contains(',')
+        || s.chars().any(|c| {
+            matches!(
+                c,
+                'U' | 'u'
+                    | 'S'
+                    | 's'
+                    | 'M'
+                    | 'm'
+                    | 'F'
+                    | 'f'
+                    | 'D'
+                    | 'd'
+                    | 'E'
+                    | 'e'
+                    | 'Q'
+                    | 'q'
+                    | 'H'
+                    | 'h'
+                    | 'Y'
+                    | 'y'
+                    | 'C'
+                    | 'c'
+                    | 'K'
+                    | 'k'
+                    | 'z'
+                    | 'o'
+                    | 'r'
+                    | 'x'
+                    | 'X'
+            )
+        });
+
+    if has_pattern_chars {
+        if let Ok(fields) = parse_input_pattern(s) {
+            let total_bits = fields.iter().map(|f| f.bits).sum();
+            return Ok(ParsedUnitFields {
+                unit_size: Some(total_bits),
+                raw_pattern: Some(s.to_string()),
+                fields,
+            });
+        }
+    }
+
+    match crate::cli::parse_size_with_suffix(s, "unit size", true) {
+        Ok(val) => Ok(ParsedUnitFields {
+            unit_size: Some(val as usize),
+            raw_pattern: None,
+            fields: Vec::new(),
+        }),
+        Err(e) => {
+            if let Ok(fields) = parse_input_pattern(s) {
+                let total_bits = fields.iter().map(|f| f.bits).sum();
+                Ok(ParsedUnitFields {
+                    unit_size: Some(total_bits),
+                    raw_pattern: Some(s.to_string()),
+                    fields,
+                })
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 fn expand_single_token(s: &str) -> String {
@@ -276,16 +685,25 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
         let (name, body) = if let Some(colon) = token.find(':') {
             let n = token[..colon].trim();
             let b = token[colon + 1..].trim();
-            (
-                if n.is_empty() {
-                    None
-                } else {
-                    Some(n.to_string())
-                },
-                b,
-            )
+            if n == "_" {
+                (None, format!("{}_", b))
+            } else {
+                (
+                    if n.is_empty() {
+                        None
+                    } else {
+                        Some(n.to_string())
+                    },
+                    b.to_string(),
+                )
+            }
+        } else if token.starts_with('_')
+            && token.len() > 1
+            && token[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            (None, format!("{}_", &token[1..]))
         } else {
-            (None, token)
+            (None, token.to_string())
         };
 
         let mut digits = String::new();
@@ -331,7 +749,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
                 c
             )));
         }
-        if !"xXUuBbSsMmFfDdHhYyEeQqCcKkVv".contains(c) {
+        if !"xXUuBbSsMmFfDdHhYyEeQqCcKkVv_".contains(c) {
             return Err(BddError::IllegalInputPatternChar(c));
         }
         if item.bits == 0 {
@@ -382,14 +800,25 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
     }
 
     for token in tokens {
-        let body = if let Some(colon) = token.find(':') {
-            token[colon + 1..].trim()
+        let body_str = if let Some(colon) = token.find(':') {
+            let n = token[..colon].trim();
+            let b = token[colon + 1..].trim();
+            if n == "_" {
+                format!("{}_", b)
+            } else {
+                b.to_string()
+            }
+        } else if token.starts_with('_')
+            && token.len() > 1
+            && token[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            format!("{}_", &token[1..])
         } else {
-            token
+            token.to_string()
         };
 
         let mut digits = String::new();
-        for c in body.chars() {
+        for c in body_str.chars() {
             if c.is_ascii_digit() {
                 digits.push(c);
             } else {
@@ -424,7 +853,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
                 c
             )));
         }
-        if !"UuBbSsMmFfDdHhYyEeQqCczorXxKkVv".contains(c) {
+        if !"UuBbSsMmFfDdHhYyEeQqCczorXxKkVv_".contains(c) {
             return Err(BddError::IllegalOutputPatternChar(c));
         }
         if item.bits == 0 && c != 'x' && c != 'X' {
@@ -468,12 +897,50 @@ pub struct TupleUnpacker {
 
 impl TupleUnpacker {
     pub fn new(pattern_str: &str) -> Result<Self, BddError> {
-        let pattern = parse_input_pattern(pattern_str)?;
+        let pattern = if pattern_str.contains('[') {
+            let framed = FramedPattern::parse(pattern_str)?;
+            if !framed.fields.is_empty() {
+                framed.fields
+            } else if let Some(u) = framed.framing.unit_size {
+                vec![PatternItem {
+                    name: None,
+                    bits: u,
+                    char_code: 'U',
+                }]
+            } else {
+                parse_input_pattern(pattern_str)?
+            }
+        } else {
+            parse_input_pattern(pattern_str)?
+        };
         let total_bits = pattern.iter().map(|p| p.bits).sum();
         let mut reversed_pattern = pattern.clone();
         reversed_pattern.reverse();
         Ok(Self {
             pattern_items: pattern,
+            reversed_pattern,
+            total_bits,
+        })
+    }
+
+    /// Construct a TupleUnpacker from an already parsed FramedPattern.
+    pub fn from_framed(framed: &FramedPattern) -> Result<Self, BddError> {
+        let pattern_items = if !framed.fields.is_empty() {
+            framed.fields.clone()
+        } else if let Some(u) = framed.framing.unit_size {
+            vec![PatternItem {
+                name: None,
+                bits: u,
+                char_code: 'U',
+            }]
+        } else {
+            return Err(BddError::MissingInputPattern);
+        };
+        let total_bits = pattern_items.iter().map(|p| p.bits).sum();
+        let mut reversed_pattern = pattern_items.clone();
+        reversed_pattern.reverse();
+        Ok(Self {
+            pattern_items,
             reversed_pattern,
             total_bits,
         })
@@ -529,7 +996,169 @@ impl TupleUnpacker {
         widths
     }
 
+    /// Unpacks a [`BitValue`] unit into individual fields according to the input pattern.
+    pub fn unpack_bit_value(&self, val: BitValue) -> Vec<Field> {
+        match val {
+            BitValue::Inline(v) => self.unpack_u64(v),
+            BitValue::Big(b) => self.unpack(b),
+        }
+    }
+
+    /// Fast path unpacking for units <= 64 bits using native CPU register operations.
+    pub fn unpack_u64(&self, mut unit: u64) -> Vec<Field> {
+        let mut tuple = Vec::with_capacity(self.reversed_pattern.len());
+        for p in &self.reversed_pattern {
+            let bits = p.bits;
+            let c = p.char_code;
+            if "usmfdchyqebkv".contains(c) {
+                unit = reverse_bits_u64(unit, bits);
+            }
+            if c == 'x' || c == 'X' {
+                unit = if bits >= 64 { 0 } else { unit >> bits };
+            } else if c == 'V' || c == 'v' || c == '_' {
+                let mask = if bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << bits) - 1
+                };
+                let val = unit & mask;
+                tuple.push(Field::Bits(BigUint::from(val), bits));
+                unit = if bits >= 64 { 0 } else { unit >> bits };
+            } else if c == 'U' || c == 'u' || c == 'B' || c == 'b' || c == 'K' || c == 'k' {
+                let mask = if bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << bits) - 1
+                };
+                let val = unit & mask;
+                tuple.push(Field::UInt(BigUint::from(val)));
+                unit = if bits >= 64 { 0 } else { unit >> bits };
+            } else if c == 'S' || c == 's' {
+                let mask = if bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << bits) - 1
+                };
+                let mut val = unit & mask;
+                let is_neg = if bits > 0 {
+                    ((val >> (bits - 1)) & 1) == 1
+                } else {
+                    false
+                };
+                if is_neg {
+                    val = (val ^ mask).wrapping_add(1);
+                    tuple.push(Field::Int(-BigInt::from(val)));
+                } else {
+                    tuple.push(Field::Int(BigInt::from(val)));
+                }
+                unit = if bits >= 64 { 0 } else { unit >> bits };
+            } else if c == 'M' || c == 'm' {
+                let mask = if bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << bits) - 1
+                };
+                let mut val = unit & mask;
+                let sign = if bits > 0 {
+                    ((val >> (bits - 1)) & 1) as u8
+                } else {
+                    0
+                };
+                if sign == 1 {
+                    val = (val ^ mask).wrapping_add(1);
+                }
+                tuple.push(Field::UInt(BigUint::from(val)));
+                tuple.push(Field::UInt(BigUint::from(sign)));
+                unit = if bits >= 64 { 0 } else { unit >> bits };
+            } else if c == 'F' || c == 'f' {
+                let val = (unit & 0xFFFF_FFFF) as u32;
+                let fl = f32::from_bits(val);
+                tuple.push(Field::Float(fl as f64));
+                unit >>= 32;
+            } else if c == 'D' || c == 'd' {
+                let fl = f64::from_bits(unit);
+                tuple.push(Field::Float(fl));
+                unit = 0;
+            } else if c == 'H' || c == 'h' {
+                #[cfg(feature = "small-floats")]
+                {
+                    let val = (unit & 0xFFFF) as u16;
+                    let fl = crate::float_types::decode_f16(val);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 16;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 16;
+                }
+            } else if c == 'Y' || c == 'y' {
+                #[cfg(feature = "small-floats")]
+                {
+                    let val = (unit & 0xFFFF) as u16;
+                    let fl = crate::float_types::decode_bf16(val);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 16;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 16;
+                }
+            } else if c == 'Q' || c == 'q' {
+                #[cfg(feature = "small-floats")]
+                {
+                    let val = (unit & 0xFF) as u8;
+                    let fl = crate::float_types::decode_fp8_e5m2(val);
+                    tuple.push(Field::Float(fl));
+                    unit >>= 8;
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit >>= 8;
+                }
+            } else if c == 'E' || c == 'e' {
+                #[cfg(feature = "small-floats")]
+                {
+                    let mask = if bits >= 64 {
+                        !0u64
+                    } else {
+                        (1u64 << bits) - 1
+                    };
+                    let val = (unit & mask) as u8;
+                    let fl = match bits {
+                        8 => crate::float_types::decode_fp8_e4m3(val),
+                        6 => crate::float_types::decode_fp6_e3m2(val),
+                        4 => crate::float_types::decode_fp4_e2m1(val),
+                        _ => 0.0,
+                    };
+                    tuple.push(Field::Float(fl));
+                    unit = if bits >= 64 { 0 } else { unit >> bits };
+                }
+                #[cfg(not(feature = "small-floats"))]
+                {
+                    unit = if bits >= 64 { 0 } else { unit >> bits };
+                }
+            } else if c == 'C' || c == 'c' {
+                let num_bytes = bits / 8;
+                let mut bytes = Vec::with_capacity(num_bytes);
+                for _ in 0..num_bytes {
+                    let b = (unit & 0xFF) as u8;
+                    bytes.push(b);
+                    unit >>= 8;
+                }
+                bytes.reverse();
+                tuple.push(Field::Bytes(bytes));
+            }
+        }
+        tuple.reverse();
+        tuple
+    }
+
     pub fn unpack(&self, mut unit: BigUint) -> Vec<Field> {
+        if self.total_bits <= 64 {
+            if let Some(v) = unit.to_u64() {
+                return self.unpack_u64(v);
+            }
+        }
         let mut tuple = Vec::new();
         for p in &self.reversed_pattern {
             let bits = p.bits;
@@ -539,7 +1168,7 @@ impl TupleUnpacker {
             }
             if c == 'x' || c == 'X' {
                 unit >>= bits;
-            } else if c == 'V' || c == 'v' {
+            } else if c == 'V' || c == 'v' || c == '_' {
                 let mask = (BigUint::one() << bits) - 1u32;
                 let val = &unit & &mask;
                 tuple.push(Field::Bits(val, bits));
@@ -693,7 +1322,171 @@ impl TuplePacker {
         Ok(tuple.remove(0))
     }
 
+    /// Packs tuple fields into a [`BitValue`] unit.
+    pub fn pack_bit_value(&self, mut tuple: Vec<Field>) -> Result<BitValue, BddError> {
+        if self.total_bits <= 64 {
+            let u = self.pack_u64(&mut tuple)?;
+            return Ok(BitValue::Inline(u));
+        }
+        self.pack(tuple).map(BitValue::from)
+    }
+
+    /// Fast path packing for units <= 64 bits using native CPU register operations.
+    pub fn pack_u64(&self, tuple: &mut Vec<Field>) -> Result<u64, BddError> {
+        let mut unit = 0u64;
+
+        for p in &self.pattern {
+            let bits = p.bits;
+            let c = p.char_code;
+            if c == 'x' || c == 'X' {
+                let _ = Self::pop_field(tuple)?;
+                continue;
+            }
+            let mut val: u64 = match c {
+                'U' | 'u' | 'B' | 'b' | 'V' | 'v' | '_' => {
+                    let f = Self::pop_field(tuple)?;
+                    f.as_u64()
+                }
+                'S' | 's' => {
+                    let f = Self::pop_field(tuple)?;
+                    let bi = f.as_bigint();
+                    if bi < BigInt::zero() {
+                        let abs_u = (-bi).to_u64().unwrap_or(0);
+                        let mask = if bits >= 64 {
+                            !0u64
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        let mut v = abs_u & mask;
+                        v ^= mask;
+                        v = v.wrapping_add(1);
+                        v
+                    } else {
+                        bi.to_u64().unwrap_or(0)
+                    }
+                }
+                'M' | 'm' => {
+                    let sign = Self::pop_field(tuple)?.as_u64();
+                    let mut mag = Self::pop_field(tuple)?.as_u64();
+                    if sign == 1 {
+                        let mask = if bits >= 64 {
+                            !0u64
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        mag &= mask;
+                        mag ^= mask;
+                        mag = mag.wrapping_add(1);
+                    }
+                    mag
+                }
+                'F' | 'f' => {
+                    let f = Self::pop_field(tuple)?;
+                    let fl = f.as_f64() as f32;
+                    fl.to_bits() as u64
+                }
+                'D' | 'd' => {
+                    let f = Self::pop_field(tuple)?;
+                    let fl = f.as_f64();
+                    fl.to_bits()
+                }
+                #[cfg(feature = "small-floats")]
+                'H' | 'h' => {
+                    let f = Self::pop_field(tuple)?;
+                    crate::float_types::encode_f16(f.as_f64()) as u64
+                }
+                #[cfg(feature = "small-floats")]
+                'Y' | 'y' => {
+                    let f = Self::pop_field(tuple)?;
+                    crate::float_types::encode_bf16(f.as_f64()) as u64
+                }
+                #[cfg(feature = "small-floats")]
+                'Q' | 'q' => {
+                    let f = Self::pop_field(tuple)?;
+                    crate::float_types::encode_fp8_e5m2(f.as_f64()) as u64
+                }
+                #[cfg(feature = "small-floats")]
+                'E' | 'e' => {
+                    let f = Self::pop_field(tuple)?;
+                    let fl = f.as_f64();
+                    match bits {
+                        8 => crate::float_types::encode_fp8_e4m3(fl) as u64,
+                        6 => crate::float_types::encode_fp6_e3m2(fl) as u64,
+                        4 => crate::float_types::encode_fp4_e2m1(fl) as u64,
+                        _ => 0,
+                    }
+                }
+                #[cfg(not(feature = "small-floats"))]
+                'H' | 'h' | 'Y' | 'y' | 'Q' | 'q' | 'E' | 'e' => {
+                    return Err(BddError::CliError(format!(
+                        "Small floating-point format '{}' requires the 'small-floats' feature to be enabled. Recompile with --features small-floats.",
+                        c
+                    )));
+                }
+                'C' | 'c' => {
+                    let f = Self::pop_field(tuple)?;
+                    match f {
+                        Field::Bytes(b) => {
+                            let mut v = 0u64;
+                            for byte in b {
+                                v = (v << 8) | (byte as u64);
+                            }
+                            v
+                        }
+                        _ => f.as_u64(),
+                    }
+                }
+                'z' => 0,
+                'o' => {
+                    if bits >= 64 {
+                        !0u64
+                    } else {
+                        (1u64 << bits) - 1
+                    }
+                }
+                'r' => {
+                    if bits == 0 {
+                        0
+                    } else {
+                        let mut b = [0u8; 8];
+                        OsRng.fill_bytes(&mut b);
+                        let raw = u64::from_be_bytes(b);
+                        let mask = if bits >= 64 {
+                            !0u64
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        raw & mask
+                    }
+                }
+                'k' | 'K' => self.counter.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
+
+            if "usmfdchyqebkv".contains(c) {
+                val = reverse_bits_u64(val, bits);
+            }
+            let mask = if bits >= 64 {
+                !0u64
+            } else {
+                (1u64 << bits) - 1
+            };
+            val &= mask;
+            unit = if bits >= 64 {
+                val
+            } else {
+                (unit << bits) | val
+            };
+        }
+
+        Ok(unit)
+    }
+
     pub fn pack(&self, mut tuple: Vec<Field>) -> Result<BigUint, BddError> {
+        if self.total_bits <= 64 {
+            let u = self.pack_u64(&mut tuple)?;
+            return Ok(BigUint::from(u));
+        }
         let mut unit = BigUint::zero();
 
         for p in &self.pattern {
@@ -704,7 +1497,7 @@ impl TuplePacker {
                 continue;
             }
             let mut val = match c {
-                'U' | 'u' | 'B' | 'b' | 'V' | 'v' => {
+                'U' | 'u' | 'B' | 'b' | 'V' | 'v' | '_' => {
                     let f = Self::pop_field(&mut tuple)?;
                     f.as_biguint()
                 }
@@ -1048,5 +1841,48 @@ mod tests {
         assert_eq!(unpacked[2].as_f64(), 2.0);
         assert_eq!(unpacked[3].as_f64(), -2.0);
         assert_eq!(unpacked[4].as_f64(), 0.5);
+    }
+
+    #[test]
+    fn test_framed_pattern_unification() {
+        // 1. Bare field pattern
+        let f1 = FramedPattern::parse("sync:11u,pid:13u").unwrap();
+        assert!(!f1.is_framed());
+        assert_eq!(f1.fields.len(), 2);
+        assert_eq!(f1.total_bits(), 24);
+
+        // 2. Form A container wrapping fields: 188B[11:sync:11u,pid:13u]
+        let f2 = FramedPattern::parse("188B[11:sync:11u,pid:13u]").unwrap();
+        assert!(f2.is_framed());
+        assert_eq!(f2.framing.raw_unit, Some(1504));
+        assert_eq!(f2.framing.offset, Some(11));
+        assert_eq!(f2.framing.unit_size, Some(24));
+        assert_eq!(f2.fields.len(), 2);
+        assert_eq!(f2.fields[0].name.as_deref(), Some("sync"));
+        assert_eq!(f2.fields[0].bits, 11);
+        assert_eq!(f2.fields[1].name.as_deref(), Some("pid"));
+        assert_eq!(f2.fields[1].bits, 13);
+
+        // 3. Form A with periodic gap and initial skip
+        let f3 = FramedPattern::parse("123:8[2:4]+8").unwrap();
+        assert!(f3.is_framed());
+        assert_eq!(f3.framing.skip, Some(123));
+        assert_eq!(f3.framing.raw_unit, Some(8));
+        assert_eq!(f3.framing.offset, Some(2));
+        assert_eq!(f3.framing.unit_size, Some(4));
+        assert_eq!(f3.framing.gap, Some(8));
+
+        // 4. Form B container
+        let f4 = FramedPattern::parse("[2:8U,4S:2]").unwrap();
+        assert!(f4.is_framed());
+        assert_eq!(f4.framing.raw_unit, Some(16));
+        assert_eq!(f4.framing.offset, Some(2));
+        assert_eq!(f4.framing.unit_size, Some(12));
+        assert_eq!(f4.fields.len(), 2);
+
+        // 5. TupleUnpacker directly unpacking from framed container pattern
+        let unpacker = TupleUnpacker::new("188B[11:sync:11u,pid:13u]").unwrap();
+        assert_eq!(unpacker.total_bits, 24);
+        assert_eq!(unpacker.pattern_items.len(), 2);
     }
 }

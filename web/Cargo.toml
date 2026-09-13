@@ -1,0 +1,11 @@
+[package]
+name = "bdd-web"
+version = "0.5.3"
+edition = "2021"
+description = "Decoupled standalone Web UI server for the bdd CLI"
+authors = ["Esa Turtiainen"]
+license = "GPL-3.0"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

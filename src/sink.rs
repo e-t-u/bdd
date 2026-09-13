@@ -1,4 +1,5 @@
-use crate::field::{reverse_bits, reverse_unit_bytes, Field};
+use crate::bits::BitValue;
+use crate::field::{reverse_bits, reverse_bits_u64, reverse_unit_bytes, Field};
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive, Zero};
 use std::io::Write;
@@ -6,13 +7,22 @@ use std::io::Write;
 /// Sink interface for writing units of a given bit width.
 pub trait UnitSink {
     fn write_bits(&mut self, unit: BigUint, bits: usize) -> std::io::Result<()>;
+    fn write_bit_value(&mut self, val: BitValue, bits: usize) -> std::io::Result<()> {
+        match val {
+            BitValue::Inline(v) => self.write_u64(v, bits),
+            BitValue::Big(b) => self.write_bits(b, bits),
+        }
+    }
+    fn write_u64(&mut self, val: u64, bits: usize) -> std::io::Result<()> {
+        self.write_bits(BigUint::from(val), bits)
+    }
     fn flush_stream(&mut self) -> std::io::Result<()>;
 }
 
 /// Bit-packing sink that outputs packed bytes into an underlying writer.
 pub struct FileOutputStream<W> {
     writer: W,
-    buffer: BigUint,
+    u64_buf: u64,
     bits_in_buffer: usize,
     reverse_bytes: bool,
     reverse_unit: bool,
@@ -22,7 +32,7 @@ impl<W: Write> FileOutputStream<W> {
     pub fn new(writer: W, reverse_bytes: bool, reverse_unit: bool) -> Self {
         Self {
             writer,
-            buffer: BigUint::zero(),
+            u64_buf: 0,
             bits_in_buffer: 0,
             reverse_bytes,
             reverse_unit,
@@ -31,33 +41,101 @@ impl<W: Write> FileOutputStream<W> {
 }
 
 impl<W: Write> UnitSink for FileOutputStream<W> {
+    fn write_bit_value(&mut self, val: BitValue, bits: usize) -> std::io::Result<()> {
+        match val {
+            BitValue::Inline(v) => self.write_u64(v, bits),
+            BitValue::Big(b) => self.write_bits(b, bits),
+        }
+    }
+
+    fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if bits == 0 {
+            return Ok(());
+        }
+        if self.reverse_unit {
+            val = reverse_bits_u64(val, bits);
+        }
+        let mask = if bits >= 64 {
+            !0u64
+        } else {
+            (1u64 << bits) - 1
+        };
+        val &= mask;
+
+        let combined = ((self.u64_buf as u128) << bits) | (val as u128);
+        let total_bits = self.bits_in_buffer + bits;
+        let full_bytes = total_bits / 8;
+        let rem_bits = total_bits % 8;
+
+        if full_bytes > 0 {
+            let mut out_bytes = [0u8; 16];
+            for (i, out_b) in out_bytes[..full_bytes].iter_mut().enumerate() {
+                let shift = rem_bits + (full_bytes - 1 - i) * 8;
+                let mut byte = (combined >> shift) as u8;
+                if self.reverse_bytes {
+                    byte = byte.reverse_bits();
+                }
+                *out_b = byte;
+            }
+            self.writer.write_all(&out_bytes[..full_bytes])?;
+        }
+
+        self.u64_buf = (combined & ((1u128 << rem_bits) - 1)) as u64;
+        self.bits_in_buffer = rem_bits;
+        Ok(())
+    }
+
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if bits <= 64 {
+            if let Some(v) = unit.to_u64() {
+                return self.write_u64(v, bits);
+            }
+        }
+        if bits == 0 {
+            return Ok(());
+        }
         if self.reverse_unit {
             unit = reverse_bits(&unit, bits);
         }
-        let mask = if bits > 0 {
-            (BigUint::one() << bits) - 1u32
-        } else {
-            BigUint::zero()
-        };
+        let mask = (BigUint::one() << bits) - 1u32;
         unit &= mask;
-        self.buffer = (std::mem::take(&mut self.buffer) << bits) | unit;
-        self.bits_in_buffer += bits;
 
-        while self.bits_in_buffer >= 8 {
-            let right_edge = self.bits_in_buffer - 8;
-            let mut val = (&self.buffer >> right_edge).to_u8().unwrap_or(0);
-            if self.reverse_bytes {
-                val = val.reverse_bits();
-            }
-            self.writer.write_all(&[val])?;
-            self.bits_in_buffer -= 8;
-            let rem_mask = if self.bits_in_buffer > 0 {
-                (BigUint::one() << self.bits_in_buffer) - 1u32
+        let combined = if self.bits_in_buffer > 0 {
+            (BigUint::from(self.u64_buf) << bits) | unit
+        } else {
+            unit
+        };
+        let total_bits = self.bits_in_buffer + bits;
+        let full_bytes = total_bits / 8;
+        let rem_bits = total_bits % 8;
+
+        if full_bytes > 0 {
+            let mut to_flush = if rem_bits > 0 {
+                &combined >> rem_bits
             } else {
-                BigUint::zero()
+                combined.clone()
             };
-            self.buffer &= rem_mask;
+            let mut bytes = Vec::with_capacity(full_bytes);
+            let byte_mask = BigUint::from(0xFFu32);
+            for _ in 0..full_bytes {
+                let mut b = (&to_flush & &byte_mask).to_u8().unwrap_or(0);
+                if self.reverse_bytes {
+                    b = b.reverse_bits();
+                }
+                bytes.push(b);
+                to_flush >>= 8;
+            }
+            bytes.reverse();
+            self.writer.write_all(&bytes)?;
+        }
+
+        if rem_bits > 0 {
+            let rem_mask = (BigUint::one() << rem_bits) - 1u32;
+            self.u64_buf = (&combined & &rem_mask).to_u64().unwrap_or(0);
+            self.bits_in_buffer = rem_bits;
+        } else {
+            self.u64_buf = 0;
+            self.bits_in_buffer = 0;
         }
         Ok(())
     }
@@ -65,14 +143,13 @@ impl<W: Write> UnitSink for FileOutputStream<W> {
     fn flush_stream(&mut self) -> std::io::Result<()> {
         if self.bits_in_buffer > 0 {
             let shift = 8 - self.bits_in_buffer;
-            let mut val = (std::mem::take(&mut self.buffer) << shift)
-                .to_u8()
-                .unwrap_or(0);
+            let mut val = (self.u64_buf as u8) << shift;
             if self.reverse_bytes {
                 val = val.reverse_bits();
             }
             self.writer.write_all(&[val])?;
             self.bits_in_buffer = 0;
+            self.u64_buf = 0;
         }
         self.writer.flush()
     }
@@ -100,7 +177,62 @@ impl<W: Write> HexOutputStream<W> {
 }
 
 impl<W: Write> UnitSink for HexOutputStream<W> {
+    fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            val = reverse_bits_u64(val, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            let mut out = 0u64;
+            let mut rem_bits = bits;
+            while rem_bits > 0 {
+                let chunk_bits = rem_bits.min(8);
+                let shift = rem_bits - chunk_bits;
+                let mask = if chunk_bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << chunk_bits) - 1
+                };
+                let chunk = ((val >> shift) & mask) as u8;
+                let rev_chunk = (chunk.reverse_bits() >> (8 - chunk_bits)) as u64;
+                out = (out << chunk_bits) | rev_chunk;
+                rem_bits -= chunk_bits;
+            }
+            val = out;
+        }
+        let mask = if bits >= 64 {
+            !0u64
+        } else {
+            (1u64 << bits) - 1
+        };
+        val &= mask;
+        let hex_digits = if bits == 0 { 1 } else { ((bits - 1) / 4) + 1 };
+
+        if self.output_column > 40
+            && self.output_units_in_line > 0
+            && self.output_units_in_line.is_power_of_two()
+        {
+            self.writer.write_all(b"\n")?;
+            self.output_column = 0;
+            self.output_units_in_line = 0;
+        }
+
+        if self.output_units_in_line > 0 {
+            self.writer.write_all(b" ")?;
+            self.output_column += 1;
+        }
+
+        write!(self.writer, "{:0width$x}", val, width = hex_digits)?;
+        self.output_column += hex_digits;
+        self.output_units_in_line += 1;
+        Ok(())
+    }
+
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if bits <= 64 {
+            if let Some(v) = unit.to_u64() {
+                return self.write_u64(v, bits);
+            }
+        }
         if self.reverse_unit {
             unit = reverse_bits(&unit, bits);
         }
@@ -168,7 +300,61 @@ impl<W: Write> BitOutputStream<W> {
 }
 
 impl<W: Write> UnitSink for BitOutputStream<W> {
+    fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            val = reverse_bits_u64(val, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            let mut out = 0u64;
+            let mut rem_bits = bits;
+            while rem_bits > 0 {
+                let chunk_bits = rem_bits.min(8);
+                let shift = rem_bits - chunk_bits;
+                let mask = if chunk_bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << chunk_bits) - 1
+                };
+                let chunk = ((val >> shift) & mask) as u8;
+                let rev_chunk = (chunk.reverse_bits() >> (8 - chunk_bits)) as u64;
+                out = (out << chunk_bits) | rev_chunk;
+                rem_bits -= chunk_bits;
+            }
+            val = out;
+        }
+        let mask = if bits >= 64 {
+            !0u64
+        } else {
+            (1u64 << bits) - 1
+        };
+        val &= mask;
+
+        if self.output_column > 40
+            && self.output_units_in_line > 0
+            && self.output_units_in_line.is_power_of_two()
+        {
+            self.writer.write_all(b"\n")?;
+            self.output_column = 0;
+            self.output_units_in_line = 0;
+        }
+
+        if self.output_units_in_line > 0 {
+            self.writer.write_all(b" ")?;
+            self.output_column += 1;
+        }
+
+        write!(self.writer, "{:0width$b}", val, width = bits)?;
+        self.output_column += bits;
+        self.output_units_in_line += 1;
+        Ok(())
+    }
+
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if bits <= 64 {
+            if let Some(v) = unit.to_u64() {
+                return self.write_u64(v, bits);
+            }
+        }
         if self.reverse_unit {
             unit = reverse_bits(&unit, bits);
         }
@@ -231,7 +417,44 @@ impl<W: Write> IntegerOutputStream<W> {
 }
 
 impl<W: Write> UnitSink for IntegerOutputStream<W> {
+    fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            val = reverse_bits_u64(val, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            let mut out = 0u64;
+            let mut rem_bits = bits;
+            while rem_bits > 0 {
+                let chunk_bits = rem_bits.min(8);
+                let shift = rem_bits - chunk_bits;
+                let mask = if chunk_bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << chunk_bits) - 1
+                };
+                let chunk = ((val >> shift) & mask) as u8;
+                let rev_chunk = (chunk.reverse_bits() >> (8 - chunk_bits)) as u64;
+                out = (out << chunk_bits) | rev_chunk;
+                rem_bits -= chunk_bits;
+            }
+            val = out;
+        }
+        let mask = if bits >= 64 {
+            !0u64
+        } else {
+            (1u64 << bits) - 1
+        };
+        val &= mask;
+        writeln!(self.writer, "{}", val)?;
+        Ok(())
+    }
+
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if bits <= 64 {
+            if let Some(v) = unit.to_u64() {
+                return self.write_u64(v, bits);
+            }
+        }
         if self.reverse_unit {
             unit = reverse_bits(&unit, bits);
         }
