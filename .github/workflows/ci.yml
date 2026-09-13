@@ -21,13 +21,13 @@ jobs:
       - name: Format Check
         run: cargo fmt --check
       - name: Clippy Lints
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Build
         run: |
-          cargo build --all-targets --all-features
+          cargo build --workspace --all-targets --all-features
           ln -sf target/debug/bdd ./bdd
       - name: Run Tests
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features
 
   package:
     name: Package (DEB, RPM, C Library, Python)
