@@ -1950,3 +1950,43 @@ fn test_mcp_transcode_and_generate() {
     let _ = child.wait();
 }
 
+#[test]
+fn test_unified_stream_pipeline_fusion_and_sources() {
+    // 1. "zeros -> 8 -> xor(0xAA) -> hex" with count 2
+    let out1 = Command::new(BDD_BIN)
+        .args(["zeros -> 8 -> xor(0xAA) -> hex", "--count", "2"])
+        .output()
+        .expect("failed to run bdd zeros xor");
+    assert!(out1.status.success());
+    assert_eq!(String::from_utf8(out1.stdout).unwrap().trim(), "aa aa");
+
+    // 2. Field fusion "4U4U -> {0|1} -> 8U -> hex"
+    let mut child2 = Command::new(BDD_BIN)
+        .args(["4U4U -> {0|1} -> 8U -> hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+    {
+        let mut stdin = child2.stdin.take().unwrap();
+        stdin.write_all(&[0xFA]).unwrap();
+    }
+    let out2 = child2.wait_with_output().unwrap();
+    assert!(out2.status.success());
+    assert_eq!(String::from_utf8(out2.stdout).unwrap().trim(), "fa");
+
+    // 3. Nibble swap "4U4U -> {1, 0} -> 4U4U -> hex"
+    let mut child3 = Command::new(BDD_BIN)
+        .args(["4U4U -> {1, 0} -> 4U4U -> hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+    {
+        let mut stdin = child3.stdin.take().unwrap();
+        stdin.write_all(&[0xFA]).unwrap();
+    }
+    let out3 = child3.wait_with_output().unwrap();
+    assert!(out3.status.success());
+    assert_eq!(String::from_utf8(out3.stdout).unwrap().trim(), "af");
+}

@@ -1,26 +1,23 @@
-use bdd::bits::{
-    copy_bits, read_bits_u64, write_bits_u64,
-    BitStreamReader, BitStreamWriter,
-};
+use bdd::bits::{copy_bits, read_bits_u64, write_bits_u64, BitStreamReader, BitStreamWriter};
 
 #[test]
 fn test_unaligned_bitstream_rust_primitives() {
     // 1. Unaligned reads across multiple bytes
     let payload = [0x5A, 0xA5, 0xF0, 0x0F]; // 01011010 10100101 11110000 00001111
-    // Offset 3, 11 bits:
-    // Byte 0 bits 3..7: 11010 (5 bits)
-    // Byte 1 bits 0..5: 101001 (6 bits)
-    // Combined 11 bits: 11010_101001 = 0b11010101001 = 1705
+                                            // Offset 3, 11 bits:
+                                            // Byte 0 bits 3..7: 11010 (5 bits)
+                                            // Byte 1 bits 0..5: 101001 (6 bits)
+                                            // Combined 11 bits: 11010_101001 = 0b11010101001 = 1705
     let val = read_bits_u64(&payload, 3, 11).unwrap();
     assert_eq!(val, 1705);
 
     // 2. Unaligned writes without disturbing neighbors
     let mut buffer = [0x00, 0x00, 0x00];
     write_bits_u64(&mut buffer, 5, 13, 0x1FFF).unwrap(); // 13 ones starting at bit 5
-    // Bit 5..17 set to 1.
-    // Byte 0: bits 5,6,7 = 0b0000_0111 = 0x07
-    // Byte 1: bits 0..7  = 0b1111_1111 = 0xFF
-    // Byte 2: bits 0,1   = 0b1100_0000 = 0xC0
+                                                         // Bit 5..17 set to 1.
+                                                         // Byte 0: bits 5,6,7 = 0b0000_0111 = 0x07
+                                                         // Byte 1: bits 0..7  = 0b1111_1111 = 0xFF
+                                                         // Byte 2: bits 0,1   = 0b1100_0000 = 0xC0
     assert_eq!(buffer, [0x07, 0xFF, 0xC0]);
     assert_eq!(read_bits_u64(&buffer, 5, 13).unwrap(), 0x1FFF);
 

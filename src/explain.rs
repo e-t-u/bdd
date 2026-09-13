@@ -175,9 +175,9 @@ fn sanitize_ident(name: Option<&str>, idx: usize, is_rust: bool) -> String {
     if is_rust {
         const RUST_KEYWORDS: &[&str] = &[
             "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
-            "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
-            "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
-            "type", "unsafe", "use", "where", "while", "async", "await", "dyn",
+            "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+            "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+            "unsafe", "use", "where", "while", "async", "await", "dyn",
         ];
         if RUST_KEYWORDS.contains(&cleaned.as_str()) {
             return format!("r#{}", cleaned);

@@ -13,12 +13,7 @@ fn main() {
 
     if let Some(shell) = cli.completions {
         use clap::CommandFactory;
-        clap_complete::generate(
-            shell,
-            &mut Cli::command(),
-            "bdd",
-            &mut std::io::stdout(),
-        );
+        clap_complete::generate(shell, &mut Cli::command(), "bdd", &mut std::io::stdout());
         return;
     }
 

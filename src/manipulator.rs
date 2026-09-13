@@ -1,6 +1,6 @@
 use crate::error::BddError;
 use crate::field::Field;
-use num_bigint::BigInt;
+use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Signed, ToPrimitive, Zero};
 
 fn resolve_index(len: usize, idx: isize) -> Option<usize> {
@@ -27,32 +27,108 @@ pub trait TupleManipulator {
     fn manipulate(&self, tuple: Vec<Field>) -> Option<Vec<Field>>;
 }
 
-/// Reorders tuple fields according to a comma-separated list of indices.
+/// A constituent part in a rearranged/fused output field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RearrangeFieldPart {
+    pub index: isize,
+    pub width: Option<usize>,
+}
+
+/// A target output field in a rearrange operation (can be a single field or multiple fused fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RearrangeItem {
+    pub parts: Vec<RearrangeFieldPart>,
+}
+
+/// Reorders and fuses tuple fields according to a specification.
+/// Supports index lists (`"1,0"`), tuple projections (`"{0, 1|2}"`),
+/// and bitwise field fusion (`"0|1"`, `"0:4|1:4"`).
 pub struct RearrangeManipulator {
-    fieldlist: Vec<isize>,
+    items: Vec<RearrangeItem>,
+    known_widths: Vec<usize>,
     empty: bool,
 }
 
 impl RearrangeManipulator {
     pub fn new(arg: &str) -> Result<Self, BddError> {
-        if arg.is_empty() {
+        Self::new_with_schema(arg, None, None)
+    }
+
+    pub fn new_with_schema(
+        arg: &str,
+        field_names: Option<&[String]>,
+        field_widths: Option<&[usize]>,
+    ) -> Result<Self, BddError> {
+        let trimmed = arg.trim();
+        let body = if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            trimmed[1..trimmed.len() - 1].trim()
+        } else {
+            trimmed
+        };
+
+        if body.is_empty() {
             return Ok(Self {
-                fieldlist: Vec::new(),
+                items: Vec::new(),
+                known_widths: field_widths.unwrap_or(&[]).to_vec(),
                 empty: true,
             });
         }
-        let parts = arg.split(',');
-        let mut fieldlist = Vec::new();
+
+        let parts = body.split(',');
+        let mut items = Vec::new();
         for p in parts {
-            match p.trim().parse::<isize>() {
-                Ok(n) => fieldlist.push(n),
-                Err(_) => return Err(BddError::RearrangeNonNumber),
+            let p_trim = p.trim();
+            if p_trim.is_empty() {
+                continue;
+            }
+            let mut sub_parts = Vec::new();
+            for sub in p_trim.split('|') {
+                let sub = sub.trim();
+                if sub.is_empty() {
+                    continue;
+                }
+                let (id_str, width) = if let Some(colon_idx) = sub.find(':') {
+                    let id = sub[..colon_idx].trim();
+                    let w_str = sub[colon_idx + 1..].trim();
+                    let w = w_str.parse::<usize>().map_err(|_| {
+                        BddError::CliError(format!("Invalid bit width '{}' in rearrange", w_str))
+                    })?;
+                    (id, Some(w))
+                } else {
+                    (sub, None)
+                };
+
+                let index = if let Ok(n) = id_str.parse::<isize>() {
+                    n
+                } else if let Some(names) = field_names {
+                    if let Some(pos) = names.iter().position(|n| n == id_str) {
+                        pos as isize
+                    } else {
+                        return Err(BddError::CliError(format!(
+                            "Unknown field name '{}' in rearrange specification '{}'",
+                            id_str, arg
+                        )));
+                    }
+                } else {
+                    return Err(BddError::RearrangeNonNumber);
+                };
+
+                sub_parts.push(RearrangeFieldPart { index, width });
+            }
+            if !sub_parts.is_empty() {
+                items.push(RearrangeItem { parts: sub_parts });
             }
         }
+
         Ok(Self {
-            fieldlist,
+            items,
+            known_widths: field_widths.unwrap_or(&[]).to_vec(),
             empty: false,
         })
+    }
+
+    pub fn set_known_widths(&mut self, widths: Vec<usize>) {
+        self.known_widths = widths;
     }
 }
 
@@ -62,11 +138,59 @@ impl TupleManipulator for RearrangeManipulator {
             return Some(tuple);
         }
         let mut out = Vec::new();
-        for &f in &self.fieldlist {
-            if let Some(idx) = resolve_index(tuple.len(), f) {
-                out.push(tuple[idx].clone());
+        for item in &self.items {
+            if item.parts.len() == 1 && item.parts[0].width.is_none() {
+                let f = item.parts[0].index;
+                if let Some(idx) = resolve_index(tuple.len(), f) {
+                    out.push(tuple[idx].clone());
+                } else {
+                    crate::diag::warn(format!("Field {} mentioned in --rearrange missing", f));
+                }
             } else {
-                crate::diag::warn(format!("Field {} mentioned in --rearrange missing", f));
+                let mut fused_val = BigUint::zero();
+                let mut total_width = 0usize;
+                let mut all_valid = true;
+
+                for part in &item.parts {
+                    if let Some(idx) = resolve_index(tuple.len(), part.index) {
+                        let field = &tuple[idx];
+                        let val = field.as_biguint();
+                        let width = if let Some(w) = part.width {
+                            w
+                        } else if let Some(&w) = self.known_widths.get(idx) {
+                            w
+                        } else {
+                            match field {
+                                Field::Bits(_, bits) => *bits,
+                                Field::Bytes(b) => b.len() * 8,
+                                _ => {
+                                    let b = val.bits() as usize;
+                                    if b == 0 {
+                                        1
+                                    } else {
+                                        b
+                                    }
+                                }
+                            }
+                        };
+                        let mask = if width == 0 {
+                            BigUint::zero()
+                        } else {
+                            (BigUint::one() << width) - 1u32
+                        };
+                        fused_val = (fused_val << width) | (&val & mask);
+                        total_width += width;
+                    } else {
+                        crate::diag::warn(format!(
+                            "Field {} mentioned in --rearrange missing",
+                            part.index
+                        ));
+                        all_valid = false;
+                    }
+                }
+                if all_valid {
+                    out.push(Field::Bits(fused_val, total_width));
+                }
             }
         }
         Some(out)
@@ -272,7 +396,11 @@ impl TupleManipulator for RoundManipulator {
 
         let is_true_rounding = matches!(
             self.mode,
-            CutMode::Round | CutMode::RoundTiesEven | CutMode::Floor | CutMode::Ceil | CutMode::Trunc
+            CutMode::Round
+                | CutMode::RoundTiesEven
+                | CutMode::Floor
+                | CutMode::Ceil
+                | CutMode::Trunc
         );
 
         if let Field::Float(f) = tuple[idx] {
@@ -494,7 +622,8 @@ impl ClampManipulator {
             }
             _ => {
                 return Err(BddError::ManipulatorArgumentError(
-                    "Argument for --clamp must be FIELD,LIMIT[:MODE] or FIELD,MIN,MAX[:MODE]".to_string(),
+                    "Argument for --clamp must be FIELD,LIMIT[:MODE] or FIELD,MIN,MAX[:MODE]"
+                        .to_string(),
                 ));
             }
         };
@@ -532,7 +661,11 @@ impl TupleManipulator for ClampManipulator {
                     tuple[idx] = Field::Float(0.0);
                     Some(tuple)
                 }
-                CutMode::Saturate | CutMode::Trunc | CutMode::Round | CutMode::RoundTiesEven | CutMode::Floor => {
+                CutMode::Saturate
+                | CutMode::Trunc
+                | CutMode::Round
+                | CutMode::RoundTiesEven
+                | CutMode::Floor => {
                     let val = if f > max_f { max_f } else { min_f };
                     tuple[idx] = Field::Float(val);
                     Some(tuple)
@@ -563,13 +696,25 @@ impl TupleManipulator for ClampManipulator {
                     set_bigint_field(&mut tuple, idx, BigInt::zero());
                     Some(tuple)
                 }
-                CutMode::Saturate | CutMode::Trunc | CutMode::Round | CutMode::RoundTiesEven | CutMode::Floor => {
-                    let val = if bi > self.max { self.max.clone() } else { self.min.clone() };
+                CutMode::Saturate
+                | CutMode::Trunc
+                | CutMode::Round
+                | CutMode::RoundTiesEven
+                | CutMode::Floor => {
+                    let val = if bi > self.max {
+                        self.max.clone()
+                    } else {
+                        self.min.clone()
+                    };
                     set_bigint_field(&mut tuple, idx, val);
                     Some(tuple)
                 }
                 CutMode::Ceil => {
-                    let val = if bi < self.min { self.min.clone() } else { self.max.clone() };
+                    let val = if bi < self.min {
+                        self.min.clone()
+                    } else {
+                        self.max.clone()
+                    };
                     set_bigint_field(&mut tuple, idx, val);
                     Some(tuple)
                 }
@@ -1071,11 +1216,27 @@ pub fn build_pipeline_from_args(
 }
 
 pub fn build_manipulator_from_spec(spec: &str) -> Result<Box<dyn TupleManipulator>, BddError> {
+    build_manipulator_from_spec_with_schema(spec, None, None)
+}
+
+pub fn build_manipulator_from_spec_with_schema(
+    spec: &str,
+    field_names: Option<&[String]>,
+    field_widths: Option<&[usize]>,
+) -> Result<Box<dyn TupleManipulator>, BddError> {
     let s = spec.trim();
     if s.is_empty() {
         return Err(BddError::CliError(
             "Empty manipulator specification".to_string(),
         ));
+    }
+
+    if s.starts_with('{') && s.ends_with('}') {
+        return Ok(Box::new(RearrangeManipulator::new_with_schema(
+            s,
+            field_names,
+            field_widths,
+        )?));
     }
 
     let (name, arg) = if let Some(paren_idx) = s.find('(') {
@@ -1110,10 +1271,24 @@ pub fn build_manipulator_from_spec(spec: &str) -> Result<Box<dyn TupleManipulato
     };
 
     match norm_name.as_str() {
-        "rearrange" => Ok(Box::new(RearrangeManipulator::new(arg)?)),
+        "rearrange" => Ok(Box::new(RearrangeManipulator::new_with_schema(
+            arg,
+            field_names,
+            field_widths,
+        )?)),
+        "glue" | "concat" => {
+            let fused_arg = arg.replace(',', "|");
+            Ok(Box::new(RearrangeManipulator::new_with_schema(
+                &fused_arg,
+                field_names,
+                field_widths,
+            )?))
+        }
         "clamp" => Ok(Box::new(ClampManipulator::new(&field_or_single(arg))?)),
         "round" | "cut-maxint" => Ok(Box::new(RoundManipulator::new(&field_or_single(arg))?)),
-        "remove-right" => Ok(Box::new(RemoveRightManipulator::new(&field_or_single(arg))?)),
+        "remove-right" => Ok(Box::new(RemoveRightManipulator::new(&field_or_single(
+            arg,
+        ))?)),
         "shift-right" => Ok(Box::new(ShiftRightManipulator::new(&field_or_single(arg))?)),
         "shift-left" => Ok(Box::new(ShiftLeftManipulator::new(&field_or_single(arg))?)),
         "xor" => Ok(Box::new(XorManipulator::new(&field_or_single(arg))?)),
@@ -1153,6 +1328,57 @@ mod tests {
             vec![
                 Field::UInt(BigUint::from(20u32)),
                 Field::UInt(BigUint::from(10u32)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rearrange_fusion() {
+        // "0|1" fuses field 0 (4 bits: 1111 = 15) and field 1 (4 bits: 1010 = 10) -> 11111010 = 250 (0xFA)
+        let widths = vec![4, 4];
+        let manip = RearrangeManipulator::new_with_schema("0|1", None, Some(&widths)).unwrap();
+        let input = vec![
+            Field::UInt(BigUint::from(15u32)),
+            Field::UInt(BigUint::from(10u32)),
+        ];
+        let output = manip.manipulate(input).unwrap();
+        assert_eq!(output, vec![Field::Bits(BigUint::from(250u32), 8)]);
+
+        // "{0, 1|2}" keeps field 0, fuses 1 and 2
+        let widths3 = vec![8, 4, 4];
+        let manip3 =
+            RearrangeManipulator::new_with_schema("{0, 1|2}", None, Some(&widths3)).unwrap();
+        let input3 = vec![
+            Field::UInt(BigUint::from(1u32)),
+            Field::UInt(BigUint::from(15u32)),
+            Field::UInt(BigUint::from(10u32)),
+        ];
+        let output3 = manip3.manipulate(input3).unwrap();
+        assert_eq!(
+            output3,
+            vec![
+                Field::UInt(BigUint::from(1u32)),
+                Field::Bits(BigUint::from(250u32), 8)
+            ]
+        );
+
+        // Named fields with {tag, hi|lo}
+        let names = vec!["tag".to_string(), "hi".to_string(), "lo".to_string()];
+        let manip_named =
+            RearrangeManipulator::new_with_schema("{tag, hi|lo}", Some(&names), Some(&widths3))
+                .unwrap();
+        let output_named = manip_named
+            .manipulate(vec![
+                Field::UInt(BigUint::from(42u32)),
+                Field::UInt(BigUint::from(15u32)),
+                Field::UInt(BigUint::from(10u32)),
+            ])
+            .unwrap();
+        assert_eq!(
+            output_named,
+            vec![
+                Field::UInt(BigUint::from(42u32)),
+                Field::Bits(BigUint::from(250u32), 8)
             ]
         );
     }

@@ -505,6 +505,30 @@ impl TupleUnpacker {
         Some(names)
     }
 
+    /// Returns the bit width of each unpacked field in the tuple.
+    pub fn field_widths(&self) -> Vec<usize> {
+        let mut widths = Vec::new();
+        for p in &self.pattern_items {
+            let c = p.char_code;
+            if c == 'x' || c == 'X' {
+                continue;
+            }
+            if c == 'M' || c == 'm' {
+                widths.push(p.bits.saturating_sub(1));
+                widths.push(1);
+            } else if "Ff".contains(c) {
+                widths.push(32);
+            } else if "Dd".contains(c) {
+                widths.push(64);
+            } else if "HhYy".contains(c) {
+                widths.push(16);
+            } else {
+                widths.push(p.bits);
+            }
+        }
+        widths
+    }
+
     pub fn unpack(&self, mut unit: BigUint) -> Vec<Field> {
         let mut tuple = Vec::new();
         for p in &self.reversed_pattern {

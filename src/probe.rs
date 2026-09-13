@@ -20,35 +20,75 @@ pub struct DetectedSignature {
 }
 
 pub static FILE_SIGNATURES: &[(&[u8], &str, &str)] = &[
-    (&[0x7F, b'E', b'L', b'F'], "ELF", "Executable and Linkable Format binary"),
+    (
+        &[0x7F, b'E', b'L', b'F'],
+        "ELF",
+        "Executable and Linkable Format binary",
+    ),
     (b"MZ", "MZ / PE", "DOS/Windows Portable Executable"),
-    (&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A], "PNG", "Portable Network Graphics image"),
+    (
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "PNG",
+        "Portable Network Graphics image",
+    ),
     (&[0xFF, 0xD8, 0xFF], "JPEG", "JPEG image bitstream"),
     (b"GIF87a", "GIF87a", "GIF image header"),
     (b"GIF89a", "GIF89a", "GIF image header"),
     (b"%PDF", "PDF", "Adobe Portable Document Format"),
-    (&[b'P', b'K', 0x03, 0x04], "ZIP", "ZIP / JAR / APK / DOCX archive"),
+    (
+        &[b'P', b'K', 0x03, 0x04],
+        "ZIP",
+        "ZIP / JAR / APK / DOCX archive",
+    ),
     (&[0x1F, 0x8B], "GZIP", "Gzip compressed container"),
     (&[0x42, 0x5A, 0x68], "BZIP2", "Bzip2 compressed container"),
-    (&[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00], "XZ", "XZ compressed container"),
-    (&[0x28, 0xB5, 0x2F, 0xFD], "ZSTD", "Zstandard compressed stream"),
-    (b"RIFF", "RIFF", "RIFF multimedia container (WAV / AVI / WEBP)"),
+    (
+        &[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00],
+        "XZ",
+        "XZ compressed container",
+    ),
+    (
+        &[0x28, 0xB5, 0x2F, 0xFD],
+        "ZSTD",
+        "Zstandard compressed stream",
+    ),
+    (
+        b"RIFF",
+        "RIFF",
+        "RIFF multimedia container (WAV / AVI / WEBP)",
+    ),
     (b"BM", "BMP", "Bitmap image header"),
     (b"OggS", "OGG", "Ogg multimedia bitstream container"),
     (b"fLaC", "FLAC", "Free Lossless Audio Codec"),
     (b"MThd", "MIDI", "Standard MIDI file"),
+    (b"SQLite format 3\0", "SQLite3", "SQLite 3 database"),
     (
-        b"SQLite format 3\0",
-        "SQLite3",
-        "SQLite 3 database",
+        &[0xCA, 0xFE, 0xBA, 0xBE],
+        "Mach-O / Java",
+        "Mach-O Fat Binary or Java Class File",
     ),
-    (&[0xCA, 0xFE, 0xBA, 0xBE], "Mach-O / Java", "Mach-O Fat Binary or Java Class File"),
-    (&[0xFE, 0xED, 0xFA, 0xCE], "Mach-O 32", "Mach-O 32-bit binary"),
-    (&[0xFE, 0xED, 0xFA, 0xCF], "Mach-O 64", "Mach-O 64-bit binary"),
-    (&[0xCF, 0xFA, 0xED, 0xFE], "Mach-O 64 (LE)", "Mach-O 64-bit Little Endian binary"),
+    (
+        &[0xFE, 0xED, 0xFA, 0xCE],
+        "Mach-O 32",
+        "Mach-O 32-bit binary",
+    ),
+    (
+        &[0xFE, 0xED, 0xFA, 0xCF],
+        "Mach-O 64",
+        "Mach-O 64-bit binary",
+    ),
+    (
+        &[0xCF, 0xFA, 0xED, 0xFE],
+        "Mach-O 64 (LE)",
+        "Mach-O 64-bit Little Endian binary",
+    ),
     (b"wOFF", "WOFF", "Web Open Font Format"),
     (b"wOF2", "WOFF2", "Web Open Font Format 2"),
-    (&[0x00, 0x61, 0x73, 0x6D], "Wasm", "WebAssembly binary module (\\0asm)"),
+    (
+        &[0x00, 0x61, 0x73, 0x6D],
+        "Wasm",
+        "WebAssembly binary module (\\0asm)",
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,7 +222,9 @@ pub fn scan_file_signatures(buf: &[u8]) -> Vec<DetectedSignature> {
     if buf.len() >= 188
         && buf[0] == 0x47
         && (buf.len() < 376 || buf[188] == 0x47)
-        && !detected.iter().any(|d| d.offset == 0 && d.name == "MPEG-TS")
+        && !detected
+            .iter()
+            .any(|d| d.offset == 0 && d.name == "MPEG-TS")
     {
         detected.push(DetectedSignature {
             offset: 0,
@@ -199,7 +241,9 @@ pub fn scan_file_signatures(buf: &[u8]) -> Vec<DetectedSignature> {
             for &(sig, name, desc) in FILE_SIGNATURES {
                 if sig.len() >= 3
                     && slice.starts_with(sig)
-                    && !detected.iter().any(|d| d.offset == offset && d.name == name)
+                    && !detected
+                        .iter()
+                        .any(|d| d.offset == offset && d.name == name)
                 {
                     detected.push(DetectedSignature {
                         offset,
@@ -1379,6 +1423,8 @@ mod tests {
         embedded.extend_from_slice(&[0x7F, b'E', b'L', b'F']);
         embedded.extend_from_slice(&[0u8; 20]);
         let sigs_embedded = scan_file_signatures(&embedded);
-        assert!(sigs_embedded.iter().any(|s| s.offset == 16 && s.name == "ELF"));
+        assert!(sigs_embedded
+            .iter()
+            .any(|s| s.offset == 16 && s.name == "ELF"));
     }
 }

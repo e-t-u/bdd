@@ -409,9 +409,10 @@ impl BitStreamWriter {
         if n == 0 {
             return Ok(());
         }
-        let needed_bits = self.total_bits.checked_add(n).ok_or_else(|| {
-            BddError::OutOfBounds("BitStreamWriter: bit overflow".to_string())
-        })?;
+        let needed_bits = self
+            .total_bits
+            .checked_add(n)
+            .ok_or_else(|| BddError::OutOfBounds("BitStreamWriter: bit overflow".to_string()))?;
         let needed_bytes = needed_bits.div_ceil(8);
         if needed_bytes > self.buffer.len() {
             self.buffer.resize(needed_bytes, 0);
@@ -426,9 +427,10 @@ impl BitStreamWriter {
         if n == 0 {
             return Ok(());
         }
-        let needed_bits = self.total_bits.checked_add(n).ok_or_else(|| {
-            BddError::OutOfBounds("BitStreamWriter: bit overflow".to_string())
-        })?;
+        let needed_bits = self
+            .total_bits
+            .checked_add(n)
+            .ok_or_else(|| BddError::OutOfBounds("BitStreamWriter: bit overflow".to_string()))?;
         let needed_bytes = needed_bits.div_ceil(8);
         if needed_bytes > self.buffer.len() {
             self.buffer.resize(needed_bytes, 0);
@@ -557,10 +559,10 @@ mod tests {
         // 8 bits total: 3U (3 bits) + 2u (2 bits) + 3M (3 bits)
         let mut writer = BitStreamWriter::new();
         let fields = vec![
-            Field::UInt(BigUint::from(7u32)),        // 3U
-            Field::UInt(BigUint::from(2u32)),        // 2u
-            Field::UInt(BigUint::from(1u32)),        // 3M sign
-            Field::UInt(BigUint::from(1u32)),        // 3M mag
+            Field::UInt(BigUint::from(7u32)), // 3U
+            Field::UInt(BigUint::from(2u32)), // 2u
+            Field::UInt(BigUint::from(1u32)), // 3M sign
+            Field::UInt(BigUint::from(1u32)), // 3M mag
         ];
         writer.write_tuple(&packer, fields).unwrap();
         assert_eq!(writer.total_bits(), 8);

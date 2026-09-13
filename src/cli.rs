@@ -782,6 +782,58 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 cli.output_gap = out.gap.map(|v| v.to_string());
             }
         }
+        if let Some(ref src) = parsed.source {
+            match src.as_str() {
+                "stdin" => cli.input_file = "-".to_string(),
+                "zeros" => cli.input_zeros = true,
+                "ones" => cli.input_ones = true,
+                "rand" => cli.input_random = true,
+                "counter" => cli.input_counter = true,
+                s if s.starts_with("counter(") && s.ends_with(')') => {
+                    cli.input_counter = true;
+                }
+                "netlink" => cli.input_netlink = Some("connector:proc".to_string()),
+                s if s.starts_with("netlink:") => {
+                    cli.input_netlink = Some(s["netlink:".len()..].to_string());
+                }
+                "tuples" => cli.input_tuples = true,
+                s if s.starts_with("file(") && s.ends_with(')') => {
+                    let path = s[5..s.len() - 1]
+                        .trim()
+                        .trim_matches('\'')
+                        .trim_matches('"');
+                    cli.input_file = path.to_string();
+                }
+                _ => {}
+            }
+        }
+        if let Some(ref sink) = parsed.sink {
+            match sink.as_str() {
+                "stdout" => cli.output_file = "-".to_string(),
+                "hex" => cli.output_hex = true,
+                "bits" => cli.output_bits = true,
+                "json" => cli.output_json = true,
+                s if s.starts_with("json:") => {
+                    cli.output_json = true;
+                    if s == "json:object" {
+                        cli.json_object = true;
+                    }
+                }
+                "csv" => cli.output_csv = true,
+                "tuples" => cli.output_tuples = true,
+                "visual" => cli.output_visual = true,
+                "integers" => cli.output_integers = true,
+                "raw" | "bin" => {}
+                s if s.starts_with("file(") && s.ends_with(')') => {
+                    let path = s[5..s.len() - 1]
+                        .trim()
+                        .trim_matches('\'')
+                        .trim_matches('"');
+                    cli.output_file = path.to_string();
+                }
+                _ => {}
+            }
+        }
     }
 
     // When reading text tuples (--input-tuples), the input is already divided into fields by commas.

@@ -12,12 +12,92 @@ pub struct StreamSpec {
     pub gap: Option<u64>,
 }
 
-/// Parsed stream I/O pattern combining input, optional inline manipulators, and output specifications.
+/// Parsed stream I/O pattern combining optional source, input, inline manipulators, output, and optional sink.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamIoPattern {
+    pub source: Option<String>,
     pub input: Option<StreamSpec>,
     pub manipulators: Vec<String>,
     pub output: Option<StreamSpec>,
+    pub sink: Option<String>,
+}
+
+/// Checks if a token represents a pipeline source keyword or file.
+pub fn is_source(s: &str) -> bool {
+    let s = s.trim();
+    s == "stdin"
+        || s == "zeros"
+        || s == "ones"
+        || s == "rand"
+        || s == "counter"
+        || s.starts_with("counter(")
+        || s == "netlink"
+        || s.starts_with("netlink:")
+        || s == "tuples"
+        || (s.starts_with("file(") && s.ends_with(')'))
+}
+
+/// Checks if a token represents a pipeline sink keyword or file.
+pub fn is_sink(s: &str) -> bool {
+    let s = s.trim();
+    s == "stdout"
+        || s == "hex"
+        || s == "bits"
+        || s == "json"
+        || s.starts_with("json:")
+        || s == "csv"
+        || s == "tuples"
+        || s == "raw"
+        || s == "bin"
+        || s == "visual"
+        || s == "integers"
+        || (s.starts_with("file(") && s.ends_with(')'))
+}
+
+/// Checks if a token represents an inline manipulator (e.g. `{0, 1|2}`, `xor(...)`, `add(...)`).
+pub fn is_manipulator(s: &str) -> bool {
+    let s = s.trim();
+    (s.starts_with('{') && s.ends_with('}'))
+        || s == "not"
+        || s == "abs"
+        || s == "sign"
+        || s.starts_with("xor(")
+        || s.starts_with("and(")
+        || s.starts_with("or(")
+        || s.starts_with("add(")
+        || s.starts_with("sub(")
+        || s.starts_with("mul(")
+        || s.starts_with("div(")
+        || s.starts_with("mod(")
+        || s.starts_with("clamp(")
+        || s.starts_with("round(")
+        || s.starts_with("filter(")
+        || s.starts_with("rearrange(")
+        || s.starts_with("glue(")
+        || s.starts_with("concat(")
+        || s.starts_with("split(")
+        || s.starts_with("shift_left(")
+        || s.starts_with("shift_right(")
+        || s.starts_with("shift-left(")
+        || s.starts_with("shift-right(")
+        || s.starts_with("remove_right(")
+        || s.starts_with("remove-right(")
+}
+
+fn is_pure_pattern(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || is_manipulator(s) || is_source(s) || is_sink(s) {
+        return false;
+    }
+    crate::pattern::TupleUnpacker::new(s).is_ok()
+}
+
+fn is_pure_slicer(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || is_manipulator(s) || is_source(s) || is_sink(s) {
+        return false;
+    }
+    parse_size_with_suffix(s, "check", true).is_ok()
 }
 
 /// Check if a string looks like a stream I/O pattern (vs a tuple pattern).
@@ -28,6 +108,10 @@ pub fn is_stream_io_pattern(s: &str) -> bool {
     }
     // Explicit stream arrow
     if s.contains("->") {
+        return true;
+    }
+    // Tuple projector
+    if s.starts_with('{') && s.ends_with('}') {
         return true;
     }
     // Container brackets
@@ -54,14 +138,15 @@ pub fn is_stream_io_pattern(s: &str) -> bool {
     false
 }
 
-/// Parse a full stream I/O pattern, e.g. "123:8[2:4]+8 -> 5B:8[2:4]" or "8 -> xor(0xFF) -> 8".
+/// Parse a full stream I/O pattern, e.g. "123:8[2:4]+8 -> 5B:8[2:4]", "8 -> xor(0xFF) -> 8",
+/// or unified pipeline "stdin -> 4U4U -> {0|1} -> 16U -> hex".
 pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddError> {
     let trimmed = input_str.trim();
     if trimmed.is_empty() {
         return Ok(StreamIoPattern::default());
     }
 
-    // Split on top-level '->' (outside any brackets or parentheses)
+    // Split on top-level '->' (outside any brackets [], parentheses (), or braces {})
     let mut depth = 0;
     let mut arrow_indices = Vec::new();
     let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
@@ -71,8 +156,8 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
     while i < n {
         let (byte_idx, c) = chars[i];
         match c {
-            '[' | '(' => depth += 1,
-            ']' | ')' => {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => {
                 if depth > 0 {
                     depth -= 1;
                 }
@@ -86,65 +171,105 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         i += 1;
     }
 
-    if arrow_indices.is_empty() {
-        let in_spec = Some(parse_stream_spec(trimmed)?);
-        Ok(StreamIoPattern {
-            input: in_spec,
+    let mut segments: Vec<&str> = Vec::new();
+    let mut prev_idx = 0;
+    for &idx in &arrow_indices {
+        let seg = trimmed[prev_idx..idx].trim();
+        if !seg.is_empty() {
+            segments.push(seg);
+        }
+        prev_idx = idx + 2;
+    }
+    let last_seg = trimmed[prev_idx..].trim();
+    if !last_seg.is_empty() {
+        segments.push(last_seg);
+    }
+
+    let mut source = None;
+    if segments.len() > 1 && is_source(segments[0]) {
+        source = Some(segments.remove(0).to_string());
+    }
+
+    let mut sink = None;
+    if segments.len() > 1 && is_sink(segments.last().unwrap()) {
+        sink = Some(segments.pop().unwrap().to_string());
+    }
+
+    let mut input = None;
+    let mut output = None;
+    let mut manipulators = Vec::new();
+
+    if segments.is_empty() {
+        return Ok(StreamIoPattern {
+            source,
+            input: None,
             manipulators: Vec::new(),
             output: None,
-        })
-    } else if arrow_indices.len() == 1 {
-        let idx = arrow_indices[0];
-        let left = trimmed[..idx].trim();
-        let right = trimmed[idx + 2..].trim();
-        let in_spec = if !left.is_empty() {
-            Some(parse_stream_spec(left)?)
-        } else {
-            None
-        };
-        let out_spec = if !right.is_empty() {
-            Some(parse_stream_spec(right)?)
-        } else {
-            None
-        };
-        Ok(StreamIoPattern {
-            input: in_spec,
-            manipulators: Vec::new(),
-            output: out_spec,
-        })
-    } else {
-        let first_idx = arrow_indices[0];
-        let last_idx = *arrow_indices.last().unwrap();
-        let left = trimmed[..first_idx].trim();
-        let right = trimmed[last_idx + 2..].trim();
+            sink,
+        });
+    }
 
-        let in_spec = if !left.is_empty() {
-            Some(parse_stream_spec(left)?)
-        } else {
-            None
-        };
-        let out_spec = if !right.is_empty() {
-            Some(parse_stream_spec(right)?)
-        } else {
-            None
-        };
-
-        let mut manipulators = Vec::new();
-        for k in 0..arrow_indices.len() - 1 {
-            let start = arrow_indices[k] + 2;
-            let end = arrow_indices[k + 1];
-            let seg = trimmed[start..end].trim();
-            if !seg.is_empty() {
-                manipulators.push(seg.to_string());
+    // Check if segment 0 and 1 form an explicit (slicer -> pattern) pair:
+    // e.g. "8 -> 4U4U"
+    if segments.len() >= 2 && is_pure_slicer(segments[0]) && is_pure_pattern(segments[1]) {
+        let u_str = segments.remove(0);
+        let p_str = segments.remove(0);
+        let mut in_spec = parse_stream_spec(p_str)?;
+        let u_val = parse_size_with_suffix(u_str, "unit size", true)? as usize;
+        if let Some(ref p) = in_spec.pattern {
+            if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p) {
+                if unpacker.total_bits != u_val {
+                    return Err(BddError::CliError(format!(
+                        "Dimension mismatch in stream pattern: Slicer specifies {} bits, but pattern '{}' requires {} bits",
+                        u_val, p, unpacker.total_bits
+                    )));
+                }
             }
         }
-
-        Ok(StreamIoPattern {
-            input: in_spec,
-            manipulators,
-            output: out_spec,
-        })
+        in_spec.unit_size = Some(u_val);
+        input = Some(in_spec);
+    } else if !segments.is_empty() && !is_manipulator(segments[0]) {
+        input = Some(parse_stream_spec(segments.remove(0))?);
     }
+
+    // Check if the last two segments form an explicit (pattern -> slicer) pair:
+    // e.g. "16U -> 16"
+    if segments.len() >= 2
+        && is_pure_pattern(segments[segments.len() - 2])
+        && is_pure_slicer(segments.last().unwrap())
+    {
+        let u_str = segments.pop().unwrap();
+        let p_str = segments.pop().unwrap();
+        let mut out_spec = parse_stream_spec(p_str)?;
+        let u_val = parse_size_with_suffix(u_str, "unit size", true)? as usize;
+        if let Some(ref p) = out_spec.pattern {
+            if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p) {
+                if unpacker.total_bits != u_val {
+                    return Err(BddError::CliError(format!(
+                        "Dimension mismatch in stream pattern: Pattern '{}' requires {} bits, but slicer specifies {} bits",
+                        p, unpacker.total_bits, u_val
+                    )));
+                }
+            }
+        }
+        out_spec.unit_size = Some(u_val);
+        output = Some(out_spec);
+    } else if !segments.is_empty() && !is_manipulator(segments.last().unwrap()) {
+        output = Some(parse_stream_spec(segments.pop().unwrap())?);
+    }
+
+    // Anything remaining in segments is an inline manipulator
+    for seg in segments {
+        manipulators.push(seg.to_string());
+    }
+
+    Ok(StreamIoPattern {
+        source,
+        input,
+        manipulators,
+        output,
+        sink,
+    })
 }
 
 /// Parse a single stream specification (input or output).
@@ -531,5 +656,47 @@ mod tests {
         assert_eq!(inp3.offset, Some(0));
         assert_eq!(inp3.unit_size, Some(32));
         assert_eq!(inp3.gap, Some(800));
+    }
+
+    #[test]
+    fn test_unified_stream_pipeline_parsing() {
+        // "4U4U -> {0|1} -> 16U"
+        let p1 = parse_stream_io_pattern("4U4U -> {0|1} -> 16U").unwrap();
+        assert_eq!(p1.input.unwrap().pattern, Some("4U4U".to_string()));
+        assert_eq!(p1.manipulators, vec!["{0|1}"]);
+        assert_eq!(p1.output.unwrap().pattern, Some("16U".to_string()));
+        assert_eq!(p1.source, None);
+        assert_eq!(p1.sink, None);
+
+        // "4U4U -> {0|1} -> 16U -> hex"
+        let p2 = parse_stream_io_pattern("4U4U -> {0|1} -> 16U -> hex").unwrap();
+        assert_eq!(p2.input.unwrap().pattern, Some("4U4U".to_string()));
+        assert_eq!(p2.manipulators, vec!["{0|1}"]);
+        assert_eq!(p2.output.unwrap().pattern, Some("16U".to_string()));
+        assert_eq!(p2.sink, Some("hex".to_string()));
+
+        // "stdin -> 8 -> 4U4U -> {0|1} -> 16U -> 16 -> stdout"
+        let p3 =
+            parse_stream_io_pattern("stdin -> 8 -> 4U4U -> {0|1} -> 16U -> 16 -> stdout").unwrap();
+        assert_eq!(p3.source, Some("stdin".to_string()));
+        let inp3 = p3.input.unwrap();
+        assert_eq!(inp3.unit_size, Some(8));
+        assert_eq!(inp3.pattern, Some("4U4U".to_string()));
+        assert_eq!(p3.manipulators, vec!["{0|1}"]);
+        let out3 = p3.output.unwrap();
+        assert_eq!(out3.unit_size, Some(16));
+        assert_eq!(out3.pattern, Some("16U".to_string()));
+        assert_eq!(p3.sink, Some("stdout".to_string()));
+
+        // "zeros -> 8 -> xor(0xAA) -> hex"
+        let p4 = parse_stream_io_pattern("zeros -> 8 -> xor(0xAA) -> hex").unwrap();
+        assert_eq!(p4.source, Some("zeros".to_string()));
+        assert_eq!(p4.input.unwrap().unit_size, Some(8));
+        assert_eq!(p4.manipulators, vec!["xor(0xAA)"]);
+        assert_eq!(p4.sink, Some("hex".to_string()));
+
+        // Dimension mismatch error: "12 -> 4U4U -> hex"
+        let err = parse_stream_io_pattern("12 -> 4U4U -> hex");
+        assert!(err.is_err());
     }
 }

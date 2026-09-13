@@ -109,6 +109,9 @@ fn run_pipeline_internal(
         merge_streams.push(ms);
     }
 
+    let field_names = unpacker.as_ref().and_then(|u| u.field_names());
+    let field_widths = unpacker.as_ref().map(|u| u.field_widths());
+
     // Build manipulation pipeline: ordered from CLI arguments if available, else from flags
     let mut manipulators: Vec<Box<dyn TupleManipulator>> = if !config.raw_args.is_empty() {
         build_pipeline_from_args(&config.raw_args)?
@@ -118,7 +121,11 @@ fn run_pipeline_internal(
 
     if manipulators.is_empty() {
         if let Some(ref arg) = config.rearrange {
-            manipulators.push(Box::new(RearrangeManipulator::new(arg)?));
+            manipulators.push(Box::new(RearrangeManipulator::new_with_schema(
+                arg,
+                field_names.as_deref(),
+                field_widths.as_deref(),
+            )?));
         }
         if let Some(ref arg) = config.clamp {
             manipulators.push(Box::new(ClampManipulator::new(arg)?));
@@ -174,7 +181,11 @@ fn run_pipeline_internal(
     }
 
     for m_spec in &config.inline_manipulators {
-        manipulators.push(build_manipulator_from_spec(m_spec)?);
+        manipulators.push(build_manipulator_from_spec_with_schema(
+            m_spec,
+            field_names.as_deref(),
+            field_widths.as_deref(),
+        )?);
     }
 
     let out_writer: Box<dyn Write> = if let Some(w) = custom_writer {
@@ -338,19 +349,53 @@ fn run_pipeline_internal(
             if let Some(ref mut tout) = tuple_sink {
                 tout.write_tuple(&tuple)?;
             } else {
-                let unit = if let Some(ref p) = packer {
-                    p.pack(tuple)?
+                let (unit, eff_unit_size) = if let Some(ref p) = packer {
+                    (p.pack(tuple)?, out_unit_size)
+                } else if tuple.len() == 1 {
+                    let bits = match &tuple[0] {
+                        Field::Bits(_, b) => *b,
+                        _ => out_unit_size,
+                    };
+                    (
+                        tuple[0].as_biguint(),
+                        if config.output_unit.is_some() {
+                            out_unit_size
+                        } else {
+                            bits
+                        },
+                    )
                 } else if !tuple.is_empty() {
-                    tuple[0].as_biguint()
+                    let mut acc = BigUint::zero();
+                    let mut total_bits = 0usize;
+                    for (i, f) in tuple.iter().enumerate() {
+                        let w = match f {
+                            Field::Bits(_, b) => *b,
+                            Field::Bytes(bytes) => bytes.len() * 8,
+                            _ => unpacker
+                                .as_ref()
+                                .and_then(|u| u.field_widths().get(i).copied())
+                                .unwrap_or(8),
+                        };
+                        acc = (acc << w) | f.as_biguint();
+                        total_bits += w;
+                    }
+                    (
+                        acc,
+                        if config.output_unit.is_some() {
+                            out_unit_size
+                        } else {
+                            total_bits
+                        },
+                    )
                 } else {
                     crate::diag::warn("No fields to output, assumed 0");
-                    BigUint::zero()
+                    (BigUint::zero(), out_unit_size)
                 };
                 if let Some(ref mut sink) = unit_sink {
                     write_framed_unit(
                         sink.as_mut(),
                         unit,
-                        out_unit_size,
+                        eff_unit_size,
                         config.output_raw_unit,
                         config.output_post_gap,
                         config.output_gap,
@@ -421,19 +466,53 @@ fn run_pipeline_internal(
             if let Some(ref mut tout) = tuple_sink {
                 tout.write_tuple(&tuple)?;
             } else {
-                let out_unit = if let Some(ref p) = packer {
-                    p.pack(tuple)?
+                let (out_unit, eff_unit_size) = if let Some(ref p) = packer {
+                    (p.pack(tuple)?, out_unit_size)
+                } else if tuple.len() == 1 {
+                    let bits = match &tuple[0] {
+                        Field::Bits(_, b) => *b,
+                        _ => out_unit_size,
+                    };
+                    (
+                        tuple[0].as_biguint(),
+                        if config.output_unit.is_some() {
+                            out_unit_size
+                        } else {
+                            bits
+                        },
+                    )
                 } else if !tuple.is_empty() {
-                    tuple[0].as_biguint()
+                    let mut acc = BigUint::zero();
+                    let mut total_bits = 0usize;
+                    for (i, f) in tuple.iter().enumerate() {
+                        let w = match f {
+                            Field::Bits(_, b) => *b,
+                            Field::Bytes(bytes) => bytes.len() * 8,
+                            _ => unpacker
+                                .as_ref()
+                                .and_then(|u| u.field_widths().get(i).copied())
+                                .unwrap_or(8),
+                        };
+                        acc = (acc << w) | f.as_biguint();
+                        total_bits += w;
+                    }
+                    (
+                        acc,
+                        if config.output_unit.is_some() {
+                            out_unit_size
+                        } else {
+                            total_bits
+                        },
+                    )
                 } else {
                     crate::diag::warn("No fields to output, assumed 0");
-                    BigUint::zero()
+                    (BigUint::zero(), out_unit_size)
                 };
                 if let Some(ref mut sink) = unit_sink {
                     write_framed_unit(
                         sink.as_mut(),
                         out_unit,
-                        out_unit_size,
+                        eff_unit_size,
                         config.output_raw_unit,
                         config.output_post_gap,
                         config.output_gap,
