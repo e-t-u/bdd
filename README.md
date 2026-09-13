@@ -207,6 +207,10 @@ Each stream definition uses the syntax:
   - **Form B (Physical Layout Box): `[pre : unit : post]`** or **`[pre, unit, post]`** — explicit pre-gap, active payload, and post-gap inside the box (container size is the sum $\text{pre} + \text{unit} + \text{post}$).
   - **Bare Unit:** A plain number or size (e.g. `8`, `3`, `188B`, `4k`).
 
+> [!NOTE]
+> **Automatic Unit Size Derivation**
+> In stream arrow mappings (e.g. `"8 -> 3"`, `"188B[11:13] -> 13"`), both the input unit size and output unit size are derived automatically from the respective unit or container expressions. You do not need to pass separate `--input-unit` or `--output-unit` flags.
+
 #### Multiplications, Suffixes & Large Units (`k`, `M`, `G`)
 
 Every numeric size in a stream pattern (skips, container sizes, offsets, units, gaps) fully supports standard binary/decimal suffixes and multiplication expressions:
@@ -417,6 +421,18 @@ Rather than treating a bit unit as an opaque integer, `bdd` allows dividing a un
  Unpacked Tuple: (1, 1, 1, 1)
 ```
 
+> [!TIP]
+> **Automatic Unit Bit Sizing from Patterns**
+> When using `--input-pattern` or `--output-pattern` (or passing patterns as positional arguments), **you never need to specify `--input-unit` or `--output-unit`**.
+> `bdd` automatically calculates the unit size in bits by summing the bit widths of all fields in the pattern:
+> - `--input-pattern=16H` $\to$ input unit size is automatically **16 bits** (FP16).
+> - `--output-pattern=8E` $\to$ output unit size is automatically **8 bits** (FP8).
+> - `--output-pattern=4E` $\to$ output unit size is automatically **4 bits** (NVFP4).
+> - `--input-pattern="3U 1x 2u 3M"` $\to$ input unit size is automatically **9 bits** ($3 + 1 + 2 + 3$).
+> - `--output-pattern="4*8B"` $\to$ output unit size is automatically **32 bits** ($4 \times 8$).
+>
+> In fact, explicitly passing `--input-unit` alongside `--input-pattern` is redundant, and `bdd` emits an informational warning alerting you that the pattern takes precedence.
+
 ### Pattern Specifiers Reference
 
 Every field in an `--input-pattern` or `--output-pattern` is specified as `[<bits>]<type>` (with optional repetition multipliers like `4*8B`, `4*B`, or `2*(4U4u)`).
@@ -507,6 +523,9 @@ Standard Rust (`std`) only supports `f32` and `f64` natively. Experimental featu
 #### Transcoding Examples
 Convert between arbitrary float representations simply by combining `--input-pattern` and `--output-pattern`:
 
+> [!NOTE]
+> **No explicit unit flags required**: `bdd` automatically determines input and output unit bit sizes directly from the format specifiers (`32F` = 32 bits, `16H` = 16 bits, `8E` = 8 bits, `4E` = 4 bits).
+
 ```bash
 # Transcode 32-bit float to 16-bit IEEE half-precision (FP32 -> FP16):
 bdd --input-pattern=32F --output-pattern=16H < weights_fp32.bin > weights_fp16.bin
@@ -519,6 +538,10 @@ bdd --input-pattern=16H --output-pattern=4E < model_fp16.bin > model_fp4.bin
 
 # Upcast Blackwell 4-bit floats back to FP32 single precision:
 bdd --input-pattern=4E --output-pattern=32F < model_fp4.bin > unpacked_fp32.bin
+
+# Positional pattern shorthand (identical behavior, zero flags required):
+bdd 16H 8E < model_fp16.bin > model_fp8.bin
+bdd 16H 4E < model_fp16.bin > model_fp4.bin
 
 # Quantize with explicit downward truncation before packing:
 bdd --input-pattern=32F --round=0,floor --output-pattern=8E < in.bin > out.bin
@@ -1173,7 +1196,7 @@ Arguments:
 
 Input Unit & Raw Unit Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
-  -u, --input-unit <BITS>          Input unit size in bits (shorthand for <BITS>U)
+  -u, --input-unit <BITS>          Input unit size in bits (default: 8, or pattern width; shorthand for <BITS>U)
       --preset <NAME>              Use built-in protocol or float preset (e.g. mp3-header, mpeg-ts, nvfp4)
       --list-presets               List all built-in format presets and exit
       --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
