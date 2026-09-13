@@ -198,16 +198,23 @@ We have carefully evaluated all possible syntactic, semantic, and dimensional am
 
 ---
 
-### Ambiguity 7: Incomplete Output Pattern Field Consumption
-- **Problem**: A tuple has 2 fields `(15, 15)`, but the user writes `16U` on output.
-- **Analysis**:
-  - `16U` has only 1 field token.
-  - In `bdd` v0.5, packing a 2-field tuple with `16U` only consumes `field[0]`, silently discarding `field[1]`.
+### Ambiguity 7: Incomplete Output Pattern Field Consumption & Discard Semantics
+- **Problem**: A tuple has 2 fields `(15, 10)` (binary `1111`, `1010`), but the user writes `16U` on output.
+- **Analysis of Bit Representation**:
+  - `16U` specifies exactly **one** 16-bit integer field token.
+  - When `bdd` maps tuple fields into the output pattern, `16U` consumes `field[0]` (value `15`).
+  - It expands the 4-bit value `15` (`0b1111`) into a 16-bit unsigned big-endian integer:
+    $$\texttt{0000 0000 0000 1111}_2 = \texttt{0x000F}$$
+  - Notice the structure: it contains **12 zero (null) bits** followed by the **4 bits of Field 0**:
+    $$\mathbf{12N4U} \quad (\text{or } 12z4U)$$
+  - `field[1]` (`1010`) is completely unmapped and **discarded**!
+  - It does **not** produce $\mathbf{8N4U4U}$ ($\texttt{0x00FA} = \texttt{0000 0000 1111 1010}_2$) because `16U` does not automatically glue or concatenate unconsumed fields.
 - **Resolution**:
-  - In v0.6, `bdd` requires explicit field mapping when field counts differ.
+  - In v0.6, `bdd` requires explicit field mapping or a field concatenation operator when field counts differ.
   - If field count drops without an explicit discard token (`x`), emit a warning:
     `[bdd] Warning: Output pattern '16U' consumes 1 field; incoming tuple has 2 fields (field 1 discarded).`
-  - To combine both fields cleanly: use `8U8U` (16 bits) or `rearrange(0) -> 16U`.
+  - To preserve both fields without concatenation: use `8z 4U 4U` (yields `8N4U4U`, `0x00FA`).
+  - To combine both fields into a single 8-bit or 16-bit entity: use the **`glue`** operator (see Section 4.9).
 
 ---
 
@@ -223,6 +230,31 @@ We have carefully evaluated all possible syntactic, semantic, and dimensional am
   - **Patterns** handle field typing and unpacking (`13U`).
   - Combining them is fully supported and composable:
     $$\text{\texttt{"file('stream.ts') -> 188B[11:13] -> 13U -> hex"}}$$
+
+---
+
+### Ambiguity 9: Field Concatenation / Fusion ("Glueing" Fields)
+- **Problem**: A user unpacks `4U4U` producing two 4-bit fields `f0 = 1111_2` (15) and `f1 = 1010_2` (10). They want to combine them by "glueing" them one after another into a single 8-bit field:
+  $$\texttt{"1111"} + \texttt{"1010"} = \texttt{"11111010"} \quad (250 / \texttt{0xFA})$$
+  and then format or manipulate that composite value.
+- **Why Arithmetic `+` is Ambiguous**:
+  - In mathematics and programming, `+` denotes arithmetic addition: $15 + 10 = 25$ (`0b00011001`).
+  - Bit concatenation is **not** addition: $(\text{f0} \ll 4) \mid \text{f1} = 240 + 10 = 250$ (`0b11111010`).
+  - Using bare `+` as an operator creates severe semantic confusion with arithmetic operators (`add(10)`).
+- **Resolution: The `glue` / `concat` Manipulator and `split`**:
+  1. **`glue(f0, f1, ...)`** (alias **`concat`**):
+     Concatenates the exact bit representations of two or more fields into a single unified field whose width is $\sum W_i$:
+     ```bash
+     "4U4U -> glue(0, 1) -> 16U -> hex"
+     ```
+     - `4U4U`: produces `(f0: 4U = 15, f1: 4U = 10)`.
+     - `glue(0, 1)`: fuses them into `(f0: 8U = 250)`.
+     - `16U`: expands the single 8-bit field to 16 bits: `0x00FA` (`0000 0000 1111 1010` = `8N4U4U`!).
+  2. **`split(field, w0, w1, ...)`**:
+     The exact symmetric inverse of `glue`. Splits an $N$-bit field into multiple sub-fields:
+     ```bash
+     "16U -> split(0, 4, 12) -> json"
+     ```
 
 ---
 
@@ -258,6 +290,7 @@ SinkStage       ::= "stdout" | "raw" | "bin" | "hex" | "bits" | "integers"
 |---|---|---|---|
 | **Synthetic Test Pattern to Hex** | `bdd -0 -u 8 --xor 0,0xAA -x -c 4` | `"zeros -> 8 -> xor(0xAA) -> 8 -> hex"` | `"zeros -> 8 -> xor(0xAA) -> hex"` |
 | **Unaligned Tuple Transcoding** | `bdd 4U4U 16U < in.bin > out.bin` | `"stdin -> 8 -> 4U4U -> 16U -> 16 -> stdout"` | `"4U4U -> 16U"` |
+| **Field Glueing & Packing** | *(Requires multi-step bit shift math)* | `"stdin -> 8 -> 4U4U -> glue(0,1) -> 16U -> 16 -> hex"` | `"4U4U -> glue(0,1) -> 16U -> hex"` |
 | **MPEG-TS PID Extraction to File** | `bdd "188B[11:13] -> 13" -x < in.ts` | `"file('in.ts') -> 188B[11:13] -> 13U -> 13 -> hex"` | `"file('in.ts') -> 188B[11:13] -> hex"` |
 | **Kernel Process Telemetry to JSON** | `sudo bdd --input-netlink --preset proc-event --filter 1,==,2 --output-json` | `"netlink -> proc-event -> filter(what == 2) -> json"` | `"netlink -> proc-event -> filter(what == 2) -> json"` |
 | **FP16 to Blackwell FP4 Quantization** | `bdd --input-pattern=16H --output-pattern=4E < in > out` | `"stdin -> 16 -> 16H -> 4E -> 4 -> stdout"` | `"16H -> 4E"` |
@@ -280,6 +313,22 @@ If `8` or `16` is written, `bdd` validates that the dimensions match, allowing e
 ### Q3: Is downstream inference confusing to users?
 **Answer**: **No, as long as dimension conflicts produce clear errors.**
 A bitstream source has no natural boundaries; the unpacker pattern (`4U4U`) serves as the measuring lens that pulls 8 bits at a time. The only case where users would be confused is if an explicit slicer (`12`) conflicts with a pattern (`4U4U`). By enforcing a **strict dimension check error** on mismatches, confusion is completely eliminated.
+
+### Q4: In `"stdin -> 8 -> 4U4U -> 16U -> 16 -> stdout"`, does this combine `8N4U4U` or `12N4U`?
+**Answer**: **It produces `12N4U` (12 null/zero bits + 4 bits of field 0), NOT `8N4U4U`.**
+- `4U4U` unpacks 8 bits into two 4-bit fields: `field[0] = 0b1111` (15) and `field[1] = 0b1010` (10).
+- `16U` specifies a single 16-bit field token. It consumes `field[0]` (15), expands it into a 16-bit integer with 12 leading zeros (`0000 0000 0000 1111` = `0x000F`), and **discards** `field[1]`.
+- Thus, the output word contains $12\text{ null bits} + 4\text{ bits of field 0} = \mathbf{12N4U}$.
+- It does **not** combine `8N4U4U` (`0000 0000 1111 1010` = `0x00FA`). To get `8N4U4U` without glueing, the output pattern must explicitly specify `8z 4U 4U`.
+
+### Q5: Should we have a notation to combine two fields "glueing" them one after another (`"1111" + "1010" = "11111010"`)?
+**Answer**: **Yes, absolutely.**
+- We define the **`glue(f0, f1, ...)`** operator (alias **`concat(f0, f1, ...)`**):
+  $$\text{\texttt{"4U4U -> glue(0, 1) -> 16U -> hex"}}$$
+  - `glue(0, 1)` concatenates the bit representations of Field 0 (`1111`) and Field 1 (`1010`) into a single 8-bit field `(250 / 0xFA / 0b11111010)`.
+  - When that single field enters `16U`, it expands into 16 bits with 8 leading zeros: `0x00FA` (`0000 0000 1111 1010`), achieving the exact `8N4U4U` combined result.
+- We avoid using bare arithmetic `+` for this because `+` indicates arithmetic addition ($15 + 10 = 25 \ne 250$), whereas `glue` or `concat` unambiguously denotes bitwise concatenation.
+- The symmetric inverse operator is **`split(field, width0, width1, ...)`**.
 
 ---
 
