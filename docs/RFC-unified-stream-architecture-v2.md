@@ -241,24 +241,31 @@ We have carefully evaluated all possible syntactic, semantic, and dimensional am
   - In mathematics and programming, `+` denotes arithmetic addition: $15 + 10 = 25$ (`0b00011001`).
   - Bit concatenation is **not** addition: $(\text{f0} \ll 4) \mid \text{f1} = 240 + 10 = 250$ (`0b11111010`).
   - Using bare `+` as an operator creates semantic confusion with arithmetic operators (`add(10)`).
-- **The Solution: Field Fusion inside `rearrange(...)` via `|`**:
-  Instead of needing a separate standalone concept, `rearrange(...)` naturally expands to support field fusion using the bitwise OR symbol `|`:
-  ```bash
-  rearrange(0, 1|2)
-  ```
-  - **Syntax & Semantics**:
-    - `rearrange(0, 1|2)`: Emits field 0 unchanged, and joins field 1 (MSB) and field 2 (LSB) into a single composite field of width $W_1 + W_2$.
-    - `rearrange(0|1)`: Fuses two 4-bit fields into one 8-bit field:
-      ```bash
-      "4U4U -> rearrange(0|1) -> 16U -> hex"   # Outputs 00fa (8N4U4U)!
-      ```
-    - `rearrange(2|1, 0)`: Reorders while fusing (field 2 as MSB, field 1 as LSB, followed by field 0).
-    - `rearrange(0|1|2)`: Fuses three fields into one single word.
-    - Named field support: `rearrange(tag, hi|lo)` cleanly preserves protocol semantics.
+- **The Solution: Field Fusion inside `rearrange(...)` and Concise Tuple Projector `{...}`**:
+  Instead of requiring a long keyword like `rearrange(...)`, we specify two interchangeable syntaxes:
+  
+  1. **Concise Tuple Projector Notation `{...}` (Recommended)**:
+     Using curly braces `{...}` as a first-class pipeline stage to construct and project tuples:
+     ```bash
+     {0, 1|2}
+     ```
+     - **`"4U4U -> {0|1} -> 16U -> hex"`**: Fuses two 4-bit fields into one 8-bit field, producing `00fa`!
+     - **`"4U4U4U -> {0, 1|2} -> hex"`**: Keeps field 0, fuses fields 1 and 2.
+     - **`"tag:4U,hi:4U,lo:8U -> {tag, hi|lo} -> json"`**: Clean named-field projection and fusion.
+     - **`"4U4U -> {1, 0} -> hex"`**: Concise field swap (no fusion).
+     - **`"4U4U4U -> {0} -> hex"`**: Keeps field 0, discards fields 1 and 2.
+
+  2. **Verbose Functional Notation `rearrange(...)`**:
+     For CLI flag consistency (`--rearrange="0, 1|2"`) and backward compatibility:
+     ```bash
+     rearrange(0, 1|2)
+     ```
+
   - **Why `|` is the Ideal Delimiter**:
     1. Bitwise OR (`|`) is the literal hardware operation used to combine shifted bitfields: $(\text{f}_1 \ll W_2) \mid \text{f}_2$.
-    2. Inside `rearrange(...)`, there is no arithmetic, making `|` completely unambiguous.
-    3. It handles reordering, field dropping, and field fusion in a single, cohesive operator.
+    2. Inside `{...}` or `rearrange(...)`, there is no arithmetic, making `|` completely unambiguous.
+    3. Curly braces `{...}` have established precedent in hardware languages (Verilog bit concatenation `{a, b}`) and relational algebra (tuple projection).
+
   - **Shorthand Operators**:
     - **`glue(f0, f1, ...)`** (alias **`concat`**): In-place shorthand when a user wants to fuse fields without listing all other field indices:
       `"4U4U -> glue(0, 1) -> 16U -> hex"`
@@ -282,7 +289,10 @@ UnitContainer   ::= Number [ UnitSuffix ]
                   | "[" PreGap (":" | ",") Unit (":" | ",") PostGap "]"
 
 UnpackStage     ::= PatternString | PresetName
-ManipStage      ::= ManipName "(" [ ManipArgs ] ")" | "not" | "abs" | "sign"
+ManipStage      ::= ManipName "(" [ ManipArgs ] ")" | "not" | "abs" | "sign" | TupleProjector
+TupleProjector  ::= "{" ProjectorItem ("," ProjectorItem)* "}"
+ProjectorItem   ::= FieldRef ("|" FieldRef)*
+FieldRef        ::= Integer | Identifier
 PackStage       ::= PatternString | PresetName
 FramerStage     ::= SlicerStage
 
@@ -299,7 +309,7 @@ SinkStage       ::= "stdout" | "raw" | "bin" | "hex" | "bits" | "integers"
 |---|---|---|---|
 | **Synthetic Test Pattern to Hex** | `bdd -0 -u 8 --xor 0,0xAA -x -c 4` | `"zeros -> 8 -> xor(0xAA) -> 8 -> hex"` | `"zeros -> 8 -> xor(0xAA) -> hex"` |
 | **Unaligned Tuple Transcoding** | `bdd 4U4U 16U < in.bin > out.bin` | `"stdin -> 8 -> 4U4U -> 16U -> 16 -> stdout"` | `"4U4U -> 16U"` |
-| **Field Glueing & Packing** | *(Requires multi-step bit shift math)* | `"stdin -> 8 -> 4U4U -> rearrange(0|1) -> 16U -> 16 -> hex"` | `"4U4U -> rearrange(0|1) -> 16U -> hex"` |
+| **Field Glueing & Packing** | *(Requires multi-step bit shift math)* | `"stdin -> 8 -> 4U4U -> rearrange(0|1) -> 16U -> 16 -> hex"` | `"4U4U -> {0|1} -> 16U -> hex"` |
 | **MPEG-TS PID Extraction to File** | `bdd "188B[11:13] -> 13" -x < in.ts` | `"file('in.ts') -> 188B[11:13] -> 13U -> 13 -> hex"` | `"file('in.ts') -> 188B[11:13] -> hex"` |
 | **Kernel Process Telemetry to JSON** | `sudo bdd --input-netlink --preset proc-event --filter 1,==,2 --output-json` | `"netlink -> proc-event -> filter(what == 2) -> json"` | `"netlink -> proc-event -> filter(what == 2) -> json"` |
 | **FP16 to Blackwell FP4 Quantization** | `bdd --input-pattern=16H --output-pattern=4E < in > out` | `"stdin -> 16 -> 16H -> 4E -> 4 -> stdout"` | `"16H -> 4E"` |
@@ -331,17 +341,19 @@ A bitstream source has no natural boundaries; the unpacker pattern (`4U4U`) serv
 - It does **not** combine `8N4U4U` (`0000 0000 1111 1010` = `0x00FA`). To get `8N4U4U` without glueing, the output pattern must explicitly specify `8z 4U 4U`.
 
 ### Q5: Could joining be something like `rearrange(0, 1|2)` combining fields 1 and 2?
-**Answer**: **Yes, this is an extraordinarily elegant and ergonomic design.**
-- By enhancing `rearrange(...)` with the bitwise OR symbol `|`, field selection, reordering, dropping, and bitwise concatenation are unified into a single expressive operator:
-  $$\text{\texttt{"4U4U -> rearrange(0\|1) -> 16U -> hex"}}$$
-  - `4U4U` unpacks `(f0: 4U = 1111, f1: 4U = 1010)`.
-  - `rearrange(0|1)` concatenates `f0` (MSB) and `f1` (LSB) into a single 8-bit field `(f0: 8U = 11111010 = 250 / 0xFA)`.
-  - When that single field enters `16U`, it expands into 16 bits with 8 leading zeros: `0x00FA` (`0000 0000 1111 1010`), achieving the exact `8N4U4U` combined result.
-- Supports arbitrary combinations:
-  - `rearrange(0, 1|2)`: Keeps field 0 separate, joins fields 1 and 2.
-  - `rearrange(2|1, 0)`: Swaps byte/field order while joining.
-  - `rearrange(tag, hi|lo)`: Works seamlessly with named fields.
-  - In-place shorthand: `glue(1, 2)` (alias `concat(1, 2)`) acts as sugar when other fields don't need reordering.
+**Answer**: **Yes.** Enhancing `rearrange(...)` with the bitwise OR symbol `|` unifies field selection, reordering, dropping, and bitwise concatenation into a single operator.
+
+### Q6: `rearrange` is quite a long word. Could there be an alternative notation like `{0, 1|2}`?
+**Answer**: **Yes! The `{0, 1|2}` tuple projector syntax is significantly better and adopted as primary syntax.**
+- Instead of writing `rearrange(0, 1|2)`, the pipeline stage uses curly braces:
+  $$\text{\texttt{"4U4U -> \{0\|1\} -> 16U -> hex"}}$$
+  $$\text{\texttt{"4U4U4U -> \{0, 1\|2\} -> hex"}}$$
+  $$\text{\texttt{"tag:4U,hi:4U,lo:8U -> \{tag, hi\|lo\} -> json"}}$$
+- **Advantages**:
+  1. **Zero keyword overhead**: Instant recognition as a tuple constructor / record projector.
+  2. **Hardware precedent**: Matches Verilog / SystemVerilog bit-concatenation vector syntax `{a, b}`.
+  3. **Zero ambiguity**: Curly braces `{}` are completely unused elsewhere in `bdd` grammar (slicers use `[]`, multipliers use `()`).
+  4. **Coexistence**: `rearrange(...)` remains supported as the verbose functional equivalent for CLI flag symmetry (`--rearrange="0, 1|2"`).
 
 ---
 
