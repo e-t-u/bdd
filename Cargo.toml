@@ -1,6 +1,6 @@
 [package]
 name = "bdd"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Command line tool to interpret, manipulate, merge and create bit streams"
 authors = ["Esa Turtiainen"]
@@ -30,6 +30,9 @@ rand = "0.8"
 csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+clap_complete = "4.5"
+tempfile = "3.10"
+libc = "0.2"
 
 [features]
 default = ["server", "small-floats"]

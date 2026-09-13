@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::Write;
-use std::process::Command;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
 
 const BDD_BIN: &str = env!("CARGO_BIN_EXE_bdd");
 
@@ -849,6 +849,22 @@ fn test_quoted_strings_in_input_tuples() {
     assert_eq!(val["n1"], 456);
     assert_eq!(val["s2"], "hello, world");
     assert_eq!(val["n2"], 789);
+
+    // Verify raw ASCII byte output when packed into hex
+    let mut child2 = Command::new(BDD_BIN)
+        .args(["--input-tuples", "--output-hex"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+    {
+        let stdin = child2.stdin.as_mut().unwrap();
+        write!(stdin, "\"5\"").unwrap();
+    }
+    let output2 = child2.wait_with_output().expect("failed to wait for bdd");
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    assert_eq!(stdout2.trim(), "35");
 }
 
 #[test]
@@ -1759,3 +1775,178 @@ fn test_stream_memory_keys_demo() {
     assert_eq!(candidates_py[0]["confidence"], "Very High");
     assert_eq!(candidates_py[0]["bit_length"], 256);
 }
+
+#[test]
+fn test_cli_code_generation() {
+    let out_c = Command::new(BDD_BIN)
+        .args(["--preset", "mpeg-ts", "--export-c"])
+        .output()
+        .expect("failed to run export-c");
+    assert!(out_c.status.success());
+    let c_str = String::from_utf8(out_c.stdout).unwrap();
+    assert!(c_str.contains("typedef struct {"));
+    assert!(c_str.contains("uint8_t sync"));
+    assert!(c_str.contains("uint16_t pid : 13"));
+    assert!(c_str.contains("} MpegTs;"));
+
+    let out_rust = Command::new(BDD_BIN)
+        .args(["--preset", "mpeg-ts", "--export-rust"])
+        .output()
+        .expect("failed to run export-rust");
+    assert!(out_rust.status.success());
+    let rust_str = String::from_utf8(out_rust.stdout).unwrap();
+    assert!(rust_str.contains("pub struct MpegTs {"));
+    assert!(rust_str.contains("pub sync: u8,"));
+    assert!(rust_str.contains("pub pid: u16,"));
+}
+
+#[test]
+fn test_cli_probe_visual_and_signatures() {
+    let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+    // Write PNG magic header
+    tmp.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+        .unwrap();
+    // Write 256 distinct bytes for entropy
+    let mut rand_bytes = Vec::new();
+    for i in 0..=255u8 {
+        rand_bytes.push(i);
+    }
+    tmp.write_all(&rand_bytes).unwrap();
+    tmp.flush().unwrap();
+
+    let path = tmp.path().to_str().unwrap();
+
+    let out_json = Command::new(BDD_BIN)
+        .args(["--probe", path, "--output-json"])
+        .output()
+        .expect("failed to run probe json");
+    assert!(out_json.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out_json.stdout).unwrap();
+    let sigs = v["detected_signatures"].as_array().expect("signatures");
+    assert!(!sigs.is_empty());
+    assert_eq!(sigs[0]["name"], "PNG");
+    assert!(!v["entropy_sparkline"].as_str().unwrap().is_empty());
+
+    let out_map = Command::new(BDD_BIN)
+        .args(["--probe", path, "--probe-visual"])
+        .output()
+        .expect("failed to run probe visual");
+    assert!(out_map.status.success());
+    let txt = String::from_utf8(out_map.stdout).unwrap();
+    assert!(txt.contains("Visual Entropy Map"));
+    assert!(txt.contains("Entropy Sparkline:"));
+    assert!(txt.contains("Identified Magic Signatures:"));
+    assert!(txt.contains("PNG"));
+}
+
+#[test]
+fn test_cli_completions() {
+    let out = Command::new(BDD_BIN)
+        .args(["--completions", "bash"])
+        .output()
+        .expect("failed to run completions");
+    assert!(out.status.success());
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert!(s.contains("_bdd()"));
+    assert!(s.contains("complete -F _bdd"));
+}
+
+#[test]
+fn test_inline_stream_arrows() {
+    // 8 -> xor(0xFF) -> 8
+    let mut child = Command::new(BDD_BIN)
+        .args(["8 -> xor(0xFF) -> 8", "--output-hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn bdd");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&[0x00, 0x01, 0x02])
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "ff fe fd");
+
+    // Chained: 8 -> add(10) -> mul(2) -> 8
+    let mut child2 = Command::new(BDD_BIN)
+        .args(["8 -> add(10) -> mul(2) -> 8", "--output-hex"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn bdd");
+    child2.stdin.as_mut().unwrap().write_all(&[0x01]).unwrap();
+    let out2 = child2.wait_with_output().unwrap();
+    assert!(out2.status.success());
+    assert_eq!(String::from_utf8(out2.stdout).unwrap().trim(), "16");
+}
+
+#[test]
+fn test_mcp_transcode_and_generate() {
+    let mut child = Command::new(BDD_BIN)
+        .arg("--mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp server");
+
+    let stdin = child.stdin.as_mut().unwrap();
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut reader = BufReader::new(stdout);
+
+    // 1. Call bdd_generate
+    let gen_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 101,
+        "method": "tools/call",
+        "params": {
+            "name": "bdd_generate",
+            "arguments": {
+                "pattern": "8U,8U",
+                "count": 2,
+                "source": "counter",
+                "output_format": "hex"
+            }
+        }
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&gen_req).unwrap()).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let resp: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(resp["id"], 101);
+    let content = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(!content.is_empty());
+
+    // 2. Call bdd_transcode
+    let trans_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 102,
+        "method": "tools/call",
+        "params": {
+            "name": "bdd_transcode",
+            "arguments": {
+                "input_hex": "0102",
+                "input_pattern": "8U",
+                "output_format": "hex",
+                "manipulators": ["xor:0xFF"]
+            }
+        }
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&trans_req).unwrap()).unwrap();
+    stdin.flush().unwrap();
+
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let resp2: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(resp2["id"], 102);
+    let trans_content = resp2["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(trans_content.trim(), "fe fd");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+

@@ -148,6 +148,43 @@ pub fn run_mcp_server() -> Result<(), BddError> {
                             "type": "object",
                             "properties": {}
                         }
+                    },
+                    {
+                        "name": "bdd_transcode",
+                        "description": "Transcode binary payload between patterns, presets, or formats (e.g. hex to JSON, packing NVFP4 to FP16, or re-encoding container headers).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "input_hex": { "type": "string", "description": "Raw input hex string to transcode" },
+                                "file_path": { "type": "string", "description": "Absolute path to input binary file" },
+                                "unit_bits": { "type": "integer", "description": "Size of each input unit in bits (e.g. 8, 16, 32)" },
+                                "input_pattern": { "type": "string", "description": "Pattern describing input binary structure" },
+                                "input_preset": { "type": "string", "description": "Preset name describing input structure" },
+                                "output_pattern": { "type": "string", "description": "Pattern describing desired output structure" },
+                                "output_preset": { "type": "string", "description": "Preset describing desired output structure" },
+                                "output_format": { "type": "string", "description": "Output format: 'json', 'hex', 'bits', or 'tuples' (default: 'hex')" },
+                                "manipulators": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Optional list of manipulations to apply, e.g. ['xor:0xFF', 'round:0,0.01']"
+                                },
+                                "count": { "type": "integer", "description": "Maximum number of records to transcode" }
+                            }
+                        }
+                    },
+                    {
+                        "name": "bdd_generate",
+                        "description": "Generate synthetic test vectors conforming to a bit pattern or preset (useful for mock binary streams, unit tests, and AI verification).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "pattern": { "type": "string", "description": "Pattern describing record structure (e.g. '8U,16U,1F')" },
+                                "preset": { "type": "string", "description": "Preset name (e.g. 'mp3-header', 'mpeg-ts')" },
+                                "count": { "type": "integer", "description": "Number of records to generate (default: 1)" },
+                                "source": { "type": "string", "description": "Generator source: 'counter' (default), 'random', 'zeros', or 'ones'" },
+                                "output_format": { "type": "string", "description": "Output format: 'json' (default), 'hex', 'bits', or 'tuples'" }
+                            }
+                        }
                     }
                 ]);
                 let response = json!({
@@ -345,6 +382,142 @@ fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             let output_bytes = buf.0.lock().unwrap().clone();
             let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
             Ok(output_str)
+        }
+        "bdd_transcode" => {
+            let mut temp_file = None;
+            let file_path = if let Some(hex_str) = args.get("input_hex").and_then(|h| h.as_str()) {
+                let cleaned: String = hex_str.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+                let bytes = (0..cleaned.len())
+                    .step_by(2)
+                    .filter_map(|i| {
+                        if i + 2 <= cleaned.len() {
+                            u8::from_str_radix(&cleaned[i..i + 2], 16).ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<u8>>();
+                let mut tf = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+                tf.write_all(&bytes).map_err(|e| e.to_string())?;
+                tf.flush().map_err(|e| e.to_string())?;
+                let path = tf.path().to_str().unwrap().to_string();
+                temp_file = Some(tf);
+                path
+            } else if let Some(fp) = args.get("file_path").and_then(|f| f.as_str()) {
+                fp.to_string()
+            } else {
+                return Err("Either 'input_hex' or 'file_path' must be provided".to_string());
+            };
+
+            let mut cli_args = vec!["bdd".to_string(), format!("--input-file={}", file_path)];
+
+            let input_pat = if let Some(ip) = args.get("input_pattern").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--input-pattern={}", ip));
+                Some(ip.to_string())
+            } else if let Some(pr) = args.get("input_preset").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--preset={}", pr));
+                crate::preset::find_preset(pr).map(|p| p.pattern.to_string())
+            } else {
+                None
+            };
+
+            if let Some(u) = args.get("unit_bits").and_then(|u| u.as_u64()) {
+                cli_args.push(format!("--input-unit={}", u));
+            }
+
+            if let Some(op) = args.get("output_pattern").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--output-pattern={}", op));
+            } else if let Some(opr) = args.get("output_preset").and_then(|p| p.as_str()) {
+                if let Some(p) = crate::preset::find_preset(opr) {
+                    cli_args.push(format!("--output-pattern={}", p.pattern));
+                } else {
+                    return Err(format!("Unknown output preset '{}'", opr));
+                }
+            } else if let Some(ref ip) = input_pat {
+                cli_args.push(format!("--output-pattern={}", ip));
+            }
+
+            if let Some(count) = args.get("count").and_then(|c| c.as_u64()) {
+                cli_args.push(format!("--count={}", count));
+            }
+
+            let mut inline_manips = Vec::new();
+            if let Some(manips) = args.get("manipulators").and_then(|m| m.as_array()) {
+                for m in manips {
+                    if let Some(s) = m.as_str() {
+                        inline_manips.push(s.trim_start_matches('-').to_string());
+                    }
+                }
+            }
+
+            let out_fmt = args
+                .get("output_format")
+                .and_then(|f| f.as_str())
+                .unwrap_or("hex");
+            match out_fmt {
+                "json" => cli_args.push("--output-json".to_string()),
+                "bits" => cli_args.push("--output-bits".to_string()),
+                "tuples" => cli_args.push("--output-tuples".to_string()),
+                _ => cli_args.push("--output-hex".to_string()),
+            }
+
+            let cli = Cli::try_parse_from(&cli_args).map_err(|e| e.to_string())?;
+            let mut config = validate_and_process(cli).map_err(|e| e.to_string())?;
+            config.raw_args = cli_args;
+            config.inline_manipulators.extend(inline_manips);
+
+            let buf = SharedBuffer::default();
+            crate::engine::run_pipeline_to_writer(config, buf.clone())
+                .map_err(|e| e.to_string())?;
+            drop(temp_file);
+            let output_bytes = buf.0.lock().unwrap().clone();
+            let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
+            Ok(output_str.trim_end().to_string())
+        }
+        "bdd_generate" => {
+            let mut cli_args = vec!["bdd".to_string()];
+
+            let source = args
+                .get("source")
+                .and_then(|s| s.as_str())
+                .unwrap_or("counter");
+            match source {
+                "random" => cli_args.push("--input-random".to_string()),
+                "zeros" => cli_args.push("--input-zeros".to_string()),
+                "ones" => cli_args.push("--input-ones".to_string()),
+                _ => cli_args.push("--input-counter".to_string()),
+            }
+
+            let count = args.get("count").and_then(|c| c.as_u64()).unwrap_or(1);
+            cli_args.push(format!("--count={}", count));
+
+            if let Some(p) = args.get("pattern").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--input-pattern={}", p));
+            } else if let Some(pr) = args.get("preset").and_then(|p| p.as_str()) {
+                cli_args.push(format!("--preset={}", pr));
+            }
+
+            let out_fmt = args
+                .get("output_format")
+                .and_then(|f| f.as_str())
+                .unwrap_or("json");
+            match out_fmt {
+                "hex" => cli_args.push("--output-hex".to_string()),
+                "bits" => cli_args.push("--output-bits".to_string()),
+                "tuples" => cli_args.push("--output-tuples".to_string()),
+                _ => cli_args.push("--output-json".to_string()),
+            }
+
+            let cli = Cli::try_parse_from(&cli_args).map_err(|e| e.to_string())?;
+            let mut config = validate_and_process(cli).map_err(|e| e.to_string())?;
+            config.raw_args = cli_args;
+
+            let buf = SharedBuffer::default();
+            crate::engine::run_pipeline_to_writer(config, buf.clone())
+                .map_err(|e| e.to_string())?;
+            let output_bytes = buf.0.lock().unwrap().clone();
+            let output_str = String::from_utf8_lossy(&output_bytes).into_owned();
+            Ok(output_str.trim_end().to_string())
         }
         _ => Err(format!("Unknown tool '{}'", name)),
     }

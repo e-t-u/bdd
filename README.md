@@ -250,7 +250,144 @@ bdd 4U4U 4U4U --rearrange=1,0 < in.bin > out.bin
 
 # 9. Positional Output Pattern with Text Tuples (Pack comma-separated "1,2" pairs into 1 byte):
 bdd 4U4U --input-tuples --output-hex < pairs.txt
+
+# 10. Inline Stream Arrow Transformations (<in> -> <manip...> -> <out>):
+# Invert bits using inline XOR manipulator:
+bdd "8 -> xor(0xFF) -> 8" < in.bin > inverted.bin
+
+# Chain multiple operations inline (add 10, then multiply by 2):
+bdd "8 -> add(10) -> mul(2) -> 8" --output-hex < in.bin
 ```
+
+---
+
+### Stream Arrow Transformations in Depth (`<in> -> <manip...> -> <out>`)
+
+The Unix pipe philosophy revolutionized text processing by allowing small, specialized utilities to be composed with `|`. However, Unix pipes operate strictly on byte streams and character delimiters.
+
+`bdd` brings this compositional power down to the **sub-byte bitstream layer**. The **Stream Arrow Operator** (`->`) constructs multi-stage, in-flight transformation pipelines where arbitrary bit-width slices, bitwise operators, saturation bounds, arithmetic compensations, and physical container packing run in a single compiled, zero-copy execution pass:
+
+```
+[ Input Bitstream / Container ]
+               │
+               ▼  <in_spec>          (e.g., 12-bit ADC, unaligned DSCP, or 188B TS container)
+    ┌─────────────────────┐
+    │ Extract Raw Unit    │
+    └──────────┬──────────┘
+               ▼  ->
+    ┌─────────────────────┐
+    │ Pipeline Stage 1    │          (e.g., sub, add, xor, not, shift)
+    └──────────┬──────────┘
+               ▼  ->
+    ┌─────────────────────┐
+    │ Pipeline Stage 2    │          (e.g., mul, div, mod, abs)
+    └──────────┬──────────┘
+               ▼  ->
+    ┌─────────────────────┐
+    │ Pipeline Stage 3    │          (e.g., clamp, round, filter)
+    └──────────┬──────────┘
+               ▼  ->
+    ┌─────────────────────┐
+    │ Physical Framing    │  <out_spec> (e.g., 8-bit DAC, 16S PCM, or re-encapsulated container)
+    └──────────┬──────────┘
+               ▼
+[ Output Bitstream / Sink ]
+```
+
+#### Scenario 1: IoT Sensor Calibration & Quantization Pipeline
+**12-bit ADC raw samples $\to$ DC bias removal $\to$ amplifier scaling $\to$ saturating clamp $\to$ 8-bit DAC**
+
+```bash
+bdd "12 -> sub(512) -> mul(2) -> clamp(0,0,255:saturate) -> 8" < raw_adc.bin > dac_control.bin
+```
+
+Microcontroller ADCs (such as the STM32 internal ADC or external SPI chips like the MCP3204/ADS1015) stream unaligned 12-bit raw readings packed tightly across byte boundaries (two 12-bit samples take exactly 3 bytes: `0xABCDEF` $\to$ `0xABC`, `0xDEF`). 
+
+Raw readings often carry an analog DC bias (e.g. half-rail virtual ground at 512 counts) and need a $2\times$ pre-amplifier software calibration gain. Crucially, scaling must never wrap around modulo 256—a saturated overflow at the DAC output could destroy downstream actuators or blow out speaker coils.
+
+**How `bdd` Solves It in Flight:**
+```
+Raw 12-bit Input:   [ 0x300 (768) ]
+1. sub(512):        768 - 512 = 256
+2. mul(2):          256 * 2   = 512
+3. clamp(0,0,255):  512 clamped to 255  (Saturates at maximum DAC limit, no rollover!)
+4. -> 8:            Packs 255 into dense 8-bit byte stream: 0xFF
+```
+
+#### Scenario 2: Real-Time Broadcast Video Descrambling
+**Slicing MPEG-TS payload $\to$ On-the-fly XOR descrambling $\to$ Container preservation**
+
+```bash
+bdd "188B[32:1472] -> xor(0xA5) -> 188B[32:1472]" < scrambled.ts > clear.ts
+```
+
+In DVB, ATSC, and IPTV broadcast pipelines, video data is framed in fixed 188-byte MPEG-2 Transport Stream (MPEG-TS) packets. Each packet begins with a 4-byte (32-bit) transport header containing the sync byte (`0x47`), transport error indicators, and the 13-bit Program ID (PID), followed by a 184-byte (1472-bit) payload:
+
+```
+┌─────────────────────────┬────────────────────────────────────────────────────────┐
+│ 4-Byte Header (32 bits) │           184-Byte Payload (1472 bits)                 │
+│ 0x47 ... PID ... Flags  │            [ Scrambled PES / ES Data ]                 │
+└─────────────────────────┴────────────────────────────────────────────────────────┘
+```
+
+When descrambling broadcast streams protected with a synchronous stream cipher or PRBS whitening sequence, modifying the 4-byte header corrupts sync acquisition on downstream decoders. 
+
+`bdd` uses the periodic container syntax `188B[32:1472]` on both sides of the arrow:
+1. **Input Slicer (`188B[32:1472]`)**: Skips the 32-bit packet header, extracting *only* the 1472-bit payload from each 188-byte container.
+2. **Transform (`xor(0xA5)`)**: Applies the descrambling mask to every payload byte in flight at gigabit line rate.
+3. **Output Framer (`-> 188B[32:1472]`)**: Re-embeds the decrypted payload back into 188-byte packet boundaries, perfectly preserving the original 32-bit header slots for downstream decoders.
+
+#### Scenario 3: Audio DSP Headroom Limiting & Dynamic Soft-Clipping
+**16-bit signed PCM $\to$ Symmetric saturation limiting $\to$ Volume attenuation $\to$ 16-bit signed output**
+
+```bash
+bdd "16S -> clamp(16000:saturate) -> div(2) -> 16S" < live_mic.raw > limiter_out.raw
+```
+
+Raw audio capture streams deliver signed 16-bit linear PCM (`16S`, range $-32768$ to $+32767$). In live sound, broadcast radio, or voice telemetry, unexpected acoustic transients (mic drops, pops, feedback) cause integer overflow wrapping if improperly handled, producing deafening digital noise. 
+
+A low-latency DSP limiter must hard-saturate transients to a safe 6 dB digital headroom boundary ($\pm 16000$) and apply attenuation (`div(2)`) before hitting the transmission encoder:
+```
+Input Sample:      +28000 (Severe transient peak)
+1. clamp(16000):   Clamped to +16000 (Saturates smoothly, zero wrap-around)
+2. div(2):         16000 / 2 = +8000 (Safe -6dB attenuation)
+3. -> 16S:         Emitted as 16-bit signed little-endian audio sample: 0x40 0x1F
+```
+
+#### Scenario 4: Network Packet QoS / DSCP & CoS Priority Rewriting
+**Slicing unaligned IP DSCP flags $\to$ Reset & override priority $\to$ In-place re-framing**
+
+```bash
+# Rewrite DSCP to Expedited Forwarding (EF = 46 / 0x2E) on all IPv4 packets:
+bdd "14B : [0:6:2] + 18B -> and(0) -> or(46) -> 14B : [0:6:2] + 18B" < tap_capture.raw > qos_tagged.raw
+```
+
+In Layer 3 networking, Quality of Service (QoS) is encoded in the 8-bit Type of Service (ToS) byte of the IPv4 header (located at byte offset 15, immediately following the 14-byte Ethernet MAC header). 
+
+The ToS byte is divided into two unaligned bitfields:
+- **Bits 0–5 (6 bits)**: Differentiated Services Code Point (DSCP)
+- **Bits 6–7 (2 bits)**: Explicit Congestion Notification (ECN)
+
+Overwriting the entire byte destroys active ECN congestion markers (`ECT(0)`, `ECT(1)`, `CE`), degrading TCP throughput. A proper network rewriter must isolate the 6-bit DSCP field, apply the priority rewrite, preserve the 2-bit ECN tail, and re-frame the packet.
+
+`14B : [0:6:2] + 18B` skips the 14-byte Ethernet header, extracts the 6-bit DSCP field with 2-bit post-gap, skips the remaining 18 bytes of IPv4 header, applies `and(0) -> or(46)`, and repacks directly back into the network frame with Ethernet headers, ECN flags, and IP payload 100% intact!
+
+#### Scenario 5: Hardware Watchdog Heartbeat & Cryptographic Rolling Counter
+**Generating counter $\to$ Bitwise invert MSB nibble $\to$ Entropy injection $\to$ 16-bit register word**
+
+```bash
+bdd "16 -> xor(0xF000) -> add(0x1337) -> 16" --input-counter --count 10 --output-hex
+```
+
+Mission-critical embedded systems and automotive ECUs (AUTOSAR) use external hardware watchdog ICs (e.g. TI TPS3851 or Analog Devices MAX6369) that require a periodic heartbeat register write. To prove that the CPU firmware is genuinely executing rather than stuck in a trivial loop, modern watchdogs enforce a dynamic rolling challenge: the upper 4 bits (MSB nibble) must be bitwise inverted on each tick, while the lower bits increment with a deterministic cryptographic or polynomial offset.
+
+Using native synthetic stream generation (`--input-counter`), `bdd` produces a continuous hardware feed without needing an input file:
+1. `--input-counter`: Emits sequential integers `0x0000`, `0x0001`, `0x0002`...
+2. `xor(0xF000)`: Inverts the upper 4 bits (`0x0...` becomes `0xF...`).
+3. `add(0x1337)`: Injects the static hardware challenge key offset.
+4. `--output-hex`: Formats the resulting stream directly for JTAG, OpenOCD, or serial UART register writes.
+
+---
 
 All CLI flags (`--input-raw-unit`, `--input-offset`, `--output-raw-unit`, `--output-offset`, `--output-gap`, `--output-skip-bits`, etc.) remain fully functional and can override or complement positional arguments.
 
@@ -776,13 +913,25 @@ Output:
 {"afc":1,"cc":2,"pid":256,"priority":0,"pusi":1,"scrambling":0,"sync":71,"tei":0}
 ```
 
-### Pattern Explainer (`--explain-pattern`)
+### Pattern Explainer & Code Generation (`--explain-pattern`, `--export-c`, `--export-rust`)
 Examine bit ranges, byte alignments, offsets, and field types without running a processing job:
 ```bash
 bdd --explain-pattern "sync:11u,version:2u,layer:2u,protect:1b,bitrate:4u"
 # Machine-readable JSON output for AI toolchains:
 bdd --explain-pattern "sync:11u,version:2u" --output-json
 ```
+
+#### Struct Code Generation (`--export-c`, `--export-rust`)
+Instantly generate production-ready packed C structs and Rust struct definitions from any pattern or protocol preset:
+```bash
+# Generate packed C struct definition with bitfields:
+bdd --preset mpeg-ts --export-c
+
+# Generate Rust struct with #[repr(C, packed)]:
+bdd --preset mpeg-ts --export-rust
+bdd "sync:11U,ver:2U,layer:2U,prot:1B" --export-rust
+```
+
 
 ### Binary Prober (`--probe`) & Unit Stream Prober (`--probe-units`)
 
@@ -830,6 +979,15 @@ Each candidate key reports:
 - **Hex Payload**: Full hexadecimal representation of the candidate key bytes.
 - **Classification**: Likely cryptographic algorithm (AES-128, AES-256, ChaCha20, Ed25519, SHA-512).
 
+#### 4. Visual Sparklines, Entropy Heatmaps & Signature Detection (`--probe-visual`)
+Generate interactive terminal entropy sparklines and 2D ANSI heatmaps (` ▂▃▄▅▆▇█`) for rapid visual triage of compression boundaries, encrypted payloads, and header transitions:
+```bash
+# Render visual entropy map and sparklines:
+bdd --probe payload.bin --probe-visual
+bdd --probe-units --probe-map < stream.bin
+```
+**Automated Magic Signature Detection**: The prober scans for 25+ binary magic signatures across common container formats (ELF, Mach-O, PE/COFF, PNG, JPEG, GIF, PDF, ZIP, GZIP, BZIP2, XZ, Zstandard, 7-Zip, WebP, WASM, PCAP, MPEG-TS, SQLite, Java Class, etc.), reporting recognized signatures and byte offsets in text and structured JSON.
+
 ### Model Context Protocol (MCP) Server (`--mcp`)
 `bdd` includes a native JSON-RPC 2.0 stdio MCP server for agent integration:
 ```bash
@@ -837,8 +995,10 @@ bdd --mcp
 ```
 Registered MCP tools:
 - `bdd_slice`: Slices a file or hex string by pattern/preset and outputs text or JSON.
-- `bdd_probe`: Analyzes raw binary entropy, byte distributions, and repeating record strides.
-- `bdd_probe_units`: Probes unit characteristics after stream processing and discovers maximum-entropy crypto keys.
+- `bdd_probe`: Analyzes raw binary entropy, byte distributions, repeating record strides, entropy sparklines, and magic signatures.
+- `bdd_probe_units`: Probes unit characteristics after stream processing, entropy sparklines, and discovers maximum-entropy crypto keys.
+- `bdd_transcode`: Dynamic transcoding of binary payloads between patterns, presets, and formats with bitwise/arithmetic manipulators.
+- `bdd_generate`: Generates synthetic test vectors (counter, random, zeros, ones) conforming to arbitrary bitfield patterns or presets.
 - `bdd_explain_pattern`: Explains schema bit offsets and field types.
 - `bdd_list_presets`: Returns available protocol presets.
 
@@ -1027,12 +1187,13 @@ Input Unit & Raw Unit Options:
       --input-no-seek              Disable seeking specifically on primary input
       --input-use-seek             Explicitly enable seeking on input (default: true)
 
-Synthetic Stream Sources:
+Synthetic Stream Sources & Telemetry:
   -c, --input-counter              Generate sequential counter numbers (0, 1, 2...)
   -0, --input-zeros                Generate endless stream of zero bits
   -1, --input-ones                 Generate endless stream of one bits
   -r, --input-random               Generate random bits from /dev/urandom
   -t, --input-tuples               Read comma-separated tuple lines from text input
+      --input-netlink              Stream Linux kernel process events via AF_NETLINK connector (CN_IDX_PROC)
       --skip <UNITS>               Skip initial N units [default: 0]
       --count <COUNT>              Process at most N units (0 or omitted = infinite) [default: 0]
 
@@ -1081,10 +1242,13 @@ Output Unit & Pattern Options:
       --csv-header <HEADER>        Optional CSV column header row
       --output-visual              Colorized ANSI terminal dump of unaligned fields
 
-Inspection, Web UI & Model Context Protocol (MCP):
+Inspection, Code Generation, Web UI & MCP:
       --explain-pattern [PATTERN]  Analyze bit layout, byte alignment, and field breakdown
+      --export-c                   Generate packed C struct definition with bitfields
+      --export-rust                Generate Rust #[repr(C, packed)] struct definition
       --probe [FILE]               Inspect binary entropy, byte classes, periodic strides, and strings
       --probe-units                Probe unit stream characteristics and entropy AFTER input stream processing [alias: --probe-stream]
+      --probe-visual               Render visual entropy sparkline and 2D ANSI heatmap [alias: --probe-map]
       --probe-keys [SIZE]          Scan unit stream for potential maximum-entropy cryptographic keys [default: 256 bits]
       --probe-field <INDEX>        Target specific tuple field index (0-based) for unit probing after pattern unpacking
       --mcp                        Launch native JSON-RPC 2.0 Model Context Protocol (MCP) server
@@ -1110,6 +1274,7 @@ Merge Options:
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)
 
 General:
+      --completions <SHELL>        Generate shell completion script (bash, zsh, fish, powershell, elvish)
   -q, --quiet                      Silence non-fatal warnings and diagnostic summaries
   -h, --help                       Print help
   -V, --version                    Print version

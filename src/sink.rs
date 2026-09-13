@@ -1,4 +1,4 @@
-use crate::field::{reverse_bits, Field};
+use crate::field::{reverse_bits, reverse_unit_bytes, Field};
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive, Zero};
 use std::io::Write;
@@ -83,20 +83,30 @@ pub struct HexOutputStream<W> {
     writer: W,
     output_column: usize,
     output_units_in_line: usize,
+    reverse_bytes: bool,
+    reverse_unit: bool,
 }
 
 impl<W: Write> HexOutputStream<W> {
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: W, reverse_bytes: bool, reverse_unit: bool) -> Self {
         Self {
             writer,
             output_column: 0,
             output_units_in_line: 0,
+            reverse_bytes,
+            reverse_unit,
         }
     }
 }
 
 impl<W: Write> UnitSink for HexOutputStream<W> {
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            unit = reverse_bits(&unit, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            unit = reverse_unit_bytes(&unit, bits);
+        }
         let mask = if bits > 0 {
             (BigUint::one() << bits) - 1u32
         } else {
@@ -141,20 +151,30 @@ pub struct BitOutputStream<W> {
     writer: W,
     output_column: usize,
     output_units_in_line: usize,
+    reverse_bytes: bool,
+    reverse_unit: bool,
 }
 
 impl<W: Write> BitOutputStream<W> {
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: W, reverse_bytes: bool, reverse_unit: bool) -> Self {
         Self {
             writer,
             output_column: 0,
             output_units_in_line: 0,
+            reverse_bytes,
+            reverse_unit,
         }
     }
 }
 
 impl<W: Write> UnitSink for BitOutputStream<W> {
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            unit = reverse_bits(&unit, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            unit = reverse_unit_bytes(&unit, bits);
+        }
         let mask = if bits > 0 {
             (BigUint::one() << bits) - 1u32
         } else {
@@ -196,16 +216,28 @@ impl<W: Write> UnitSink for BitOutputStream<W> {
 /// Sink formatting units as decimal integers, one per line.
 pub struct IntegerOutputStream<W> {
     writer: W,
+    reverse_bytes: bool,
+    reverse_unit: bool,
 }
 
 impl<W: Write> IntegerOutputStream<W> {
-    pub fn new(writer: W) -> Self {
-        Self { writer }
+    pub fn new(writer: W, reverse_bytes: bool, reverse_unit: bool) -> Self {
+        Self {
+            writer,
+            reverse_bytes,
+            reverse_unit,
+        }
     }
 }
 
 impl<W: Write> UnitSink for IntegerOutputStream<W> {
     fn write_bits(&mut self, mut unit: BigUint, bits: usize) -> std::io::Result<()> {
+        if self.reverse_unit {
+            unit = reverse_bits(&unit, bits);
+        }
+        if self.reverse_bytes && bits > 0 {
+            unit = reverse_unit_bytes(&unit, bits);
+        }
         let mask = if bits > 0 {
             (BigUint::one() << bits) - 1u32
         } else {
@@ -302,6 +334,11 @@ impl<W: Write> TupleSink for JsonOutputStream<W> {
                         let s = String::from_utf8_lossy(b).into_owned();
                         serde_json::Value::String(s)
                     }
+                    Field::Bits(u, bits) => {
+                        let b_str = format!("{:b}", u);
+                        let filler = "0".repeat(bits.saturating_sub(b_str.len()));
+                        serde_json::Value::String(format!("0b{}{}", filler, b_str))
+                    }
                 };
                 map.insert(key, val);
             }
@@ -332,6 +369,11 @@ impl<W: Write> TupleSink for JsonOutputStream<W> {
                     Field::Bytes(b) => {
                         let s = String::from_utf8_lossy(b);
                         format!("\"{}\"", s.escape_default())
+                    }
+                    Field::Bits(u, bits) => {
+                        let b_str = format!("{:b}", u);
+                        let filler = "0".repeat(bits.saturating_sub(b_str.len()));
+                        format!("\"0b{}{}\"", filler, b_str)
                     }
                 })
                 .collect();
@@ -383,6 +425,11 @@ impl<W: Write> TupleSink for CsvOutputStream<W> {
                     } else {
                         s.to_string()
                     }
+                }
+                Field::Bits(u, bits) => {
+                    let b_str = format!("{:b}", u);
+                    let filler = "0".repeat(bits.saturating_sub(b_str.len()));
+                    format!("0b{}{}", filler, b_str)
                 }
             })
             .collect();
@@ -458,7 +505,7 @@ mod tests {
     fn test_hex_output_sink() {
         let mut buf = Vec::new();
         {
-            let mut sink = HexOutputStream::new(&mut buf);
+            let mut sink = HexOutputStream::new(&mut buf, false, false);
             sink.write_bits(BigUint::from(5u32), 8).unwrap();
             sink.flush_stream().unwrap();
         }
@@ -466,24 +513,49 @@ mod tests {
 
         let mut multi_buf = Vec::new();
         {
-            let mut sink = HexOutputStream::new(&mut multi_buf);
+            let mut sink = HexOutputStream::new(&mut multi_buf, false, false);
             sink.write_bits(BigUint::from(0x0Au32), 8).unwrap();
             sink.write_bits(BigUint::from(0xBCu32), 8).unwrap();
             sink.flush_stream().unwrap();
         }
         assert_eq!(String::from_utf8(multi_buf).unwrap(), "0a bc\n");
+
+        // Test reversal in hex output
+        let mut rev_buf = Vec::new();
+        {
+            let mut sink = HexOutputStream::new(&mut rev_buf, false, true);
+            sink.write_bits(BigUint::from(1u32), 8).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(rev_buf).unwrap(), "80\n");
+
+        let mut rev_bytes_buf = Vec::new();
+        {
+            let mut sink = HexOutputStream::new(&mut rev_bytes_buf, true, false);
+            sink.write_bits(BigUint::from(0x0130u32), 16).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(rev_bytes_buf).unwrap(), "800c\n");
     }
 
     #[test]
     fn test_bit_output_sink() {
         let mut buf = Vec::new();
         {
-            let mut sink = BitOutputStream::new(&mut buf);
+            let mut sink = BitOutputStream::new(&mut buf, false, false);
             sink.write_bits(BigUint::from(1u32), 3).unwrap();
             sink.write_bits(BigUint::from(6u32), 3).unwrap();
             sink.flush_stream().unwrap();
         }
         assert_eq!(String::from_utf8(buf).unwrap(), "001 110\n");
+
+        let mut rev_buf = Vec::new();
+        {
+            let mut sink = BitOutputStream::new(&mut rev_buf, false, true);
+            sink.write_bits(BigUint::from(1u32), 4).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        assert_eq!(String::from_utf8(rev_buf).unwrap(), "1000\n");
     }
 
     #[test]
@@ -492,7 +564,7 @@ mod tests {
         let val_256: BigUint = (BigUint::one() << 255usize) | BigUint::from(0xABu32);
         let mut hex_buf = Vec::new();
         {
-            let mut sink = HexOutputStream::new(&mut hex_buf);
+            let mut sink = HexOutputStream::new(&mut hex_buf, false, false);
             sink.write_bits(val_256.clone(), 256).unwrap();
             sink.flush_stream().unwrap();
         }
@@ -506,7 +578,7 @@ mod tests {
         let val_128: BigUint = (BigUint::one() << 127usize) | BigUint::one();
         let mut bit_buf = Vec::new();
         {
-            let mut sink = BitOutputStream::new(&mut bit_buf);
+            let mut sink = BitOutputStream::new(&mut bit_buf, false, false);
             sink.write_bits(val_128, 128).unwrap();
             sink.flush_stream().unwrap();
         }
@@ -518,7 +590,7 @@ mod tests {
         // Integer sink with 256-bit number
         let mut int_buf = Vec::new();
         {
-            let mut sink = IntegerOutputStream::new(&mut int_buf);
+            let mut sink = IntegerOutputStream::new(&mut int_buf, false, false);
             sink.write_bits(val_256.clone(), 256).unwrap();
             sink.flush_stream().unwrap();
         }

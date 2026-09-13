@@ -12,10 +12,11 @@ pub struct StreamSpec {
     pub gap: Option<u64>,
 }
 
-/// Parsed stream I/O pattern combining input and output specifications.
+/// Parsed stream I/O pattern combining input, optional inline manipulators, and output specifications.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamIoPattern {
     pub input: Option<StreamSpec>,
+    pub manipulators: Vec<String>,
     pub output: Option<StreamSpec>,
 }
 
@@ -53,16 +54,16 @@ pub fn is_stream_io_pattern(s: &str) -> bool {
     false
 }
 
-/// Parse a full stream I/O pattern, e.g. "123:8[2:4]+8 -> 5B:8[2:4]" or "8->3".
+/// Parse a full stream I/O pattern, e.g. "123:8[2:4]+8 -> 5B:8[2:4]" or "8 -> xor(0xFF) -> 8".
 pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddError> {
     let trimmed = input_str.trim();
     if trimmed.is_empty() {
         return Ok(StreamIoPattern::default());
     }
 
-    // Split on top-level '->' (outside any brackets)
+    // Split on top-level '->' (outside any brackets or parentheses)
     let mut depth = 0;
-    let mut arrow_pos = None;
+    let mut arrow_indices = Vec::new();
     let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
     let n = chars.len();
 
@@ -70,22 +71,30 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
     while i < n {
         let (byte_idx, c) = chars[i];
         match c {
-            '[' => depth += 1,
-            ']' => {
+            '[' | '(' => depth += 1,
+            ']' | ')' => {
                 if depth > 0 {
                     depth -= 1;
                 }
             }
             '-' if depth == 0 && i + 1 < n && chars[i + 1].1 == '>' => {
-                arrow_pos = Some(byte_idx);
-                break;
+                arrow_indices.push(byte_idx);
+                i += 1;
             }
             _ => {}
         }
         i += 1;
     }
 
-    if let Some(idx) = arrow_pos {
+    if arrow_indices.is_empty() {
+        let in_spec = Some(parse_stream_spec(trimmed)?);
+        Ok(StreamIoPattern {
+            input: in_spec,
+            manipulators: Vec::new(),
+            output: None,
+        })
+    } else if arrow_indices.len() == 1 {
+        let idx = arrow_indices[0];
         let left = trimmed[..idx].trim();
         let right = trimmed[idx + 2..].trim();
         let in_spec = if !left.is_empty() {
@@ -100,13 +109,40 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         };
         Ok(StreamIoPattern {
             input: in_spec,
+            manipulators: Vec::new(),
             output: out_spec,
         })
     } else {
-        let in_spec = Some(parse_stream_spec(trimmed)?);
+        let first_idx = arrow_indices[0];
+        let last_idx = *arrow_indices.last().unwrap();
+        let left = trimmed[..first_idx].trim();
+        let right = trimmed[last_idx + 2..].trim();
+
+        let in_spec = if !left.is_empty() {
+            Some(parse_stream_spec(left)?)
+        } else {
+            None
+        };
+        let out_spec = if !right.is_empty() {
+            Some(parse_stream_spec(right)?)
+        } else {
+            None
+        };
+
+        let mut manipulators = Vec::new();
+        for k in 0..arrow_indices.len() - 1 {
+            let start = arrow_indices[k] + 2;
+            let end = arrow_indices[k + 1];
+            let seg = trimmed[start..end].trim();
+            if !seg.is_empty() {
+                manipulators.push(seg.to_string());
+            }
+        }
+
         Ok(StreamIoPattern {
             input: in_spec,
-            output: None,
+            manipulators,
+            output: out_spec,
         })
     }
 }

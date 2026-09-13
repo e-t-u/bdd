@@ -16,7 +16,7 @@ pub fn default_bits_for_type(c: char, is_output: bool) -> usize {
                 1
             }
         }
-        'u' | 'U' | 'b' | 'z' | 'o' | 'r' => 1,
+        'u' | 'U' | 'b' | 'z' | 'o' | 'r' | 'V' | 'v' => 1,
         'B' | 's' | 'S' | 'M' | 'q' | 'Q' | 'e' | 'E' | 'c' | 'C' | 'k' | 'K' => 8,
         'm' => 4,
         'h' | 'H' | 'y' | 'Y' => 16,
@@ -331,7 +331,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
                 c
             )));
         }
-        if !"xXUuBbSsMmFfDdHhYyEeQqCcKk".contains(c) {
+        if !"xXUuBbSsMmFfDdHhYyEeQqCcKkVv".contains(c) {
             return Err(BddError::IllegalInputPatternChar(c));
         }
         if item.bits == 0 {
@@ -424,7 +424,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
                 c
             )));
         }
-        if !"UuBbSsMmFfDdHhYyEeQqCczorXxKk".contains(c) {
+        if !"UuBbSsMmFfDdHhYyEeQqCczorXxKkVv".contains(c) {
             return Err(BddError::IllegalOutputPatternChar(c));
         }
         if item.bits == 0 && c != 'x' && c != 'X' {
@@ -510,10 +510,15 @@ impl TupleUnpacker {
         for p in &self.reversed_pattern {
             let bits = p.bits;
             let c = p.char_code;
-            if "usmfdchyqebk".contains(c) {
+            if "usmfdchyqebkv".contains(c) {
                 unit = reverse_bits(&unit, bits);
             }
             if c == 'x' || c == 'X' {
+                unit >>= bits;
+            } else if c == 'V' || c == 'v' {
+                let mask = (BigUint::one() << bits) - 1u32;
+                let val = &unit & &mask;
+                tuple.push(Field::Bits(val, bits));
                 unit >>= bits;
             } else if c == 'U' || c == 'u' || c == 'B' || c == 'b' || c == 'K' || c == 'k' {
                 let mask = (BigUint::one() << bits) - 1u32;
@@ -675,7 +680,7 @@ impl TuplePacker {
                 continue;
             }
             let mut val = match c {
-                'U' | 'u' | 'B' | 'b' => {
+                'U' | 'u' | 'B' | 'b' | 'V' | 'v' => {
                     let f = Self::pop_field(&mut tuple)?;
                     f.as_biguint()
                 }
@@ -800,7 +805,7 @@ impl TuplePacker {
                 _ => BigUint::zero(),
             };
 
-            if "usmfdchyqebk".contains(c) {
+            if "usmfdchyqebkv".contains(c) {
                 val = reverse_bits(&val, bits);
             }
             let mask = if bits > 0 {

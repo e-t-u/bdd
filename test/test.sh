@@ -148,8 +148,7 @@ echo "should print xyz (input pattern 24c)"
 echo -en "xyz" | ./bdd --input-pattern=24u --output-pattern=24U | ./bdd --input-pattern=24c --output-tuples
 echo "should print a,,,2,-1,5.5 (non-integer elements in --input-tuples, whitespace)"
 echo -en "a,\",\",2, -1 , 5.5" | ./bdd --input-tuples --output-tuples
-# TODO: quoting numbers with --input-tuples still does not work
-echo "(TODO) should print 35, not 5 (quoted input-tuples interpreted as number)"
+echo "should print 35, not 5 (quoted input-tuples preserved as ASCII string bytes)"
 echo -en "\"5\"" | ./bdd --input-tuples --output-hex
 echo "should print: 00 00 (count with infinite file)"
 ./bdd --input-file=/dev/zero --count=2 --output-hex

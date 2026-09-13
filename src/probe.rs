@@ -12,6 +12,45 @@ use std::io::Read;
 
 const MAX_PROBE_SAMPLE: usize = 1_048_576; // Sample up to 1 MB
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DetectedSignature {
+    pub offset: usize,
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+pub static FILE_SIGNATURES: &[(&[u8], &str, &str)] = &[
+    (&[0x7F, b'E', b'L', b'F'], "ELF", "Executable and Linkable Format binary"),
+    (b"MZ", "MZ / PE", "DOS/Windows Portable Executable"),
+    (&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A], "PNG", "Portable Network Graphics image"),
+    (&[0xFF, 0xD8, 0xFF], "JPEG", "JPEG image bitstream"),
+    (b"GIF87a", "GIF87a", "GIF image header"),
+    (b"GIF89a", "GIF89a", "GIF image header"),
+    (b"%PDF", "PDF", "Adobe Portable Document Format"),
+    (&[b'P', b'K', 0x03, 0x04], "ZIP", "ZIP / JAR / APK / DOCX archive"),
+    (&[0x1F, 0x8B], "GZIP", "Gzip compressed container"),
+    (&[0x42, 0x5A, 0x68], "BZIP2", "Bzip2 compressed container"),
+    (&[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00], "XZ", "XZ compressed container"),
+    (&[0x28, 0xB5, 0x2F, 0xFD], "ZSTD", "Zstandard compressed stream"),
+    (b"RIFF", "RIFF", "RIFF multimedia container (WAV / AVI / WEBP)"),
+    (b"BM", "BMP", "Bitmap image header"),
+    (b"OggS", "OGG", "Ogg multimedia bitstream container"),
+    (b"fLaC", "FLAC", "Free Lossless Audio Codec"),
+    (b"MThd", "MIDI", "Standard MIDI file"),
+    (
+        b"SQLite format 3\0",
+        "SQLite3",
+        "SQLite 3 database",
+    ),
+    (&[0xCA, 0xFE, 0xBA, 0xBE], "Mach-O / Java", "Mach-O Fat Binary or Java Class File"),
+    (&[0xFE, 0xED, 0xFA, 0xCE], "Mach-O 32", "Mach-O 32-bit binary"),
+    (&[0xFE, 0xED, 0xFA, 0xCF], "Mach-O 64", "Mach-O 64-bit binary"),
+    (&[0xCF, 0xFA, 0xED, 0xFE], "Mach-O 64 (LE)", "Mach-O 64-bit Little Endian binary"),
+    (b"wOFF", "WOFF", "Web Open Font Format"),
+    (b"wOF2", "WOFF2", "Web Open Font Format 2"),
+    (&[0x00, 0x61, 0x73, 0x6D], "Wasm", "WebAssembly binary module (\\0asm)"),
+];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProbeReport {
     pub target: String,
@@ -19,6 +58,8 @@ pub struct ProbeReport {
     pub sample_bits: usize,
     pub entropy: f64,
     pub entropy_diagnosis: String,
+    pub entropy_sparkline: String,
+    pub detected_signatures: Vec<DetectedSignature>,
     pub byte_distribution: ByteDistribution,
     pub detected_strides: Vec<DetectedStride>,
     pub string_runs: Vec<StringRun>,
@@ -78,6 +119,8 @@ pub struct UnitProbeReport {
     pub max_unit_entropy: f64,
     pub normalized_entropy: f64,
     pub entropy_diagnosis: String,
+    pub entropy_sparkline: String,
+    pub detected_signatures: Vec<DetectedSignature>,
     pub top_units: Vec<UnitFrequency>,
     pub detected_strides: Vec<DetectedUnitStride>,
     pub crypto_key_candidates: Vec<CryptoKeyCandidate>,
@@ -118,6 +161,181 @@ pub struct CryptoKeyCandidate {
     pub confidence: String,
 }
 
+pub fn scan_file_signatures(buf: &[u8]) -> Vec<DetectedSignature> {
+    if buf.is_empty() {
+        return Vec::new();
+    }
+    let mut detected = Vec::new();
+
+    // Check offset 0
+    for &(sig, name, desc) in FILE_SIGNATURES {
+        if buf.starts_with(sig) {
+            detected.push(DetectedSignature {
+                offset: 0,
+                name,
+                description: desc,
+            });
+        }
+    }
+
+    // Check MPEG-TS sync byte 0x47
+    if buf.len() >= 188
+        && buf[0] == 0x47
+        && (buf.len() < 376 || buf[188] == 0x47)
+        && !detected.iter().any(|d| d.offset == 0 && d.name == "MPEG-TS")
+    {
+        detected.push(DetectedSignature {
+            offset: 0,
+            name: "MPEG-TS",
+            description: "MPEG Transport Stream packet sync (0x47 periodic)",
+        });
+    }
+
+    // Scan embedded signatures (for multi-byte signatures >= 3 bytes, up to 64KB)
+    let scan_limit = buf.len().min(65536);
+    if scan_limit > 4 {
+        for offset in 1..scan_limit {
+            let slice = &buf[offset..];
+            for &(sig, name, desc) in FILE_SIGNATURES {
+                if sig.len() >= 3
+                    && slice.starts_with(sig)
+                    && !detected.iter().any(|d| d.offset == offset && d.name == name)
+                {
+                    detected.push(DetectedSignature {
+                        offset,
+                        name,
+                        description: desc,
+                    });
+                    if detected.len() >= 8 {
+                        return detected;
+                    }
+                }
+            }
+        }
+    }
+
+    detected
+}
+
+pub fn compute_entropy_sparkline(data: &[u8], num_blocks: usize) -> String {
+    if data.is_empty() {
+        return String::new();
+    }
+    let blocks = num_blocks.max(1).min(data.len());
+    let block_size = data.len().div_ceil(blocks);
+    const SPARK_CHARS: [char; 8] = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let mut spark = String::with_capacity(blocks);
+
+    for chunk in data.chunks(block_size) {
+        let n = chunk.len();
+        if n == 0 {
+            continue;
+        }
+        let mut freq = [0usize; 256];
+        for &b in chunk {
+            freq[b as usize] += 1;
+        }
+        let mut ent = 0.0f64;
+        let n_f = n as f64;
+        for &c in &freq {
+            if c > 0 {
+                let p = c as f64 / n_f;
+                ent -= p * p.log2();
+            }
+        }
+        let idx = ((ent / 8.0) * 7.999).floor() as usize;
+        let idx = idx.min(7);
+        spark.push(SPARK_CHARS[idx]);
+    }
+    spark
+}
+
+pub fn compute_unit_entropy_sparkline(
+    units: &[BigUint],
+    unit_bits: usize,
+    num_blocks: usize,
+) -> String {
+    if units.is_empty() {
+        return String::new();
+    }
+    let blocks = num_blocks.max(1).min(units.len());
+    let block_size = units.len().div_ceil(blocks);
+    const SPARK_CHARS: [char; 8] = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let mut spark = String::with_capacity(blocks);
+
+    let max_possible = (unit_bits as f64).clamp(1.0, 32.0);
+
+    for chunk in units.chunks(block_size) {
+        let n = chunk.len();
+        if n == 0 {
+            continue;
+        }
+        let mut freq: HashMap<&BigUint, usize> = HashMap::new();
+        for u in chunk {
+            *freq.entry(u).or_insert(0) += 1;
+        }
+        let mut ent = 0.0f64;
+        let n_f = n as f64;
+        for &c in freq.values() {
+            if c > 0 {
+                let p = c as f64 / n_f;
+                ent -= p * p.log2();
+            }
+        }
+        let norm = (ent / max_possible).clamp(0.0, 1.0);
+        let idx = (norm * 7.999).floor() as usize;
+        let idx = idx.min(7);
+        spark.push(SPARK_CHARS[idx]);
+    }
+    spark
+}
+
+pub fn format_visual_entropy_map(data: &[u8], width: usize) -> String {
+    if data.is_empty() {
+        return "Visual Entropy Map: empty data\n".to_string();
+    }
+    let col_width = width.clamp(16, 128);
+    let total_len = data.len();
+    let num_lines = if total_len <= 1024 {
+        1
+    } else if total_len <= 65536 {
+        (total_len / 4096).clamp(4, 16)
+    } else {
+        16
+    };
+    let chunk_size = total_len.div_ceil(num_lines);
+    let mut out = String::new();
+    out.push_str("Visual Entropy Map (Shannon bits/byte distribution):\n");
+    out.push_str("  [Legend: ' ' <1.0 | '▂' 1-2 | '▃' 2-3 | '▄' 3-4 | '▅' 4-5 | '▆' 5-6 | '▇' 6-7 | '█' 7-8]\n\n");
+
+    for (i, line_chunk) in data.chunks(chunk_size).enumerate() {
+        let offset = i * chunk_size;
+        let spark = compute_entropy_sparkline(line_chunk, col_width);
+
+        let mut freq = [0usize; 256];
+        for &b in line_chunk {
+            freq[b as usize] += 1;
+        }
+        let mut ent = 0.0f64;
+        let n_f = line_chunk.len() as f64;
+        for &c in &freq {
+            if c > 0 {
+                let p = c as f64 / n_f;
+                ent -= p * p.log2();
+            }
+        }
+
+        out.push_str(&format!(
+            "  0x{:06X} [{:>7}B] [ {} ] {:.2} H\n",
+            offset,
+            line_chunk.len(),
+            spark,
+            ent
+        ));
+    }
+    out
+}
+
 pub fn probe_buffer(buf: &[u8], target_name: &str) -> ProbeReport {
     let n = buf.len();
     let sample_bits = n * 8;
@@ -129,6 +347,8 @@ pub fn probe_buffer(buf: &[u8], target_name: &str) -> ProbeReport {
             sample_bits: 0,
             entropy: 0.0,
             entropy_diagnosis: "Empty stream".to_string(),
+            entropy_sparkline: String::new(),
+            detected_signatures: Vec::new(),
             byte_distribution: ByteDistribution {
                 null_bytes: 0,
                 null_percent: 0.0,
@@ -316,12 +536,17 @@ pub fn probe_buffer(buf: &[u8], target_name: &str) -> ProbeReport {
         "General binary payload with mixed data structures.".to_string()
     };
 
+    let entropy_sparkline = compute_entropy_sparkline(buf, 32);
+    let detected_signatures = scan_file_signatures(buf);
+
     ProbeReport {
         target: target_name.to_string(),
         sample_bytes: n,
         sample_bits,
         entropy,
         entropy_diagnosis,
+        entropy_sparkline,
+        detected_signatures,
         byte_distribution: ByteDistribution {
             null_bytes: null_count,
             null_percent: (null_count as f64 / n as f64) * 100.0,
@@ -362,6 +587,13 @@ pub fn format_probe_text(report: &ProbeReport) -> String {
         "Shannon Entropy:     {:.4} / 8.0000 bits/byte\n",
         report.entropy
     ));
+    if !report.entropy_sparkline.is_empty() {
+        out.push_str(&format!(
+            "Entropy Sparkline:   [ {} ] ({} blocks)\n",
+            report.entropy_sparkline,
+            report.entropy_sparkline.chars().count()
+        ));
+    }
     out.push_str(&format!(
         "Entropy Level:       {}\n",
         report.entropy_diagnosis
@@ -370,6 +602,17 @@ pub fn format_probe_text(report: &ProbeReport) -> String {
         "General Diagnosis:   {}\n\n",
         report.general_diagnosis
     ));
+
+    if !report.detected_signatures.is_empty() {
+        out.push_str("Identified Magic Signatures:\n");
+        for sig in &report.detected_signatures {
+            out.push_str(&format!(
+                "  • Offset 0x{:04X}: {} - {}\n",
+                sig.offset, sig.name, sig.description
+            ));
+        }
+        out.push('\n');
+    }
 
     out.push_str("Byte Class Distribution:\n");
     out.push_str(&format!(
@@ -682,6 +925,8 @@ pub fn probe_unit_stream(
             max_unit_entropy: 0.0,
             normalized_entropy: 0.0,
             entropy_diagnosis: "Empty unit stream".to_string(),
+            entropy_sparkline: String::new(),
+            detected_signatures: Vec::new(),
             top_units: Vec::new(),
             detected_strides: Vec::new(),
             crypto_key_candidates: Vec::new(),
@@ -880,6 +1125,9 @@ pub fn probe_unit_stream(
         })
         .unwrap_or_else(|| "0".to_string());
 
+    let entropy_sparkline = compute_unit_entropy_sparkline(units, unit_bits, 32);
+    let detected_signatures = scan_file_signatures(&bytes);
+
     UnitProbeReport {
         target: target_name.to_string(),
         unit_bits,
@@ -897,6 +1145,8 @@ pub fn probe_unit_stream(
         max_unit_entropy,
         normalized_entropy,
         entropy_diagnosis,
+        entropy_sparkline,
+        detected_signatures,
         top_units,
         detected_strides,
         crypto_key_candidates,
@@ -923,6 +1173,13 @@ pub fn format_unit_probe_text(report: &UnitProbeReport) -> String {
         "Shannon Entropy:     {:.4} / {:.4} bits/unit (Normalized: {:.4})\n",
         report.unit_entropy, report.max_unit_entropy, report.normalized_entropy
     ));
+    if !report.entropy_sparkline.is_empty() {
+        out.push_str(&format!(
+            "Entropy Sparkline:   [ {} ] ({} blocks)\n",
+            report.entropy_sparkline,
+            report.entropy_sparkline.chars().count()
+        ));
+    }
     out.push_str(&format!(
         "Entropy Level:       {}\n",
         report.entropy_diagnosis
@@ -931,6 +1188,17 @@ pub fn format_unit_probe_text(report: &UnitProbeReport) -> String {
         "General Diagnosis:   {}\n\n",
         report.general_diagnosis
     ));
+
+    if !report.detected_signatures.is_empty() {
+        out.push_str("Identified Magic Signatures:\n");
+        for sig in &report.detected_signatures {
+            out.push_str(&format!(
+                "  • Offset 0x{:04X}: {} - {}\n",
+                sig.offset, sig.name, sig.description
+            ));
+        }
+        out.push('\n');
+    }
 
     out.push_str("Unit Value Statistics:\n");
     out.push_str(&format!(
@@ -1080,5 +1348,37 @@ mod tests {
         }
         let rep = probe_unit_stream(&units, 8, Some(256), "test_stride");
         assert!(rep.detected_strides.iter().any(|s| s.stride_units == 3));
+    }
+
+    #[test]
+    fn test_compute_entropy_sparkline() {
+        let zeroes = vec![0u8; 100];
+        let spark_zero = compute_entropy_sparkline(&zeroes, 10);
+        assert_eq!(spark_zero, "          ");
+
+        let mut high_ent = Vec::new();
+        for _ in 0..8 {
+            for i in 0..=255u8 {
+                high_ent.push(i);
+            }
+        }
+        let spark_high = compute_entropy_sparkline(&high_ent, 8);
+        assert_eq!(spark_high, "████████");
+    }
+
+    #[test]
+    fn test_scan_file_signatures() {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0u8; 50]);
+        let sigs = scan_file_signatures(&png);
+        assert!(!sigs.is_empty());
+        assert_eq!(sigs[0].name, "PNG");
+        assert_eq!(sigs[0].offset, 0);
+
+        let mut embedded = vec![0u8; 16];
+        embedded.extend_from_slice(&[0x7F, b'E', b'L', b'F']);
+        embedded.extend_from_slice(&[0u8; 20]);
+        let sigs_embedded = scan_file_signatures(&embedded);
+        assert!(sigs_embedded.iter().any(|s| s.offset == 16 && s.name == "ELF"));
     }
 }

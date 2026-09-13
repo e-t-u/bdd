@@ -11,7 +11,12 @@ real-time binary notifications of process lifecycle events without polling:
   - GID:   Process changes group credentials
   - COMM:  Process renames its command thread
 
-The kernel binary stream is unpacked and verified using 'bdd' patterns.
+Architecture Note:
+  Modern bdd (v0.5.2+) also supports direct kernel Netlink ingestion natively in pure Rust:
+      sudo bdd --input-netlink --output-json
+  This Python tool serves as an advanced higher-level analytics layer that enriches
+  telemetry with /proc/[pid]/cmdline resolution, process lifetime tracking (Runtime ms),
+  ANSI terminal badges, and SOC/SIEM JSON export.
 """
 
 import sys

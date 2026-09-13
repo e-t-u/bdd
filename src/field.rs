@@ -36,6 +36,7 @@ pub enum Field {
     Int(BigInt),
     Float(f64),
     Bytes(Vec<u8>),
+    Bits(BigUint, usize),
 }
 
 impl Field {
@@ -43,6 +44,7 @@ impl Field {
     pub fn as_biguint(&self) -> BigUint {
         match self {
             Field::UInt(u) => u.clone(),
+            Field::Bits(u, _) => u.clone(),
             Field::Int(i) => {
                 if i >= &BigInt::zero() {
                     i.to_biguint().unwrap_or_else(BigUint::zero)
@@ -58,11 +60,6 @@ impl Field {
                 }
             }
             Field::Bytes(bytes) => {
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    if let Ok(u) = s.parse::<BigUint>() {
-                        return u;
-                    }
-                }
                 let mut val = BigUint::zero();
                 for &b in bytes {
                     val = (val << 8) | BigUint::from(b);
@@ -76,16 +73,10 @@ impl Field {
     pub fn as_bigint(&self) -> BigInt {
         match self {
             Field::UInt(u) => BigInt::from_biguint(Sign::Plus, u.clone()),
+            Field::Bits(u, _) => BigInt::from_biguint(Sign::Plus, u.clone()),
             Field::Int(i) => i.clone(),
             Field::Float(f) => BigInt::from(*f as i64),
-            Field::Bytes(bytes) => {
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    if let Ok(i) = s.parse::<BigInt>() {
-                        return i;
-                    }
-                }
-                BigInt::zero()
-            }
+            Field::Bytes(_) => BigInt::from_biguint(Sign::Plus, self.as_biguint()),
         }
     }
 
@@ -93,6 +84,7 @@ impl Field {
     pub fn as_f64(&self) -> f64 {
         match self {
             Field::UInt(u) => u.to_f64().unwrap_or(0.0),
+            Field::Bits(u, _) => u.to_f64().unwrap_or(0.0),
             Field::Int(i) => i.to_f64().unwrap_or(0.0),
             Field::Float(f) => *f,
             Field::Bytes(bytes) => {
@@ -113,6 +105,11 @@ impl fmt::Display for Field {
             Field::Int(i) => write!(f, "{}", i),
             Field::Float(fl) => write!(f, "{}", fl),
             Field::Bytes(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
+            Field::Bits(u, bits) => {
+                let b_str = format!("{:b}", u);
+                let filler = "0".repeat(bits.saturating_sub(b_str.len()));
+                write!(f, "{}{}", filler, b_str)
+            }
         }
     }
 }
@@ -153,6 +150,29 @@ pub fn reverse_bits(val: &BigUint, bits: usize) -> BigUint {
             out += &one;
         }
         v >>= 1;
+    }
+    out
+}
+
+/// Reverses the bits within each byte of a unit of the given bit width.
+pub fn reverse_unit_bytes(val: &BigUint, bits: usize) -> BigUint {
+    if bits == 0 {
+        return BigUint::zero();
+    }
+    let mut out = BigUint::zero();
+    let mut rem_bits = bits;
+    while rem_bits > 0 {
+        let chunk_bits = rem_bits.min(8);
+        let shift = rem_bits - chunk_bits;
+        let mask = if chunk_bits > 0 {
+            (BigUint::one() << chunk_bits) - 1u32
+        } else {
+            BigUint::zero()
+        };
+        let chunk = ((val >> shift) & mask).to_u8().unwrap_or(0);
+        let rev_chunk = chunk.reverse_bits() >> (8 - chunk_bits);
+        out = (out << chunk_bits) | BigUint::from(rev_chunk);
+        rem_bits -= chunk_bits;
     }
     out
 }

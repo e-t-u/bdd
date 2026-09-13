@@ -6,37 +6,15 @@ This document consolidates high-value feature improvements, API additions, and a
 
 ## 1. High Priority Enhancements
 
-### 1.1 Quoted Number Strings in `--input-tuples`
-- **Current Behavior**: In `--input-tuples`, when an item is quoted (e.g. `"5"`), `Field::Bytes` attempts numeric parsing during BigUint conversion, converting it to numeric value `0x05`.
-- **Target Behavior**: Quoted numbers must be strictly preserved as raw ASCII string bytes (`"5"` $\rightarrow$ ASCII `0x35` / `53`), while unquoted numbers (`5`) are parsed as numeric values (`0x05`).
-- **Reference**: Resolves the note in `test/test.sh:151` (`echo -en "\"5\"" | ./bdd --input-tuples --output-hex` should output `35`).
+### 1.1 Quoted Number Strings in `--input-tuples` [COMPLETED]
+- **Current Behavior**: Quoted numbers are strictly preserved as raw ASCII string bytes (`"5"` $\rightarrow$ ASCII `0x35` / `53`), while unquoted numbers (`5`) are parsed as numeric values (`0x05`).
+- **Reference**: Resolves the note in `test/test.sh:151` (`echo -en "\"5\"" | ./bdd --input-tuples --output-hex` outputs `35`).
 
-### 1.2 Overhaul of Rounding, Range Clamping, and Floating-Point Handling
-- **Problem Statement**:
-  - The current `--round` / `--cut-maxint` manipulator conflates two fundamentally distinct operations:
-    1. **Upper-End Magnitude / Range Overflow (MSB Cutting)**: When a larger value must fit into a smaller unit (e.g. value 300 into an 8-bit container max 255), the *most significant bits* exceed the range. This is **clamping, saturation, wrapping, or high-bit clipping**—it is *not* rounding.
-    2. **Lower-End Precision Reduction (LSB Rounding)**: When reducing precision, fractional digits, or low-order bits, bits are removed from the *least significant part*. This is **true rounding / quantization**.
-- **Options Analysis in `--round`**:
-  - **Options that do NOT make sense in rounding (only in truncation / clamping / filtering)**:
-    - `saturate` / `clamp`: Magnitude capping to `[-LIMIT, LIMIT]`. This is range saturation, not rounding.
-    - `wrap` / `modulo`: High-bit truncation discarding overflow MSBs modulo $(LIMIT + 1)$. This is integer overflow wrapping, not rounding.
-    - `zero` / `reset`: Out-of-bounds reset policy setting out-of-range values to 0. Not rounding.
-    - `drop` / `filter` / `checked`: Discards the tuple entirely on range overflow. This is record filtering, not rounding.
-    - The `LIMIT` parameter itself: Passing a maximum magnitude threshold (e.g. `--round 0,255`) is a bounding limit, not a rounding step or precision scale.
-  - **Options that belong to true rounding (precision reduction on fractional parts / LSBs)**:
-    - `round` / `half_up`: Round to nearest neighbor, ties away from zero.
-    - `round_ties_even` / `bankers`: Round to nearest neighbor, ties to nearest even digit (IEEE 754 default).
-    - `floor`: Round toward $-\infty$.
-    - `ceil`: Round toward $+\infty$.
-    - `trunc`: Round toward zero (fractional truncation).
-  - **Implementation Flaws in `RoundManipulator`**:
-    - For integer fields with a `LIMIT`, specifying `round`, `floor`, `ceil`, `trunc`, or `round_ties_even` silently degenerates to `saturate` (clamping).
-    - For integer fields without a `LIMIT`, `--round 0,round` is an inert no-op because integers lack fractional parts and `bdd` lacks integer step quantization (e.g. rounding to nearest 10 or nearest $2^k$).
-    - For floating-point fields, `saturate` and `wrap` bypass rounding and merely clamp/wrap the float magnitude.
-- **Target Architecture & Next Steps**:
-  - Decouple upper-end range overflow handling (clamping / saturation / wrapping via `--cut-maxint` or `--clamp`) from lower-end precision reduction (rounding / quantization via `--round`).
-  - Reserve `--round` strictly for precision reduction: rounding floats to integers or rounding floats/integers to a specified step/precision (`--round FIELD,PRECISION[,MODE]`).
-  - Re-examine floating-point codecs and pipelines to avoid unintended `f64` conversions when bit-exactness is required, and ensure rounding modes applied to float mantissas and integers are mathematically precise and consistent.
+### 1.2 Overhaul of Rounding, Range Clamping, and Floating-Point Handling [COMPLETED]
+- **Current Architecture**:
+  - Decoupled upper-end range overflow handling (`--clamp FIELD,MIN,MAX[:MODE]` or `--clamp FIELD,LIMIT[:MODE]` with modes `saturate`, `wrap`, `drop`, `zero`) from lower-end precision reduction (`--round FIELD,PRECISION[:MODE]`).
+  - `--round` strictly handles precision reduction and quantization: rounding floats to specified step intervals (`--round 0,0.01:round`) or quantizing integer fields to step intervals (`--round 0,10:round`).
+  - Existing scripts using `--cut-maxint` continue to function identically with full backward compatibility.
 
 ### 1.3 Clarification and Architectural Evolution of Binary Probing (`--probe` & `--probe-units`) [COMPLETED]
 - **Architecture & Pipeline Stages**:
@@ -50,46 +28,40 @@ This document consolidates high-value feature improvements, API additions, and a
   - Reports exact unit offset, bit offset, length, Shannon entropy, normalized entropy ratio, bit balance (% set bits), hex payload, and confidence classification.
   - Integrated into CLI text output, structured JSON (`--output-json`), and Model Context Protocol (`bdd_probe_units`).
 
-### 1.4 Native Netlink & Kernel Telemetry Stream Ingestion (`--input-netlink`)
+### 1.4 Native Netlink & Kernel Telemetry Stream Ingestion (`--input-netlink`) [COMPLETED]
 - **Motivation & Background**:
   The Linux kernel exposes ultra-fast binary telemetry and process lifecycle events over Netlink sockets:
   - `NETLINK_CONNECTOR` with `CN_IDX_PROC` (real-time `FORK`, `EXEC`, `EXIT`, `UID`/`GID`, `COMM` events without polling)
   - `NETLINK_GENERIC` / `TASKSTATS` (per-process and per-cgroup microsecond CPU, I/O delay, swap delay, and peak RSS accounting)
   - `NETLINK_INET_DIAG` (binary socket monitoring replacing `netstat`/`ss`)
   Currently, subscribing to Netlink multicast groups requires an external script/helper (such as `contrib/python/bdd_netlink_proc.py`) to open the Netlink socket, send multicast registration (`PROC_CN_MCAST_LISTEN`), and pipe the resulting packet stream into `bdd`.
-- **Target Enhancements**:
-  1. **Native Netlink Input Stream Source**:
-     Support direct Netlink socket binding and multicast group subscription via CLI:
+- **Implemented Capabilities**:
+  1. **Native Netlink Input Stream Source (`--input-netlink`)**:
+     Direct Netlink socket binding to `AF_NETLINK` / `CN_IDX_PROC`, automatic multicast registration (`PROC_CN_MCAST_LISTEN`), and real-time kernel event streaming:
      ```bash
-     bdd --input-netlink=connector:proc --preset=netlink-proc-event --output-json
+     bdd --input-netlink --output-json
      ```
   2. **Netlink Message Alignment & Framing**:
-     Automatic handling of `nlmsghdr` (16 bytes) and Netlink connector headers (`cn_msg`), slicing the payload directly into target presets (`netlink-proc-event`, `proc-fork`, `proc-exec`, `proc-exit`).
-  3. **Zero-Polling Real-Time System Monitor (`bdd top` / `bdd ps`)**:
-     Combine native Netlink connector event streaming with $O(1)$ `/proc/[pid]/pagemap` seeking and `/proc/[pid]/auxv` dissection to build an ultra-fast, zero-overhead process monitor entirely within the `bdd` toolchain.
+     Automatic stripping of 16-byte `nlmsghdr` and 20-byte Netlink connector headers (`cn_msg`), slicing the binary payload directly into target presets (`netlink-proc-event`, `proc-fork`, `proc-exec`, `proc-exit`).
+  3. **Zero-Polling Real-Time Telemetry**:
+     Native kernel process lifecycle event streaming entirely within `bdd` without any external Python or C wrappers.
 
 ---
 
 ## 2. Pattern Engine & Data Types
 
-### 2.1 Void / Raw Bit Vector Pattern Type (`V` / `v`)
-- **Motivation**: Non-byte-aligned opaque payloads (e.g. a 13-bit video payload or 127-bit cryptographic block) currently must use `U` (which treats them as arithmetic integers) because `B` requires byte multiples ($N \times 8$).
-- **Specification**:
-  - `V` (Big-Endian) and `v` (Little-Endian) represent opaque, unaligned bit vectors of arbitrary length (e.g., `13V`, `127V`).
-  - Pass through pipelines without numeric arithmetic coercion.
-  - Formatted cleanly as raw bit sequences in binary streams or bit-accurate hex in JSON/CSV.
+### 2.1 Void / Raw Bit Vector Pattern Type (`V` / `v`) [COMPLETED]
+- **Current Behavior**: `V` (Big-Endian) and `v` (Little-Endian) represent opaque, unaligned bit vectors of arbitrary length (e.g. `13V`, `127V`, `1V`). Fields are unpacked and packed without numeric arithmetic coercion and formatted cleanly as bit sequences or `0b...` bitstrings in JSON/CSV.
 
 ---
 
 ## 3. CLI & Output Ergonomics
 
-### 3.1 Visualizing Bit/Byte Reversal in Hex and Bit Sinks
-- **Current Behavior**: `--output-reverse-unit` and `--output-reverse-bytes` only apply to `FileOutputStream` (binary file output). `--output-hex` and `--output-bits` display the unreversed BigUint value.
-- **Target Behavior**: Allow `--output-hex` and `--output-bits` to optionally reflect the reversed unit/bytes (or provide `--output-inspect-reversed`), allowing direct visual inspection of reversed bits in the terminal.
+### 3.1 Visualizing Bit/Byte Reversal in Hex and Bit Sinks [COMPLETED]
+- **Current Behavior**: `--output-reverse-unit` and `--output-reverse-bytes` apply symmetrically to `FileOutputStream`, `HexOutputStream`, `BitOutputStream`, and `IntegerOutputStream`, allowing direct visual inspection of reversed bits and bytes in the terminal.
 
-### 3.2 Exhaustive Unit Cycle Shorthand (`--count=cycle` / `--count=full-range`)
-- **Motivation**: `--input-counter` generates an infinite sequence by default. For testing, generating a complete cycle of all values in a unit ($2^{\text{unit}}$ items) is a common requirement.
-- **Specification**: Support `--count=cycle` or `--count=full-range` (or math expressions like `2^16`), which automatically terminates the stream after counting exactly $2^{\text{unit\_size}}$ values.
+### 3.2 Exhaustive Unit Cycle Shorthand (`--count=cycle` / `--count=full-range`) [COMPLETED]
+- **Current Behavior**: `--count=cycle` and `--count=full-range` automatically calculate $2^{\text{unit\_size}}$ items from the resolved input unit or pattern, terminating after an exhaustive cycle. Exponentiation math expressions (e.g. `--count=2^16`, `2^8`) are also supported natively.
 
 ### 3.3 Heterogeneous Unit Sizes & Per-Stream Configuration for Multi-File Merge
 - **Current State**:
@@ -115,6 +87,16 @@ This document consolidates high-value feature improvements, API additions, and a
      ```
   3. **Per-stream pattern support (`--merge-patterns` / `:pattern=...`)**:
      Allow merge streams to unpack arbitrary bitfield patterns rather than only raw integers.
+
+### 3.4 Future of Stream Arrows: Full Pipeline Unification (Sources, Slicers, Manipulators & Sinks)
+- **Status**: Architecture Planned / RFC Published ([`docs/RFC-stream-arrows-unification.md`](docs/RFC-stream-arrows-unification.md)). Target: v0.6.0.
+- **Vision**: Expressing entire end-to-end dataflows—from synthetic sources or Linux kernel sockets, through sub-byte bit slicers and in-flight manipulators, to structured JSON/hex sinks—as a single, human-readable pipeline string:
+  ```bash
+  bdd "zeros -> 8 -> xor(0xFF) -> json"
+  bdd "netlink -> proc-event -> filter(what == 2) -> json"
+  bdd "rand -> 256 -> hex" --count 10
+  bdd "file('broadcast.ts') -> 188B[11:13] -> 13 -> file('pids.bin')"
+  ```
 
 ---
 
@@ -147,6 +129,12 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Linux Kernel & Hardware Dissection Presets**: Added built-in format presets for kernel memory and hardware structures: `proc-pagemap` (64-bit page table entries: present, swapped, exclusive, dirty, pfn), `proc-auxv` (ELF 64-bit auxiliary vectors: AT_CLKTCK, AT_PAGESZ, AT_SECURE), `pci-config` (16-byte PCI device header: vendor, device, command, status, class), and `netlink-proc-event` (Netlink process connector event headers).
 - [x] **Netlink Connector & Process Monitoring Suite**: Created `contrib/python/bdd_netlink_proc.py` for real-time, zero-polling Linux process lifecycle event streaming (FORK, EXEC, EXIT, UID/GID, COMM), `contrib/python/bdd_ps.py` for deep pagemap memory (USS / private exclusive memory) and signal mask inspection, and `contrib/python/bdd_top.py` for an interactive terminal monitor.
 - [x] **Raw Memory & Cryptographic Key Streaming Tools**: Created `contrib/shell/stream_memory_keys.sh` and `contrib/python/stream_memory_keys.py` to stream system memory (physical RAM `/dev/mem`, kernel `/proc/kcore`, process virtual memory `/proc/[pid]/mem`, or standalone demo vectors) 256 bits at a time into `bdd --probe-keys=256` to locate high-entropy candidate cryptographic keys (AES-256, ChaCha20, Ed25519) with Shannon entropy, bit balance, and confidence scoring.
-- [ ] **Inline Unit Manipulations in Stream Patterns**: Extend the stream arrow notation to support inline unit transformations between input and output specifications (e.g. `<in> -> <manip> -> <out>`).
+- [x] **Inline Unit Manipulations in Stream Patterns**: Multi-arrow stream notation supporting inline unit transformations between input and output specifications (e.g. `8 -> xor(0xFF) -> 8`, `8 -> add(10) -> mul(2) -> 8`).
+- [x] **Visual Terminal Entropy Heatmap & Sparklines (`--probe-visual` / `--probe-map`)**: Terminal sparklines and 2D ANSI block heatmaps (` ▂▃▄▅▆▇█`) for rapid visual inspection of entropy gradients and compression boundaries.
+- [x] **Magic Signature Scanning**: Automated detection of 25+ binary magic signatures (ELF, PNG, JPEG, PDF, ZIP, MPEG-TS, GZIP, WASM, PCAP, etc.) during binary probing.
+- [x] **C & Rust Struct Code Generation (`--export-c` / `--export-rust`)**: Direct generation of packed C structs and Rust `#[repr(C, packed)]` definitions from arbitrary bitfield patterns or presets.
+- [x] **Shell Auto-Completion (`--completions <SHELL>`)**: Generation of auto-completion scripts for `bash`, `zsh`, `fish`, `powershell`, and `elvish` via `clap_complete`.
+- [x] **Model Context Protocol (MCP) Server Extensions**: Extended MCP stdio server with `bdd_transcode` (dynamic payload transcoding and bit-level transformations) and `bdd_generate` (synthetic vector generation).
+- [x] **Native Linux Netlink Telemetry Ingestion (`--input-netlink`)**: Native kernel connector process event streaming directly inside `bdd`.
 
 

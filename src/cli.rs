@@ -105,6 +105,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub input_integers: bool,
 
+    /// Ingest binary telemetry from Linux Netlink socket (e.g. 'connector:proc' or 'raw')
+    #[arg(long, num_args = 0..=1, default_missing_value = "connector:proc", visible_aliases = ["netlink"])]
+    pub input_netlink: Option<String>,
+
     // Tuples
     #[arg(long)]
     pub input_pattern: Option<String>,
@@ -122,6 +126,10 @@ pub struct Cli {
     /// Construct result tuple by listing input field indices in desired output order (e.g. "1,0,2", "-1,0", "0,0")
     #[arg(long, default_missing_value = "", num_args = 0..=1)]
     pub rearrange: Option<String>,
+
+    /// Clamp or bound field F to a range (e.g. "0,255", "0,-100,100:saturate", "0,255:wrap")
+    #[arg(long, allow_hyphen_values = true)]
+    pub clamp: Option<String>,
 
     /// Round, bound, or clamp field F (modes: saturate, wrap, zero, drop, trunc, floor, ceil, round, round_ties_even)
     #[arg(long, visible_alias = "cut-maxint")]
@@ -250,6 +258,14 @@ pub struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub explain_pattern: Option<String>,
 
+    /// Export C packed struct definition from pattern or preset
+    #[arg(long, default_value_t = false, visible_aliases = ["c-struct", "to-c"])]
+    pub export_c: bool,
+
+    /// Export Rust struct definition from pattern or preset
+    #[arg(long, default_value_t = false, visible_aliases = ["rust-struct", "to-rust"])]
+    pub export_rust: bool,
+
     /// Probe binary file characteristics, Shannon entropy, and repeating strides
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub probe: Option<String>,
@@ -265,6 +281,14 @@ pub struct Cli {
     /// Specific tuple field index (0-based) to probe when using stream patterns
     #[arg(long)]
     pub probe_field: Option<usize>,
+
+    /// Display visual entropy sparkline map during probing
+    #[arg(long, default_value_t = false, visible_aliases = ["probe-visual", "probe-map"])]
+    pub probe_visual: bool,
+
+    /// Generate shell auto-completion script (bash, zsh, fish, elvish, powershell)
+    #[arg(long, value_enum, value_name = "SHELL")]
+    pub completions: Option<clap_complete::Shell>,
 
     /// Start Model Context Protocol (MCP) JSON-RPC 2.0 stdio server
     #[arg(long, default_value_t = false)]
@@ -373,11 +397,13 @@ pub struct ValidatedConfig {
     pub input_random: bool,
     pub input_counter: bool,
     pub input_integers: bool,
+    pub input_netlink: Option<String>,
     pub input_pattern: Option<String>,
     pub input_tuples: bool,
     pub skip: u64,
     pub count: Option<u64>,
     pub rearrange: Option<String>,
+    pub clamp: Option<String>,
     pub round: Option<String>,
     pub cut_maxint: Option<String>,
     pub remove_right: Option<String>,
@@ -438,6 +464,8 @@ pub struct ValidatedConfig {
     pub probe_units: bool,
     pub probe_keys: Option<String>,
     pub probe_field: Option<usize>,
+    pub probe_visual: bool,
+    pub inline_manipulators: Vec<String>,
     pub mcp: bool,
 }
 
@@ -465,6 +493,17 @@ fn parse_single_factor(s: &str, option_name: &str) -> Result<(u64, bool), BddErr
             "{} value must be a positive integer",
             option_name
         )));
+    }
+
+    if let Some((base_str, exp_str)) = s.split_once('^') {
+        let (base, is_byte1) = parse_single_factor(base_str, option_name)?;
+        let (exp, is_byte2) = parse_single_factor(exp_str, option_name)?;
+        let val = if exp >= 64 && base > 1 {
+            u64::MAX
+        } else {
+            base.saturating_pow(exp as u32)
+        };
+        return Ok((val, is_byte1 || is_byte2));
     }
 
     // Support hex literal if starts with 0x / 0X
@@ -698,9 +737,11 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
     let cli_explicit_input_unit = cli.input_unit.is_some();
     let cli_explicit_output_unit = cli.output_unit.is_some();
+    let mut inline_manipulators = Vec::new();
 
     if let Some(ref sp) = stream_pat {
         let parsed = crate::stream_pattern::parse_stream_io_pattern(sp)?;
+        inline_manipulators = parsed.manipulators;
         if let Some(ref inp) = parsed.input {
             if cli.input_skip_bits.is_none() && inp.skip.is_some() {
                 cli.input_skip_bits = inp.skip.map(|v| v.to_string());
@@ -801,8 +842,16 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         }
     }
 
+    if cli.input_netlink.is_some()
+        && cli.input_pattern.is_none()
+        && cli.preset.is_none()
+        && cli.input_unit.is_none()
+    {
+        cli.preset = Some("netlink-proc-event".to_string());
+    }
+
     check_exclusive(
-        "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter,--input-integers, --input-tuples",
+        "Only one of the following is allowed: --input-zeros, --input-ones, --input-random, --input-counter, --input-integers, --input-tuples, --input-netlink",
         &[
             cli.input_zeros,
             cli.input_ones,
@@ -810,6 +859,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             cli.input_counter,
             cli.input_integers,
             cli.input_tuples,
+            cli.input_netlink.is_some(),
         ],
     )?;
 
@@ -823,7 +873,20 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
 
     let skip = parse_number_argument(cli.skip.as_deref(), "--skip", Some(0), false)?.unwrap_or(0);
-    let count = parse_number_argument(cli.count.as_deref(), "--count", None, false)?;
+    let count_is_cycle = cli
+        .count
+        .as_deref()
+        .map(|s| {
+            let trimmed = s.trim().to_ascii_lowercase();
+            trimmed == "cycle" || trimmed == "full-range" || trimmed == "full_range"
+        })
+        .unwrap_or(false);
+
+    let count = if count_is_cycle {
+        None
+    } else {
+        parse_number_argument(cli.count.as_deref(), "--count", None, false)?
+    };
 
     check_exclusive(
         "Only one of the following: --output-tuples, --output-integers, --output-hex, --output-bits, --output-json, --output-csv, --output-visual",
@@ -992,6 +1055,13 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             input_gap_raw,
             input_unit,
         )
+    };
+
+    let count = if count_is_cycle {
+        let u = resolved_input_unit.or(pattern_input_unit).unwrap_or(8);
+        Some(if u >= 64 { u64::MAX } else { 1u64 << u })
+    } else {
+        count
     };
 
     let merge_raw_unit = parse_number_argument(
@@ -1194,11 +1264,13 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         input_random: cli.input_random,
         input_counter: cli.input_counter,
         input_integers: cli.input_integers,
+        input_netlink: cli.input_netlink,
         input_pattern: cli.input_pattern,
         input_tuples: cli.input_tuples,
         skip,
         count,
         rearrange: cli.rearrange,
+        clamp: cli.clamp,
         round: cli.round.clone(),
         cut_maxint: cli.round,
         remove_right: cli.remove_right,
@@ -1270,6 +1342,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             None
         },
         probe_field: cli.probe_field,
+        probe_visual: cli.probe_visual,
+        inline_manipulators,
         mcp: cli.mcp,
     })
 }

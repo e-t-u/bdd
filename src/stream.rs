@@ -926,6 +926,211 @@ impl<R: BufRead + StreamSeek> TupleDirectInput<R> {
     }
 }
 
+/// Native Linux Netlink stream reader for kernel process connector events (`CN_IDX_PROC`).
+#[cfg(target_os = "linux")]
+pub struct NetlinkReader {
+    fd: std::os::fd::RawFd,
+    recv_buf: Vec<u8>,
+    pos: usize,
+    len: usize,
+    raw_headers: bool,
+    subscribed: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl NetlinkReader {
+    pub fn open_proc_connector(raw_headers: bool) -> Result<Self, BddError> {
+        unsafe {
+            let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM, 11);
+            if fd < 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(BddError::CliError(format!(
+                    "Failed to open Netlink connector socket: {}",
+                    err
+                )));
+            }
+
+            let rcvbuf_size: libc::c_int = 8 * 1024 * 1024;
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &rcvbuf_size as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&rcvbuf_size) as libc::socklen_t,
+            );
+
+            let mut addr: libc::sockaddr_nl = std::mem::zeroed();
+            addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+            addr.nl_pid = libc::getpid() as u32;
+            addr.nl_groups = 1;
+
+            if libc::bind(
+                fd,
+                &addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of_val(&addr) as libc::socklen_t,
+            ) < 0
+            {
+                let err = std::io::Error::last_os_error();
+                libc::close(fd);
+                return Err(BddError::CliError(format!(
+                    "Failed to bind Netlink socket to CN_IDX_PROC: {}",
+                    err
+                )));
+            }
+
+            let mut reg_msg = Vec::with_capacity(40);
+            let nlmsg_len: u32 = 40;
+            let nlmsg_type: u16 = 0x3;
+            let nlmsg_flags: u16 = 0;
+            let nlmsg_seq: u32 = 0;
+            let nlmsg_pid: u32 = libc::getpid() as u32;
+
+            reg_msg.extend_from_slice(&nlmsg_len.to_ne_bytes());
+            reg_msg.extend_from_slice(&nlmsg_type.to_ne_bytes());
+            reg_msg.extend_from_slice(&nlmsg_flags.to_ne_bytes());
+            reg_msg.extend_from_slice(&nlmsg_seq.to_ne_bytes());
+            reg_msg.extend_from_slice(&nlmsg_pid.to_ne_bytes());
+
+            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
+            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
+            reg_msg.extend_from_slice(&0u32.to_ne_bytes());
+            reg_msg.extend_from_slice(&0u32.to_ne_bytes());
+            reg_msg.extend_from_slice(&4u16.to_ne_bytes());
+            reg_msg.extend_from_slice(&0u16.to_ne_bytes());
+
+            reg_msg.extend_from_slice(&1u32.to_ne_bytes());
+
+            let sent = libc::send(
+                fd,
+                reg_msg.as_ptr() as *const libc::c_void,
+                reg_msg.len(),
+                0,
+            );
+            if sent < 0 {
+                let err = std::io::Error::last_os_error();
+                libc::close(fd);
+                return Err(BddError::CliError(format!(
+                    "Failed to register PROC_CN_MCAST_LISTEN: {}",
+                    err
+                )));
+            }
+
+            let mut ack_buf = [0u8; 1024];
+            libc::recv(
+                fd,
+                ack_buf.as_mut_ptr() as *mut libc::c_void,
+                ack_buf.len(),
+                0,
+            );
+
+            Ok(Self {
+                fd,
+                recv_buf: vec![0u8; 65536],
+                pos: 0,
+                len: 0,
+                raw_headers,
+                subscribed: true,
+            })
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Read for NetlinkReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        while self.pos >= self.len {
+            unsafe {
+                let n = libc::recv(
+                    self.fd,
+                    self.recv_buf.as_mut_ptr() as *mut libc::c_void,
+                    self.recv_buf.len(),
+                    0,
+                );
+                if n <= 0 {
+                    return Ok(0);
+                }
+                let total = n as usize;
+                if !self.raw_headers && total >= 36 {
+                    self.pos = 36;
+                    self.len = total;
+                } else {
+                    self.pos = 0;
+                    self.len = total;
+                }
+            }
+        }
+        let available = self.len - self.pos;
+        let to_copy = available.min(buf.len());
+        buf[..to_copy].copy_from_slice(&self.recv_buf[self.pos..self.pos + to_copy]);
+        self.pos += to_copy;
+        Ok(to_copy)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for NetlinkReader {
+    fn drop(&mut self) {
+        if self.subscribed {
+            unsafe {
+                let mut reg_msg = Vec::with_capacity(40);
+                let nlmsg_len: u32 = 40;
+                let nlmsg_type: u16 = 0x3;
+                let nlmsg_flags: u16 = 0;
+                let nlmsg_seq: u32 = 0;
+                let nlmsg_pid: u32 = libc::getpid() as u32;
+
+                reg_msg.extend_from_slice(&nlmsg_len.to_ne_bytes());
+                reg_msg.extend_from_slice(&nlmsg_type.to_ne_bytes());
+                reg_msg.extend_from_slice(&nlmsg_flags.to_ne_bytes());
+                reg_msg.extend_from_slice(&nlmsg_seq.to_ne_bytes());
+                reg_msg.extend_from_slice(&nlmsg_pid.to_ne_bytes());
+
+                reg_msg.extend_from_slice(&1u32.to_ne_bytes());
+                reg_msg.extend_from_slice(&1u32.to_ne_bytes());
+                reg_msg.extend_from_slice(&0u32.to_ne_bytes());
+                reg_msg.extend_from_slice(&0u32.to_ne_bytes());
+                reg_msg.extend_from_slice(&4u16.to_ne_bytes());
+                reg_msg.extend_from_slice(&0u16.to_ne_bytes());
+
+                reg_msg.extend_from_slice(&2u32.to_ne_bytes());
+
+                libc::send(
+                    self.fd,
+                    reg_msg.as_ptr() as *const libc::c_void,
+                    reg_msg.len(),
+                    0,
+                );
+                libc::close(self.fd);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub struct NetlinkReader;
+
+#[cfg(not(target_os = "linux"))]
+impl NetlinkReader {
+    pub fn open_proc_connector(_raw_headers: bool) -> Result<Self, BddError> {
+        Err(BddError::CliError(
+            "Netlink connector ingestion is only supported on Linux".to_string(),
+        ))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Read for NetlinkReader {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Netlink connector ingestion is only supported on Linux",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

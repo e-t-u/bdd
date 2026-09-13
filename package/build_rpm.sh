@@ -127,8 +127,8 @@ fi
 %doc %{_docdir}/%{name}/llms.txt
 
 %changelog
-* Sat Sep 12 2026 Esa Turtiainen <eturtiainen@gmail.com> - ${VERSION}-1
-- Release version ${VERSION} with network presets, sub-byte slicing, AI float conversions, and C-ABI library.
+* Mon Sep 14 2026 Esa Turtiainen <eturtiainen@gmail.com> - ${VERSION}-1
+- Release version ${VERSION} with multi-stage stream arrow pipelines, C/Rust code generation, visual entropy sparklines, and native Netlink ingestion.
 _EOF_SPEC_
 
 # Execute rpmbuild

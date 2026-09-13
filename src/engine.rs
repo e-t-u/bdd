@@ -9,8 +9,9 @@ use crate::sink::{
     JsonOutputStream, TupleDirectOutput, TupleSink, UnitSink, VisualOutputStream,
 };
 use crate::stream::{
-    BddReader, CounterStream, FileInputStream, IntegerInputStream, OneStream, RandomStream,
-    RewindableBufRead, StreamConfig, StreamSeekBufReader, TupleDirectInput, UnitStream, ZeroStream,
+    BddReader, CounterStream, FileInputStream, IntegerInputStream, NetlinkReader, OneStream,
+    RandomStream, RewindableBufRead, StreamConfig, StreamSeekBufReader, TupleDirectInput,
+    UnitStream, ZeroStream,
 };
 use num_bigint::BigUint;
 use num_traits::Zero;
@@ -119,6 +120,9 @@ fn run_pipeline_internal(
         if let Some(ref arg) = config.rearrange {
             manipulators.push(Box::new(RearrangeManipulator::new(arg)?));
         }
+        if let Some(ref arg) = config.clamp {
+            manipulators.push(Box::new(ClampManipulator::new(arg)?));
+        }
         if let Some(ref arg) = config.round {
             manipulators.push(Box::new(RoundManipulator::new(arg)?));
         }
@@ -169,6 +173,10 @@ fn run_pipeline_internal(
         }
     }
 
+    for m_spec in &config.inline_manipulators {
+        manipulators.push(build_manipulator_from_spec(m_spec)?);
+    }
+
     let out_writer: Box<dyn Write> = if let Some(w) = custom_writer {
         w
     } else if config.output_file == "-" {
@@ -210,11 +218,23 @@ fn run_pipeline_internal(
     } else if config.output_visual {
         tuple_sink = Some(Box::new(VisualOutputStream::new(out_writer)));
     } else if config.output_integers {
-        unit_sink = Some(Box::new(IntegerOutputStream::new(out_writer)));
+        unit_sink = Some(Box::new(IntegerOutputStream::new(
+            out_writer,
+            config.output_reverse_bytes,
+            config.output_reverse_unit,
+        )));
     } else if config.output_hex {
-        unit_sink = Some(Box::new(HexOutputStream::new(out_writer)));
+        unit_sink = Some(Box::new(HexOutputStream::new(
+            out_writer,
+            config.output_reverse_bytes,
+            config.output_reverse_unit,
+        )));
     } else if config.output_bits {
-        unit_sink = Some(Box::new(BitOutputStream::new(out_writer)));
+        unit_sink = Some(Box::new(BitOutputStream::new(
+            out_writer,
+            config.output_reverse_bytes,
+            config.output_reverse_unit,
+        )));
     } else {
         unit_sink = Some(Box::new(FileOutputStream::new(
             out_writer,
@@ -509,7 +529,26 @@ pub fn create_unit_stream(
     in_unit_size: usize,
     counter: Counter,
 ) -> Result<Box<dyn UnitStream>, BddError> {
-    let unit_stream: Box<dyn UnitStream> = if config.input_zeros {
+    let unit_stream: Box<dyn UnitStream> = if let Some(ref nl_spec) = config.input_netlink {
+        let raw_headers = nl_spec == "raw";
+        let nl_reader = NetlinkReader::open_proc_connector(raw_headers)?;
+        let bdd_reader = BddReader::new_streaming(nl_reader);
+        let stream_conf = StreamConfig {
+            skip_bits: config.input_skip_bits,
+            skip_units: config.input_skip_units,
+            gap: config.input_gap,
+            assert_aligned: config.input_assert_aligned,
+            drop_partial_eof: config.input_drop_partial_eof,
+            reverse_bytes: config.input_reverse_bytes,
+            reverse_unit: config.input_reverse_unit,
+            unit_size: in_unit_size,
+            seek_allowed: false,
+            repeat_count: config.input_repeat,
+        };
+        let mut fs = FileInputStream::new(bdd_reader, stream_conf, counter);
+        fs.do_skip();
+        Box::new(fs)
+    } else if config.input_zeros {
         Box::new(ZeroStream::new(counter))
     } else if config.input_ones {
         Box::new(OneStream::new(counter, in_unit_size))
@@ -673,6 +712,8 @@ fn run_unit_probe_internal(
                     "zero stream".to_string()
                 } else if config.input_ones {
                     "ones stream".to_string()
+                } else if config.input_netlink.is_some() {
+                    "netlink connector stream".to_string()
                 } else {
                     "stdin".to_string()
                 }
