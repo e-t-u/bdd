@@ -757,7 +757,7 @@ pub fn create_unit_stream(
     counter: Counter,
 ) -> Result<Box<dyn UnitStream>, BddError> {
     let unit_stream: Box<dyn UnitStream> = if config.input_zeros {
-        Box::new(ZeroStream::new(counter))
+        Box::new(ZeroStream::new_with_unit(counter, in_unit_size))
     } else if config.input_ones {
         Box::new(OneStream::new(counter, in_unit_size))
     } else if config.input_random {

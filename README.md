@@ -233,8 +233,9 @@ Under `overwrite` mode:
 `bdd` allows interleaving multiple independent streams round-robin using bracket syntax at the start of a pipeline:
 
 ```bash
-# Interleave 8-bit zeroes and 8-bit ones round-robin (0x00, 0xFF, 0x00, 0xFF...):
+# Interleave 8-bit zeroes and 8-bit ones round-robin (count takes 2 units from both sources):
 bdd "[ zeros:8, ones:8 ] -> hex" --count 2
+# Output: 00 ff 00 ff
 
 # Interleave standard input with 32-bit addresses read from a binary file:
 bdd "[ stdin:8, file('addresses.bin'):32 ] -> stdout"

@@ -484,13 +484,30 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
     }
 
     if segments.is_empty() {
+        if output.is_none() {
+            let is_formatted_sink = match sink.as_deref() {
+                Some("hex" | "bits" | "json" | "integers" | "csv" | "visual") => true,
+                Some(s) if s.starts_with("json:") => true,
+                _ => false,
+            };
+            if is_formatted_sink || !sources.is_empty() {
+                if let Some(ref inp) = input {
+                    if let Some(u) = inp.unit_size {
+                        output = Some(StreamSpec {
+                            unit_size: Some(u),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
         return Ok(StreamIoPattern {
             source,
             input,
             sources,
             merge_specs,
             manipulators: Vec::new(),
-            output: None,
+            output,
             sink,
             overwrite,
         });
@@ -544,6 +561,12 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
                         s.unit_size = Some(u_val);
                     }
                 }
+                if output.is_none() && (segments.is_empty() || is_manipulator(segments[0])) {
+                    output = Some(StreamSpec {
+                        unit_size: Some(u_val),
+                        ..Default::default()
+                    });
+                }
             } else {
                 segments.remove(0);
             }
@@ -583,6 +606,26 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
     // Anything remaining in segments is an inline manipulator
     for seg in segments {
         manipulators.push(seg.to_string());
+    }
+
+    // When output framing is omitted, inherit unit size from input for multi-source
+    // streams or formatted terminal/data sinks (hex, bits, json, etc.)
+    if output.is_none() {
+        let is_formatted_sink = match sink.as_deref() {
+            Some("hex" | "bits" | "json" | "integers" | "csv" | "visual") => true,
+            Some(s) if s.starts_with("json:") => true,
+            _ => false,
+        };
+        if is_formatted_sink || !sources.is_empty() {
+            if let Some(ref inp) = input {
+                if let Some(u) = inp.unit_size {
+                    output = Some(StreamSpec {
+                        unit_size: Some(u),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
     }
 
     Ok(StreamIoPattern {

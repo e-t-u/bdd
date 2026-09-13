@@ -2319,6 +2319,23 @@ fn test_multi_source_brackets_cli() {
     // 4 units round-robin: 0x00, counter 0, 0x00, counter 1
     let stdout2 = String::from_utf8(out2.stdout).unwrap();
     assert_eq!(stdout2.trim(), "00 00 00 01");
+
+    let out3 = Command::new(BDD_BIN)
+        .args(["--count", "2", "[ zeros, counter ] -> 16 -> hex"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out3.status.success());
+    // 4 16-bit units round-robin: 0x0000, counter 0, 0x0000, counter 1
+    let stdout3 = String::from_utf8(out3.stdout).unwrap();
+    assert_eq!(stdout3.trim(), "0000 0000 0000 0001");
+
+    let out4 = Command::new(BDD_BIN)
+        .args(["--count", "2", "[ zeros:16, ones:16 ] -> hex"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(out4.status.success());
+    let stdout4 = String::from_utf8(out4.stdout).unwrap();
+    assert_eq!(stdout4.trim(), "0000 ffff 0000 ffff");
 }
 
 #[test]
