@@ -302,6 +302,32 @@ When data contains multiple heterogeneous fields, a single unit size is not enou
 bdd "sync:11u,version:2u,layer:2u,protect:1b -> json:object" < audio.mp3
 ```
 
+### What is a Tuple in `bdd`? Units, Tuples, and Lines
+
+To use `bdd` effectively, understand the relationship between **streams**, **units**, and **tuples**:
+
+1. **Bitstream**: The continuous sequence of bits (from file, stdin, network socket, or memory).
+2. **Unit**: The repeating bit-length chunk sliced from the stream (e.g. 8 bits, 16 bits, 188 bytes).
+3. **Tuple**: The structured, in-memory breakdown of **one single unit** into typed fields:
+   - A unit is a sequence of bits (e.g. 8-bit `0xFA` / `0b11111010`).
+   - Slicing it with pattern `4U4U` yields **one tuple** with 2 fields: `[UInt(15), UInt(10)]`.
+4. **Text / CSV Representation (`--input-tuples` / `--output-tuples` / `tuples -> ...`)**:
+   - **One Line = Exactly One Unit (One Tuple)**.
+   - **Commas (`,`) separate fields** within that unit.
+   - **A newline (`\n`) terminates the unit** and advances the stream to the next unit.
+
+#### Example: Line vs. Comma Semantics
+- **Single line with commas (1 unit with 6 fields)**:
+  ```bash
+  echo "0,7,0,7,0,7" | bdd "tuples -> 6*3u -> bits"
+  # Output: 000111000111000111  (ONE unit composed of six 3-bit fields)
+  ```
+- **Multiple lines with newlines (6 sequential units)**:
+  ```bash
+  printf "%s\n" 0 7 0 7 0 7 | bdd "tuples -> 8 -> 3 -> bits"
+  # Output: 000 111 000 111 000 111  (SIX sequential units, each on its own line)
+  ```
+
 ### Supported Pattern Specifiers
 
 | Code | Type | Description |
