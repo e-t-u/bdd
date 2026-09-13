@@ -1,5 +1,5 @@
 <!-- Creator     : groff version 1.23.0 -->
-<!-- CreationDate: Sun Sep 13 03:34:57 2026 -->
+<!-- CreationDate: Mon Sep 14 06:32:57 2026 -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
 "http://www.w3.org/TR/html4/loose.dtd">
 <html>
@@ -24,10 +24,10 @@
 <a href="#SYNOPSIS">SYNOPSIS</a><br>
 <a href="#DESCRIPTION">DESCRIPTION</a><br>
 <a href="#OPTIONS">OPTIONS</a><br>
-<a href="#Positional Pattern Arguments:">Positional Pattern Arguments:</a><br>
+<a href="#Positional Pattern Argument:">Positional Pattern Argument:</a><br>
 <a href="#Input and Output File Selection">Input and Output File Selection</a><br>
 <a href="#Input Units, Skips, and Gaps">Input Units, Skips, and Gaps</a><br>
-<a href="#Raw Units &amp; Containers">Raw Units &amp; Containers</a><br>
+<a href="#Containers and Units">Containers and Units</a><br>
 <a href="#Synthetic Stream Sources (Bypass Stream Input)">Synthetic Stream Sources (Bypass Stream Input)</a><br>
 <a href="#Unpack a unit to a tuple">Unpack a unit to a tuple</a><br>
 <a href="#Bypass unit and field selection">Bypass unit and field selection</a><br>
@@ -77,8 +77,7 @@ stream copy and modify</p>
 
 
 <p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
-[<i>STREAM_PATTERN</i>] [<i>INPUT_PATTERN</i>]
-[<i>OUTPUT_PATTERN</i>] [<i>OPTIONS</i>]</p>
+[<i>STREAM_PATTERN</i>] [<i>OPTIONS</i>]</p>
 
 <h2>DESCRIPTION
 <a name="DESCRIPTION"></a>
@@ -98,11 +97,15 @@ be extended to manipulate inputs and outputs down to
 single-bit accuracy.</p>
 
 <p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
-models input and output as continuous streams of bit units.
-A bit unit is a repeating sequence containing a constant
-number of bits. Units can start at arbitrary bit offsets, be
-spaced by periodic gaps, or reside inside repeating physical
-containers (raw units).</p>
+models input and output as continuous streams of bit units
+and containers. A <b>container</b> is a repeating bit unit
+in the stream that can be defined with an initial
+<i>skip</i> and periodic <i>gap</i>. A <b>unit</b>
+represents the interesting bits inside the container that
+can be found using <i>length</i> and <i>pregap</i> (offset),
+or symmetrically using <i>pregap</i>, <i>length</i>, and
+<i>postgap</i>. When no container framing is specified, the
+unit occupies the entire container.</p>
 
 <p style="margin-left:9%; margin-top: 1em">Each unit can be
 unpacked into structured, typed fields called a <i>tuple</i>
@@ -136,39 +139,31 @@ does for block-aligned data.</p>
 </h2>
 
 
-<h3>Positional Pattern Arguments:
-<a name="Positional Pattern Arguments:"></a>
+<h3>Positional Pattern Argument:
+<a name="Positional Pattern Argument:"></a>
 </h3>
 
 
 <p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
-supports optional positional arguments for rapid bitstream
-slicing and tuple unpacking: <i><br>
+supports an optional single positional argument for rapid
+bitstream pipelines, container slicing, or tuple unpacking:
+<i><br>
 STREAM_PATTERN</i></p>
 
-<p style="margin-left:18%;">Stream I/O mapping pattern
-defining input and output framing (e.g. &quot;8-&gt;3&quot;,
-&quot;123:8[2:4]+8 -&gt; 5B:8[2:4]&quot;, or &quot;[2:4:2]
--&gt; 4&quot;). See <b>UNIFIED STREAM I/O MAPPING SYNTAX</b>
-below. If the first positional argument does not match a
-stream pattern (e.g. 4U4U), it is interpreted as the
-<i>INPUT_PATTERN</i>.</p>
-
-<p style="margin-left:9%;"><i>INPUT_PATTERN</i></p>
-
-<p style="margin-left:18%;">Tuple unpack pattern (e.g.
-&quot;8U&quot;, &quot;4U4U&quot;,
-&quot;sync:11u,version:2u&quot;). Equivalent to
-<b>&minus;&minus;input&minus;pattern</b>.</p>
-
-<p style="margin-left:9%;"><i>OUTPUT_PATTERN</i></p>
-
-<p style="margin-left:18%;">Tuple pack pattern (e.g.
-&quot;8U&quot;, &quot;4U4U&quot;, &quot;8U,x,8U&quot;).
-Equivalent to <b>&minus;&minus;output&minus;pattern</b>.
-Note: when <b>&minus;&minus;input&minus;tuples</b> is used,
-input fields are parsed from commas, so a single positional
-pattern specifies the output packing pattern.</p>
+<p style="margin-left:18%;">Stream I/O pipeline or pattern
+defining input/output framing, container slicing,
+transformations, or tuple unpacking (e.g.
+&quot;8-&gt;3&quot;, &quot;123:8[2:4]+8 -&gt;
+5B:8[2:4]&quot;, &quot;[2:4:2] -&gt; 4&quot;, &quot;4U4U
+-&gt; {0|1} -&gt; hex&quot;, or bare pattern 4U4U). See
+<b>UNIFIED STREAM I/O MAPPING SYNTAX</b> below. If the
+argument is a bare tuple pattern (e.g. 4U4U), it is
+interpreted as the input pattern (or output packing pattern
+when used with <b>&minus;&minus;input&minus;tuples</b>).
+Explicit separate patterns may be specified via <b>&minus;p,
+&minus;&minus;input&minus;pattern</b> and <b>&minus;P,
+&minus;&minus;output&minus;pattern</b> or inside the
+pipeline expression.</p>
 
 <h3>Input and Output File Selection
 <a name="Input and Output File Selection"></a>
@@ -249,30 +244,34 @@ seekable files or file descriptors, --input-gap and raw unit
 post-gaps automatically seek directly over gap bytes in O(1)
 time without buffering.</p>
 
-<h3>Raw Units &amp; Containers
-<a name="Raw Units &amp; Containers"></a>
+<h3>Containers and Units
+<a name="Containers and Units"></a>
 </h3>
 
 
-<p style="margin-left:9%; margin-top: 1em">In structured
-binary files, active units often reside inside larger
-repeating containers, words, or frames (such as 8-bit bytes,
-16-bit half-words, or 32-bit words): <br>
+<p style="margin-left:9%; margin-top: 1em">A
+<b>container</b> is a repeating bit unit in the stream that
+can be defined with an initial <i>skip</i> and periodic
+<i>gap</i>. A <b>unit</b> represents the interesting bits
+inside the container, located using <i>length</i> and
+<i>pregap</i> (offset), or symmetrically using
+<i>pregap</i>, <i>length</i>, and <i>postgap</i>: <br>
 --input-raw-unit=BITS</p>
 
 <p style="margin-left:18%;">Defines the repeating container
-or frame size in bits. Within each raw unit, an active unit
-of --input-unit bits is extracted starting at --input-offset
-bits. The remainder of the raw unit (post-gap = raw-unit -
-(offset + unit)) is automatically skipped without requiring
-manual calculation. Extra padding between successive raw
-units can be specified with --input-gap.</p>
+size in bits. Within each container, an active unit of
+--input-unit bits (length) is extracted starting at
+--input-offset bits (pregap). The remainder of the container
+(postgap = container - (pregap + length)) is automatically
+skipped without requiring manual calculation. Extra padding
+between successive containers can be specified with
+--input-gap.</p>
 
 <p style="margin-left:9%;">--input-offset=BITS</p>
 
-<p style="margin-left:18%;">Bit offset of the active unit
-within each raw unit (default: 0). Requires --input-raw-unit
-to be specified.</p>
+<p style="margin-left:18%;">Bit offset (pregap) of the
+active unit within each container (default: 0). Requires
+--input-raw-unit to be specified.</p>
 
 <p style="margin-left:9%;">--input-assert-aligned</p>
 
@@ -310,6 +309,20 @@ reads.</p>
 <p style="margin-left:18%;">Explicitly enable seeking on
 primary input (this is already the default whenever seeking
 is possible). Maintained for backwards compatibility.</p>
+
+<p style="margin-left:9%;">--no-mmap, --do-not-mmap,
+--no-input-mmap</p>
+
+<p style="margin-left:18%;">Disable zero-copy memory-mapped
+file I/O on primary and merge inputs, falling back to
+standard buffered sequential reads.</p>
+
+<p style="margin-left:9%;">--mmap, --input-mmap</p>
+
+<p style="margin-left:18%;">Explicitly enable zero-copy
+memory-mapped file I/O on primary input (default: enabled
+for regular files when the mmap Cargo feature is compiled
+in).</p>
 
 <p style="margin-left:9%;">--reverse-input-bytes,
 --input-reverse-bytes</p>
@@ -557,6 +570,22 @@ and <b>riscv-r-type</b>.</p>
 <p style="margin-left:18%;">Print a formatted table of all
 available built-in presets with pattern definitions, unit
 widths, and descriptions, then exit.</p>
+
+<p style="margin-left:9%;">--download-presets[=URL]</p>
+
+<p style="margin-left:18%;">Download and install presets
+JSON file from <i>URL</i> (defaults to the official GitHub
+repository) and save to the active presets file path
+(<b>&#732;/.config/bdd/presets.json</b>). If <i>URL</i> is
+specified, downloads and installs custom presets from that
+remote URL or local file path.</p>
+
+<p style="margin-left:9%;">--presets-file=PATH</p>
+
+<p style="margin-left:18%;">Specify an alternate local
+presets JSON file path instead of the default discovery
+locations. Can also be set via the <b>BDD_PRESETS_FILE</b>
+environment variable.</p>
 
 <p style="margin-left:18%; margin-top: 1em">S and s should
 be used with caution. If negative value is used in making a
@@ -1119,6 +1148,17 @@ between successive output raw unit containers (default:
 emitted on output before the first unit is written (default:
 0).</p>
 
+<p style="margin-left:9%;">--overwrite, --as-is,
+--as_is</p>
+
+<p style="margin-left:18%;">In-place container editing
+mode. Instead of zeroing out unselected container bits,
+skips, and periodic gaps on output, preserves pre-offset
+bits, post-offset bits, initial skip offsets, and periodic
+framing gaps directly from the original input &quot;as
+is&quot;. Only the sliced target bits are modified and
+spliced back into the container.</p>
+
 <p style="margin-left:9%;">--output-little-endian</p>
 
 <p style="margin-left:18%;">Unit is written to the output
@@ -1253,6 +1293,20 @@ merge source is a seekable regular file.</p>
 <p style="margin-left:18%;">Explicitly enable seeking on
 merge input (this is already the default whenever seeking is
 possible). Maintained for backwards compatibility.</p>
+
+<p style="margin-left:9%;">--merge-no-mmap,
+--no-merge-mmap</p>
+
+<p style="margin-left:18%;">Disable zero-copy memory-mapped
+file I/O on merge inputs, falling back to standard buffered
+sequential reads.</p>
+
+<p style="margin-left:9%;">--merge-mmap</p>
+
+<p style="margin-left:18%;">Explicitly enable zero-copy
+memory-mapped file I/O on merge inputs (default: enabled for
+regular files when the mmap Cargo feature is compiled
+in).</p>
 
 <p style="margin-left:9%;">--merge-little-endian</p>
 
@@ -1482,10 +1536,11 @@ pipeline recipes for language models.</p>
 
 <p style="margin-left:9%;">--serve[=PORT], --web, --gui</p>
 
-<p style="margin-left:18%;">Launch the interactive Web UI
-application server (default port 7788). Allows exploring bit
-layouts, running slicing pipelines, visualizing hex dumps,
-and testing presets directly in any modern web browser.</p>
+<p style="margin-left:18%;">Print launch instructions for
+the decoupled interactive Web UI application server (located
+in the web/ directory). To start the web UI, run <b>python3
+web/server.py</b> or <b>cargo run --manifest-path
+web/Cargo.toml</b>.</p>
 
 <p style="margin-left:9%;">-q, --quiet</p>
 
@@ -1508,15 +1563,13 @@ I/O mapping expression as an optional positional
 argument:</p>
 
 <p style="margin-left:9%; margin-top: 1em"><b>bdd</b>
-&quot;&lt;input_stream&gt; -&gt; &lt;output_stream&gt;&quot;
-[<i>input_pattern</i>] [<i>output_pattern</i>]
-[<i>options</i>]</p>
+&quot;&lt;stream_pipeline&gt;&quot; [<i>options</i>]</p>
 
 <p style="margin-left:9%; margin-top: 1em">Each stream
 specification follows the syntax:</p>
 
 <p style="margin-left:18%; margin-top: 1em">[skip :]
-unit_or_container [+ gap]</p>
+container_or_unit [+ gap]</p>
 
 <table width="100%" border="0" rules="none" frame="void"
        cellspacing="0" cellpadding="0">
@@ -1531,8 +1584,9 @@ unit_or_container [+ gap]</p>
 
 
 <p><b>Initial Skip / Prefix (</b>:<b>):</b> Delimited by :.
-Skips <i>N</i> bits on input, or emits <i>N</i> zero bits as
-an initial stream prefix on output. Supports unit/byte
+Skips <i>N</i> bits before the first container on input, or
+emits <i>N</i> zero bits as an initial stream prefix before
+the first container on output. Supports unit/byte
 multipliers and suffixes (e.g. 123, 5B, 1GB,
 1024*1024*8).</p> </td></tr>
 <tr valign="top" align="left">
@@ -1546,8 +1600,9 @@ multipliers and suffixes (e.g. 123, 5B, 1GB,
 
 
 <p><b>Periodic Gap (</b>+<b>):</b> Appended with +. Bits
-skipped between input containers, or zero bits emitted
-between output containers (e.g. +1MiB, +100k).</p></td></tr>
+skipped between repeating input containers, or zero bits
+emitted between repeating output containers (e.g. +1MiB,
++100k).</p> </td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1558,11 +1613,12 @@ between output containers (e.g. +1MiB, +100k).</p></td></tr>
 <td width="88%">
 
 
-<p><b>Form A (Container Slicing):</b> raw_size[offset :
-unit] or raw_size[offset, unit] &mdash; container size
-outside, offset and active unit inside. Post-gap is
-calculated automatically as <i>raw_size - offset - unit</i>.
-Slice components may be separated by colon or comma.</p></td></tr>
+<p><b>Form A (Container Slicing):</b> container[pregap :
+length] or raw_size[offset : unit] &mdash; repeating
+container size outside, pregap and unit length inside.
+Postgap is calculated automatically as <i>container - pregap
+- length</i>. Slice components may be separated by colon or
+comma.</p> </td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">
@@ -1573,10 +1629,10 @@ Slice components may be separated by colon or comma.</p></td></tr>
 <td width="88%">
 
 
-<p><b>Form B (Physical Layout Box):</b> [pre : unit : post]
-or [pre, unit, post] &mdash; explicit pre-gap, active
-payload, and post-gap inside the box. Container size is the
-sum <i>pre + unit + post</i>.</p></td></tr>
+<p><b>Form B (Physical Layout Box):</b> [pregap : length :
+postgap] &mdash; explicit pregap, unit length, and postgap
+inside the container box. Container size is the sum
+<i>pregap + length + postgap</i>.</p></td></tr>
 <tr valign="top" align="left">
 <td width="9%"></td>
 <td width="1%">

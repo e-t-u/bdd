@@ -20,18 +20,22 @@
 [Output Sink: Binary, Hex Dump, Keyed JSON, CSV, Bitstring]
 ```
 
-### Raw Unit & Stream Positioning Model
-- Positional CLI syntax: `bdd [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN] [OPTIONS]`
-- `--input-raw-unit <BITS>`: Defines total periodic chunk container (e.g. 188B MPEG-TS packet = `188*8` or `1504`).
-- `--input-offset <BITS>`: Offset in bits from container start to target payload unit.
-- `--input-unit <BITS>`: Payload bit count to extract. Default equals `--input-raw-unit` if omitted.
-- `--output-unit <BITS>`: Output bit count. Defaults to 8 bits if omitted.
-- `--output-raw-unit <BITS>`: Size of repeating raw unit container in bits on output.
-- `--output-offset <BITS>`: Bit offset of unit within output raw container.
-- `--output-gap <BITS>`: Bit gap in zeros emitted between output raw units.
-- `--output-skip-bits <BITS>`: Initial zero prefix bits emitted on output before first unit (alias: `--output-skip`).
-- `--input-gap <BITS>`: Extra gap bits skipped between successive raw unit containers. On seekable files, gaps are skipped with O(1) kernel seek.
-- `--input-skip <BITS>`: Initial bits skipped before first unit. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
+### Container Framing & Stream Positioning Model
+- Positional CLI syntax: `bdd [STREAM_PATTERN] [OPTIONS]`
+- **Container**: Repeating bit unit in the stream defined by initial `skip` and periodic `gap`.
+- **Unit**: Interesting bits inside the container found using `length` and `pregap` (or `pregap, length, postgap`).
+- `--input-raw-unit <BITS>`: Defines repeating container size (e.g. 188B MPEG-TS packet = `188*8` or `1504`).
+- `--input-offset <BITS>`: Offset in bits (pregap) from container start to target unit.
+- `--input-unit <BITS>`: Unit bit count (length) to extract. Default equals container size if omitted.
+- `-p, --input-pattern <PATTERN>`: Bit pattern to unpack input into structured tuples.
+- `-P, --output-pattern <PATTERN>`: Bit pattern to pack output tuples.
+- `--output-unit <BITS>`: Output unit bit count. Defaults to 8 bits if omitted.
+- `--output-raw-unit <BITS>`: Size of repeating container in bits on output.
+- `--output-offset <BITS>`: Bit offset (pregap) of unit within output container.
+- `--output-gap <BITS>`: Bit gap in zeros emitted between output containers.
+- `--output-skip-bits <BITS>`: Initial zero prefix bits emitted on output before first container (alias: `--output-skip`).
+- `--input-gap <BITS>`: Extra gap bits skipped between successive containers. On seekable files, gaps are skipped with O(1) kernel seek.
+- `--input-skip <BITS>`: Initial bits skipped before first container. Fast hardware seek (`lseek64`) is used automatically whenever stdin/file is seekable.
 - `--no-seek`: Disable kernel seeking and force sequential bitstream reading.
 - `--no-mmap`: Force disable zero-copy memory mapping on input/merge files (use standard buffered reads).
 - `--mmap`: Explicitly enable zero-copy memory-mapped file I/O on primary input (default: auto for regular files).

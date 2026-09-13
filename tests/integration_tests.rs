@@ -1756,9 +1756,9 @@ fn test_stream_io_pattern_container_forms() {
 
 #[test]
 fn test_positional_tuple_patterns() {
-    // 1. Pure binary bitstream: unpack two 4-bit nibbles from each byte, swap fields, repack:
+    // 1. Arrow pipeline syntax: unpack two 4-bit nibbles from each byte, swap fields, repack:
     let mut child_bin = Command::new(BDD_BIN)
-        .args(["4U4U", "4U4U", "--rearrange=1,0", "--output-hex"])
+        .args(["4U4U -> 4U4U", "--rearrange=1,0", "--output-hex"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -1778,7 +1778,56 @@ fn test_positional_tuple_patterns() {
     let tokens_bin: Vec<&str> = stdout_bin.split_whitespace().collect();
     assert_eq!(tokens_bin, vec!["21", "43"]);
 
-    // 2. Text tuples: pack comma-separated pairs ("1,2") into two 4-bit nibbles per byte (0x12):
+    // 2. Explicit -p and -P flags:
+    let mut child_flags = Command::new(BDD_BIN)
+        .args([
+            "-p",
+            "4U4U",
+            "-P",
+            "4U4U",
+            "--rearrange=1,0",
+            "--output-hex",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        use std::io::Write;
+        let stdin = child_flags.stdin.as_mut().unwrap();
+        stdin.write_all(&[0x12, 0x34]).unwrap();
+    }
+
+    let out_flags = child_flags
+        .wait_with_output()
+        .expect("failed to wait for bdd");
+    assert!(out_flags.status.success());
+    let stdout_flags = String::from_utf8(out_flags.stdout).unwrap();
+    let tokens_flags: Vec<&str> = stdout_flags.split_whitespace().collect();
+    assert_eq!(tokens_flags, vec!["21", "43"]);
+
+    // 3. Single positional input pattern: unpack binary into tuples
+    let mut child_in = Command::new(BDD_BIN)
+        .args(["4U4U", "--output-tuples"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bdd");
+
+    {
+        use std::io::Write;
+        let stdin = child_in.stdin.as_mut().unwrap();
+        stdin.write_all(&[0x12, 0x34]).unwrap();
+    }
+
+    let out_in = child_in.wait_with_output().expect("failed to wait for bdd");
+    assert!(out_in.status.success());
+    let stdout_in = String::from_utf8(out_in.stdout).unwrap();
+    let lines_in: Vec<&str> = stdout_in.trim().split('\n').collect();
+    assert_eq!(lines_in, vec!["1,2", "3,4"]);
+
+    // 4. Text tuples with single positional output pattern: pack comma-separated pairs ("1,2") into two 4-bit nibbles per byte (0x12):
     let mut child_txt = Command::new(BDD_BIN)
         .args(["4U4U", "--input-tuples", "--output-hex"])
         .stdin(std::process::Stdio::piped())
@@ -1800,6 +1849,13 @@ fn test_positional_tuple_patterns() {
     let stdout_txt = String::from_utf8(out_txt.stdout).unwrap();
     let tokens_txt: Vec<&str> = stdout_txt.split_whitespace().collect();
     assert_eq!(tokens_txt, vec!["12", "34"]);
+
+    // 5. Multiple positional parameters are rejected:
+    let out_rejected = Command::new(BDD_BIN)
+        .args(["4U4U", "4U4U"])
+        .output()
+        .expect("failed to run bdd");
+    assert!(!out_rejected.status.success());
 }
 
 #[test]

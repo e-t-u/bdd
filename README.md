@@ -169,34 +169,37 @@ Sinks specify how the processed bits or tuples are formatted on output:
 
 ---
 
-### Physical Containers & Framing Slicers: Solving the Offset Problem
-Active fields rarely float in empty space; they reside inside physical containers (bytes, 16-bit halfwords, 32-bit registers, 188-byte MPEG packets), or need continuous repacking between differing bit widths.
+### Containers and Units: Framing the Bitstream
+Active data rarely floats in empty space; interesting bits reside inside physical framing containers (such as 188-byte MPEG-TS packets, 32-bit registers, or padded network frames).
 
-Rather than forcing you to mentally calculate initial skips and trailing gaps, `bdd` provides declarative container notation:
+- **Container**: A repeating bit unit in the stream that can be defined with an initial `skip` and periodic `gap`.
+- **Unit**: The interesting bits inside the container that can be found using `length` and `pregap` (offset from container start), or symmetrically using `pregap`, `length`, and `postgap`.
+
+Rather than forcing you to mentally calculate offsets and trailing padding, `bdd` provides declarative container notation:
 
 #### 0. Pure Bit-Width Slicing: `in_unit -> out_unit` (e.g. `8 -> 3`)
 Directly reslices and repacks continuous bitstreams between arbitrary bit widths without manual bitmasks or shifts:
 - **`8 -> 3`**: Slices 8-bit input units into dense 3-bit output units (e.g. packing byte values into 3-bit octal fields).
 - **`3 -> 8`**: Expands 3-bit units into byte-aligned 8-bit units.
 
-#### 1. Form A Containers: `raw[offset:unit]`
-Extracts an inner payload of `unit` bits starting at `offset` inside a repeating outer container of `raw` bits:
-- **`8[2:4]`**: Inside each 8-bit byte, extract 4 bits starting at bit offset 2 (skipping 2 bits before, and 2 bits after).
-- **`188B[11:13]`**: Inside each 188-byte MPEG-TS packet, extract the 13-bit PID starting at bit offset 11 (automatically skipping the remaining 1,480 bits of payload).
-- **`32[0:16]`**: Extract the 16-bit Left channel from a 32-bit stereo audio word.
-- **`32[16:16]`**: Extract the 16-bit Right channel from a 32-bit stereo audio word.
+#### 1. Form A Containers: `container[pregap:length]` (or `raw[offset:unit]`)
+Extracts the interesting **unit** of `length` bits starting at `pregap` (offset) inside a repeating outer **container**:
+- **`8[2:4]`**: Inside each 8-bit container, extract the 4-bit unit starting at bit offset 2 (skipping 2 bits before, and 2 bits after).
+- **`188B[11:13]`**: Inside each 188-byte container, extract the 13-bit PID unit starting at bit offset 11 (automatically skipping the remaining 1,480 bits of container payload).
+- **`32[0:16]`**: Extract the 16-bit Left channel unit from a 32-bit container.
+- **`32[16:16]`**: Extract the 16-bit Right channel unit from a 32-bit container.
 
-#### 2. Form B Containers: `[pre:unit:post]`
-Expresses symmetrical framing by specifying pre-gap and post-gap explicitly:
-- **`[2:4:2]`**: Skip 2 bits, extract 4 bits, skip 2 bits (repeating container of 8 bits).
+#### 2. Form B Containers: `[pregap:length:postgap]`
+Expresses symmetrical container framing by specifying pregap, unit length, and postgap:
+- **`[2:4:2]`**: 2 bits pregap, 4 bits unit length, 2 bits postgap (repeating container of 8 bits: $2 + 4 + 2 = 8$).
 
-#### 3. Periodic Gaps & Initial Stream Skips
-- **Initial Skip (`skip : unit`)**: Skip bits before the first unit is read.
-  `123 : 8` skips 123 bits into the stream and begins streaming 8-bit units.
-- **Periodic Gap (`unit + gap`)**: Skip bits after every extracted unit.
-  `8 + 24` reads 8 bits, skips 24 bits, and repeats (extracting 1 byte out of every 4-byte word).
+#### 3. Container Skips & Periodic Gaps
+- **Initial Skip (`skip : container`)**: Number of bits to skip before the first container is read.
+  `123 : 8` skips 123 bits into the stream and begins streaming 8-bit containers.
+- **Periodic Gap (`container + gap`)**: Number of bits to skip after every container.
+  `8 + 24` reads an 8-bit container, skips a 24-bit gap, and repeats (extracting 1 byte out of every 4-byte container frame).
 - **Full Unified Syntax**:
-  `123 : 188B[11:13] + 8 -> 13` (Initial skip of 123 bits, 188-byte container, 13-bit payload at offset 11, periodic inter-packet gap of 8 bits, emitted as 13-bit units).
+  `123 : 188B[11:13] + 8 -> 13` (Initial skip of 123 bits, 188-byte container with a 13-bit unit at pregap 11, periodic inter-container gap of 8 bits, emitted as 13-bit units).
 
 ---
 
@@ -302,16 +305,17 @@ When data contains multiple heterogeneous fields, a single unit size is not enou
 bdd "sync:11u,version:2u,layer:2u,protect:1b -> json:object" < audio.mp3
 ```
 
-### What is a Tuple in `bdd`? Units, Tuples, and Lines
+### What is a Tuple in `bdd`? Containers, Units, Tuples, and Lines
 
-To use `bdd` effectively, understand the relationship between **streams**, **units**, and **tuples**:
+To use `bdd` effectively, understand the relationship between **streams**, **containers**, **units**, and **tuples**:
 
 1. **Bitstream**: The continuous sequence of bits (from file, stdin, network socket, or memory).
-2. **Unit**: The repeating bit-length chunk sliced from the stream (e.g. 8 bits, 16 bits, 188 bytes).
-3. **Tuple**: The structured, in-memory breakdown of **one single unit** into typed fields:
+2. **Container**: The repeating bit unit in the stream, defined by an initial `skip` and periodic `gap` (e.g. 188-byte MPEG-TS packets, 32-bit audio frames).
+3. **Unit**: The interesting bits inside the container, located using `length` and `pregap` (offset from container start), or symmetrically using `pregap`, `length`, and `postgap`. When no container framing is specified, the unit occupies the entire container.
+4. **Tuple**: The structured, in-memory breakdown of **one single unit** into typed fields:
    - A unit is a sequence of bits (e.g. 8-bit `0xFA` / `0b11111010`).
    - Slicing it with pattern `4U4U` yields **one tuple** with 2 fields: `[UInt(15), UInt(10)]`.
-4. **Text / CSV Representation (`--input-tuples` / `--output-tuples` / `tuples -> ...`)**:
+5. **Text / CSV Representation (`--input-tuples` / `--output-tuples` / `tuples -> ...`)**:
    - **One Line = Exactly One Unit (One Tuple)**.
    - **Commas (`,`) separate fields** within that unit.
    - **A newline (`\n`) terminates the unit** and advances the stream to the next unit.
@@ -973,25 +977,23 @@ While human engineers and reverse engineers think intuitively in **declarative p
 This makes `bdd` ideal for **autonomous LLM coding agents**: agents can either generate clean high-level stream pipelines or assemble robust programmatic flags with zero ambiguity.
 
 ```
-Usage: bdd [OPTIONS] [STREAM_PATTERN] [INPUT_PATTERN] [OUTPUT_PATTERN]
+Usage: bdd [OPTIONS] [STREAM_PATTERN]
 
 Arguments:
-  [STREAM_PATTERN]                 Stream I/O pipeline (e.g. '8->3', '4U4U -> {0|1} -> hex', '188B[11:13] -> 13')
-  [INPUT_PATTERN]                  Input pattern for unpacking tuples (e.g. '8U', '24S', 'sync:11u,version:2u')
-  [OUTPUT_PATTERN]                 Output pattern for packing tuples (e.g. '8U', '8U,x,8U', '8E')
+  [STREAM_PATTERN]                 Stream I/O pipeline or pattern (e.g. '8->3', '4U4U -> {0|1} -> hex', '188B[11:13] -> 13', '4U4U')
 
 Input Unit & Container Options:
   -p, --input-pattern <PATTERN>    Bit pattern to unpack input (e.g. "3U1x2u3M")
-  -u, --input-unit <BITS>          Input unit size in bits (default: 8, or auto-inferred from pattern)
+  -u, --input-unit <BITS>          Size of active unit in bits (default: 8, or auto-inferred from pattern)
       --preset <NAME>              Use built-in protocol or float preset (e.g. mp3-header, mpeg-ts, nvfp4)
       --list-presets               List all built-in format presets and exit
       --download-presets [URL]     Download/update presets JSON from URL (default: official repo)
       --presets-file <PATH>        Path to custom presets JSON file (overrides default presets path)
-      --input-skip-bits <BITS>     Initial bit offset before first unit [default: 0]
-      --input-skip-units <UNITS>   Skip initial N units from input stream [default: 0]
-      --input-gap <BITS>           Bit gap skipped after each unit (or between raw units) [default: 0]
-      --input-raw-unit <BITS>      Size of repeating raw container/frame in bits
-      --input-offset <BITS>        Bit offset of unit inside raw unit [default: 0]
+      --input-skip-bits <BITS>     Initial bit offset (skip) before first container [default: 0]
+      --input-skip-units <UNITS>   Skip initial N containers from input stream [default: 0]
+      --input-gap <BITS>           Bit gap skipped between repeating containers (or between units) [default: 0]
+      --input-raw-unit <BITS>      Size of repeating container in bits
+      --input-offset <BITS>        Bit offset (pregap) of unit inside container [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
       --drop-partial-eof           Discard incomplete trailing bits at EOF instead of zero-padding
       --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
@@ -1039,12 +1041,12 @@ Tuple Manipulators:
       --filter <F,OP,VAL>          Filter tuples where predicate is false (==, !=, <, <=, >, >=)
 
 Output Unit & Pattern Options:
-      --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats, multipliers & counter)
+  -P, --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats, multipliers & counter)
       --output-unit <BITS>         Output unit size in bits (default: 8, or auto-inferred from pattern)
-      --output-raw-unit <BITS>     Size of repeating raw unit / container in bits on output
-      --output-offset <BITS>       Bit offset of unit inside output raw unit [default: 0]
-      --output-gap <BITS>          Bit gap between output raw unit containers [default: 0]
-      --output-skip-bits <BITS>    Initial zero prefix bits emitted before first unit
+      --output-raw-unit <BITS>     Size of repeating output container in bits
+      --output-offset <BITS>       Bit offset (pregap) of unit inside output container [default: 0]
+      --output-gap <BITS>          Bit gap between output containers [default: 0]
+      --output-skip-bits <BITS>    Initial bit offset (skip/prefix) emitted before first container [default: 0]
   -x, --output-hex                 Output units as formatted hexadecimal strings
   -b, --output-bits                Output units as ASCII bit strings ('0' and '1')
   -i, --output-integers            Output unsigned integer per unit (one per line)
@@ -1082,7 +1084,7 @@ Merge Options:
       --merge-gap <BITS>           Bit gap skipped after each merge unit [default: 0]
       --merge-copy-first <BITS>    Copy initial header bits from merge file first
       --merge-raw-unit <BITS>      Size of repeating merge container in bits
-      --merge-offset <BITS>        Bit offset of unit inside merge raw unit [default: 0]
+      --merge-offset <BITS>        Bit offset (pregap) of unit inside merge container [default: 0]
       --merge-drop-partial-eof     Discard incomplete trailing bits at EOF in merge stream
       --merge-no-seek              Disable seeking specifically on merge file
       --merge-use-seek             Explicitly enable seeking on merge file (default: true)

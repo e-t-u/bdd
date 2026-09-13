@@ -11,17 +11,9 @@ use clap::Parser;
 )]
 pub struct Cli {
     // Positional pattern arguments
-    /// Stream I/O pattern (e.g. '8->3', '123:8[2:4]+8 -> 5B:8[2:4]', '[2:4:2] -> 4')
+    /// Stream I/O pipeline or pattern (e.g. '8->3', '4U4U -> {0|1} -> hex', '188B[11:13] -> 13', '4U4U')
     #[arg(value_name = "STREAM_PATTERN")]
     pub stream_pattern: Option<String>,
-
-    /// Input pattern for unpacking tuples (e.g. '8U', '24S', 'sync:11u,version:2u')
-    #[arg(value_name = "INPUT_PATTERN")]
-    pub pos_input_pattern: Option<String>,
-
-    /// Output pattern for packing tuples (e.g. '8U', '8U,x,8U')
-    #[arg(value_name = "OUTPUT_PATTERN")]
-    pub pos_output_pattern: Option<String>,
 
     // File options
     #[arg(long, default_value = "-")]
@@ -30,25 +22,27 @@ pub struct Cli {
     #[arg(long, default_value = "-")]
     pub output_file: String,
 
-    // Input unit and raw unit container selection
+    // Input unit and container selection
+    /// Size of active unit in bits (interesting bits inside container)
     #[arg(long)]
     pub input_unit: Option<String>,
 
-    /// Size of repeating raw unit / container in bits
+    /// Size of repeating container in bits
     #[arg(long)]
     pub input_raw_unit: Option<String>,
 
+    /// Initial bit offset (skip) before first container
     #[arg(long, allow_hyphen_values = true)]
     pub input_skip_bits: Option<String>,
 
     #[arg(long, allow_hyphen_values = true)]
     pub input_skip_units: Option<String>,
 
-    /// Bit gap between raw units (if --input-raw-unit is set) or between units
+    /// Bit gap between repeating containers (or between units)
     #[arg(long, allow_hyphen_values = true)]
     pub input_gap: Option<String>,
 
-    /// Bit offset of unit within raw unit
+    /// Bit offset (pregap) of unit inside container
     #[arg(long, allow_hyphen_values = true)]
     pub input_offset: Option<String>,
 
@@ -118,7 +112,7 @@ pub struct Cli {
     pub input_integers: bool,
 
     // Tuples
-    #[arg(long)]
+    #[arg(short = 'p', long)]
     pub input_pattern: Option<String>,
 
     #[arg(long, default_value_t = false)]
@@ -189,7 +183,7 @@ pub struct Cli {
     pub filter: Option<String>,
 
     // Pack tuples
-    #[arg(long)]
+    #[arg(short = 'P', long)]
     pub output_pattern: Option<String>,
 
     #[arg(long, visible_alias = "output-tuple", default_value_t = false)]
@@ -199,19 +193,19 @@ pub struct Cli {
     #[arg(long)]
     pub output_unit: Option<String>,
 
-    /// Size of repeating raw unit / container in bits on output
+    /// Size of repeating output container in bits
     #[arg(long)]
     pub output_raw_unit: Option<String>,
 
-    /// Bit offset of unit within output raw unit
+    /// Bit offset (pregap) of unit inside output container
     #[arg(long, allow_hyphen_values = true)]
     pub output_offset: Option<String>,
 
-    /// Bit gap between output raw units
+    /// Bit gap between output containers
     #[arg(long, allow_hyphen_values = true)]
     pub output_gap: Option<String>,
 
-    /// Initial prefix/skip bits emitted on output before first unit
+    /// Initial bit offset (skip/prefix) emitted on output before first container
     #[arg(long, allow_hyphen_values = true, visible_aliases = ["output-skip", "output-prefix"])]
     pub output_skip_bits: Option<String>,
 
@@ -357,14 +351,15 @@ pub struct Cli {
     #[arg(long, allow_hyphen_values = true)]
     pub merge_copy_first: Option<String>,
 
-    /// Size of repeating raw unit / container in bits for merge stream
+    /// Size of repeating container in bits for merge stream
     #[arg(long)]
     pub merge_raw_unit: Option<String>,
 
+    /// Bit gap between merge containers
     #[arg(long, allow_hyphen_values = true)]
     pub merge_gap: Option<String>,
 
-    /// Bit offset of unit within merge raw unit
+    /// Bit offset (pregap) of unit inside merge container
     #[arg(long, allow_hyphen_values = true)]
     pub merge_offset: Option<String>,
 
@@ -754,17 +749,21 @@ fn parse_number_argument(
 pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     crate::diag::set_quiet(cli.quiet);
 
-    // 1. Process positional arguments:
-    // bdd <optional stream i/o pattern> <optional input pattern> <optional output pattern>
+    // 1. Process positional argument:
+    // bdd [STREAM_PATTERN]
     let mut stream_pat = cli.stream_pattern.take();
-    let mut pos_in_pat = cli.pos_input_pattern.take();
-    let mut pos_out_pat = cli.pos_output_pattern.take();
 
-    // Disambiguation: if stream_pat does not look like a stream pattern, but looks like an input pattern
+    // Disambiguation: if stream_pat does not look like a stream pattern, but looks like a tuple pattern (e.g. 4U4U)
     if let Some(ref sp) = stream_pat {
         if !crate::stream_pattern::is_stream_io_pattern(sp) {
-            pos_out_pat = pos_in_pat;
-            pos_in_pat = stream_pat.take();
+            let pat = stream_pat.take().unwrap();
+            // When reading text tuples (--input-tuples), the input is already divided into fields by commas.
+            // If a single positional tuple pattern is provided with --input-tuples, it specifies the output packing pattern.
+            if cli.input_tuples && cli.output_pattern.is_none() {
+                cli.output_pattern = Some(pat);
+            } else if cli.input_pattern.is_none() {
+                cli.input_pattern = Some(pat);
+            }
         }
     }
     let cli_explicit_input_unit = cli.input_unit.is_some();
@@ -895,23 +894,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 cli.output_skip_bits = cli.input_skip_bits.clone();
             }
         }
-    }
-
-    // When reading text tuples (--input-tuples), the input is already divided into fields by commas.
-    // If only one positional tuple pattern was provided, it specifies the output packing pattern.
-    if cli.input_tuples
-        && pos_in_pat.is_some()
-        && pos_out_pat.is_none()
-        && cli.output_pattern.is_none()
-    {
-        pos_out_pat = pos_in_pat.take();
-    }
-
-    if cli.input_pattern.is_none() && pos_in_pat.is_some() {
-        cli.input_pattern = pos_in_pat;
-    }
-    if cli.output_pattern.is_none() && pos_out_pat.is_some() {
-        cli.output_pattern = pos_out_pat;
     }
 
     if let Some(ref path) = cli.presets_file {

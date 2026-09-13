@@ -146,6 +146,8 @@ fn main() {
                 eprintln!("Error: --export-c / --export-rust requires a pattern or preset");
                 std::process::exit(1);
             }
+        } else if let Some(ref pat) = cli.stream_pattern {
+            pat.as_str()
         } else if cli.input_file != "-"
             && !cli.input_file.is_empty()
             && (cli.input_file.contains(':')

@@ -8,14 +8,16 @@ bdd \- Bit stream copy and modify
 
 .SH SYNOPSIS
 .B bdd
-[\fISTREAM_PATTERN\fR] [\fIINPUT_PATTERN\fR] [\fIOUTPUT_PATTERN\fR] [\fIOPTIONS\fR]
+[\fISTREAM_PATTERN\fR] [\fIOPTIONS\fR]
 
 .SH DESCRIPTION
 \fBbdd\fR (binary-dd) inspects, transforms, unpacks, manipulates, interleaves, and packs bitstreams with arbitrary (non-byte-aligned) bit precision.
 
 By default, \fBbdd\fR reads bytes from standard input and writes them unchanged to standard output, functioning like an exact 8-bit copy tool. With options and patterns, its behavior can be extended to manipulate inputs and outputs down to single-bit accuracy.
 
-\fBbdd\fR models input and output as continuous streams of bit units. A bit unit is a repeating sequence containing a constant number of bits. Units can start at arbitrary bit offsets, be spaced by periodic gaps, or reside inside repeating physical containers (raw units).
+\fBbdd\fR models input and output as continuous streams of bit units and containers.
+A \fBcontainer\fR is a repeating bit unit in the stream that can be defined with an initial \fIskip\fR and periodic \fIgap\fR.
+A \fBunit\fR represents the interesting bits inside the container that can be found using \fIlength\fR and \fIpregap\fR (offset), or symmetrically using \fIpregap\fR, \fIlength\fR, and \fIpostgap\fR. When no container framing is specified, the unit occupies the entire container.
 
 Each unit can be unpacked into structured, typed fields called a \fItuple\fR (analogous to a row in a relational database). Fields within a tuple may represent unsigned or signed integers, floating-point numbers (from IEEE double-precision down to sub-byte AI float formats), UTF-8 characters, or raw bytes.
 
@@ -27,21 +29,13 @@ The name \fBbdd\fR comes from \fIbinary-dd\fR because it performs bitstream-leve
 
 .SH OPTIONS
 
-.SS Positional Pattern Arguments:
+.SS Positional Pattern Argument:
 
-\fBbdd\fR supports optional positional arguments for rapid bitstream slicing and tuple unpacking:
+\fBbdd\fR supports an optional single positional argument for rapid bitstream pipelines, container slicing, or tuple unpacking:
 
 .TP
 \fISTREAM_PATTERN\fR
-Stream I/O mapping pattern defining input and output framing (e.g. \f(CR"8->3"\fR, \f(CR"123:8[2:4]+8 -> 5B:8[2:4]"\fR, or \f(CR"[2:4:2] -> 4"\fR). See \fBUNIFIED STREAM I/O MAPPING SYNTAX\fR below. If the first positional argument does not match a stream pattern (e.g. \f(CR4U4U\fR), it is interpreted as the \fIINPUT_PATTERN\fR.
-
-.TP
-\fIINPUT_PATTERN\fR
-Tuple unpack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"sync:11u,version:2u"\fR). Equivalent to \fB\-\-input\-pattern\fR.
-
-.TP
-\fIOUTPUT_PATTERN\fR
-Tuple pack pattern (e.g. \f(CR"8U"\fR, \f(CR"4U4U"\fR, \f(CR"8U,x,8U"\fR). Equivalent to \fB\-\-output\-pattern\fR. Note: when \fB\-\-input\-tuples\fR is used, input fields are parsed from commas, so a single positional pattern specifies the output packing pattern.
+Stream I/O pipeline or pattern defining input/output framing, container slicing, transformations, or tuple unpacking (e.g. \f(CR"8->3"\fR, \f(CR"123:8[2:4]+8 -> 5B:8[2:4]"\fR, \f(CR"[2:4:2] -> 4"\fR, \f(CR"4U4U -> {0|1} -> hex"\fR, or bare pattern \f(CR4U4U\fR). See \fBUNIFIED STREAM I/O MAPPING SYNTAX\fR below. If the argument is a bare tuple pattern (e.g. \f(CR4U4U\fR), it is interpreted as the input pattern (or output packing pattern when used with \fB\-\-input\-tuples\fR). Explicit separate patterns may be specified via \fB\-p, \-\-input\-pattern\fR and \fB\-P, \-\-output\-pattern\fR or inside the pipeline expression.
 
 .SS Input and Output File Selection
 
@@ -93,20 +87,20 @@ Number of bits skipped after reading each unit.
 When --input-raw-unit is set, defines the gap in bits between successive raw units (default: 0).
 On seekable files or file descriptors, --input-gap and raw unit post-gaps automatically seek directly over gap bytes in O(1) time without buffering.
 
-.SS Raw Units & Containers
+.SS Containers and Units
 
-In structured binary files, active units often reside inside larger repeating containers, words, or frames (such as 8-bit bytes, 16-bit half-words, or 32-bit words):
+A \fBcontainer\fR is a repeating bit unit in the stream that can be defined with an initial \fIskip\fR and periodic \fIgap\fR. A \fBunit\fR represents the interesting bits inside the container, located using \fIlength\fR and \fIpregap\fR (offset), or symmetrically using \fIpregap\fR, \fIlength\fR, and \fIpostgap\fR:
 
 .TP
 --input-raw-unit=BITS
-Defines the repeating container or frame size in bits.
-Within each raw unit, an active unit of --input-unit bits is extracted starting at --input-offset bits.
-The remainder of the raw unit (post-gap = raw-unit - (offset + unit)) is automatically skipped without requiring manual calculation.
-Extra padding between successive raw units can be specified with --input-gap.
+Defines the repeating container size in bits.
+Within each container, an active unit of --input-unit bits (length) is extracted starting at --input-offset bits (pregap).
+The remainder of the container (postgap = container - (pregap + length)) is automatically skipped without requiring manual calculation.
+Extra padding between successive containers can be specified with --input-gap.
 
 .TP
 --input-offset=BITS
-Bit offset of the active unit within each raw unit (default: 0).
+Bit offset (pregap) of the active unit within each container (default: 0).
 Requires --input-raw-unit to be specified.
 
 .TP
@@ -815,20 +809,20 @@ Quiet mode. Suppress non-fatal diagnostic warnings (such as missing tuple fields
 Instead of specifying separate flags for skips, containers, offsets, and gaps, \fBbdd\fR accepts a unified, expressive stream I/O mapping expression as an optional positional argument:
 .PP
 .B bdd
-\f(CR"<input_stream> -> <output_stream>"\fR [\fIinput_pattern\fR] [\fIoutput_pattern\fR] [\fIoptions\fR]
+\f(CR"<stream_pipeline>"\fR [\fIoptions\fR]
 .PP
 Each stream specification follows the syntax:
 .IP
-\f(CR[skip :] unit_or_container [+ gap]\fR
+\f(CR[skip :] container_or_unit [+ gap]\fR
 .PP
 .IP \(bu 2
-\fBInitial Skip / Prefix (\f(CR:\fB):\fR Delimited by \f(CR:\fR. Skips \fIN\fR bits on input, or emits \fIN\fR zero bits as an initial stream prefix on output. Supports unit/byte multipliers and suffixes (e.g. \f(CR123\fR, \f(CR5B\fR, \f(CR1GB\fR, \f(CR1024*1024*8\fR).
+\fBInitial Skip / Prefix (\f(CR:\fB):\fR Delimited by \f(CR:\fR. Skips \fIN\fR bits before the first container on input, or emits \fIN\fR zero bits as an initial stream prefix before the first container on output. Supports unit/byte multipliers and suffixes (e.g. \f(CR123\fR, \f(CR5B\fR, \f(CR1GB\fR, \f(CR1024*1024*8\fR).
 .IP \(bu 2
-\fBPeriodic Gap (\f(CR+\fB):\fR Appended with \f(CR+\fR. Bits skipped between input containers, or zero bits emitted between output containers (e.g. \f(CR+1MiB\fR, \f(CR+100k\fR).
+\fBPeriodic Gap (\f(CR+\fB):\fR Appended with \f(CR+\fR. Bits skipped between repeating input containers, or zero bits emitted between repeating output containers (e.g. \f(CR+1MiB\fR, \f(CR+100k\fR).
 .IP \(bu 2
-\fBForm A (Container Slicing):\fR \f(CRraw_size[offset : unit]\fR or \f(CRraw_size[offset, unit]\fR \(em container size outside, offset and active unit inside. Post-gap is calculated automatically as \fIraw_size - offset - unit\fR. Slice components may be separated by colon or comma.
+\fBForm A (Container Slicing):\fR \f(CRcontainer[pregap : length]\fR or \f(CRraw_size[offset : unit]\fR \(em repeating container size outside, pregap and unit length inside. Postgap is calculated automatically as \fIcontainer - pregap - length\fR. Slice components may be separated by colon or comma.
 .IP \(bu 2
-\fBForm B (Physical Layout Box):\fR \f(CR[pre : unit : post]\fR or \f(CR[pre, unit, post]\fR \(em explicit pre-gap, active payload, and post-gap inside the box. Container size is the sum \fIpre + unit + post\fR.
+\fBForm B (Physical Layout Box):\fR \f(CR[pregap : length : postgap]\fR \(em explicit pregap, unit length, and postgap inside the container box. Container size is the sum \fIpregap + length + postgap\fR.
 .IP \(bu 2
 \fBBare Unit:\fR Plain number or size (e.g. \f(CR8\fR, \f(CR3\fR, \f(CR188B\fR).
 .PP
