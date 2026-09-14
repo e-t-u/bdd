@@ -36,6 +36,7 @@ pub trait TupleManipulator {
 pub struct RearrangeFieldPart {
     pub index: isize,
     pub width: Option<usize>,
+    pub invert: bool,
 }
 
 /// A target output field in a rearrange operation (can be a single field or multiple fused fields).
@@ -91,15 +92,25 @@ impl RearrangeManipulator {
                 if sub.is_empty() {
                     continue;
                 }
-                let (id_str, width) = if let Some(colon_idx) = sub.find(':') {
-                    let id = sub[..colon_idx].trim();
-                    let w_str = sub[colon_idx + 1..].trim();
+                let (sub_clean, invert) = if sub.starts_with("not(") && sub.ends_with(')') {
+                    (sub[4..sub.len() - 1].trim(), true)
+                } else if let Some(stripped) = sub.strip_prefix('!') {
+                    (stripped.trim(), true)
+                } else if let Some(stripped) = sub.strip_prefix('~') {
+                    (stripped.trim(), true)
+                } else {
+                    (sub, false)
+                };
+
+                let (id_str, width) = if let Some(colon_idx) = sub_clean.find(':') {
+                    let id = sub_clean[..colon_idx].trim();
+                    let w_str = sub_clean[colon_idx + 1..].trim();
                     let w = w_str.parse::<usize>().map_err(|_| {
                         BddError::CliError(format!("Invalid bit width '{}' in rearrange", w_str))
                     })?;
                     (id, Some(w))
                 } else {
-                    (sub, None)
+                    (sub_clean, None)
                 };
 
                 let index = if let Ok(n) = id_str.parse::<isize>() {
@@ -117,7 +128,11 @@ impl RearrangeManipulator {
                     return Err(BddError::RearrangeNonNumber);
                 };
 
-                sub_parts.push(RearrangeFieldPart { index, width });
+                sub_parts.push(RearrangeFieldPart {
+                    index,
+                    width,
+                    invert,
+                });
             }
             if !sub_parts.is_empty() {
                 items.push(RearrangeItem { parts: sub_parts });
@@ -143,7 +158,7 @@ impl TupleManipulator for RearrangeManipulator {
         }
         let mut out = Vec::new();
         for item in &self.items {
-            if item.parts.len() == 1 && item.parts[0].width.is_none() {
+            if item.parts.len() == 1 && item.parts[0].width.is_none() && !item.parts[0].invert {
                 let f = item.parts[0].index;
                 if let Some(idx) = resolve_index(tuple.len(), f) {
                     out.push(tuple[idx].clone());
@@ -158,7 +173,7 @@ impl TupleManipulator for RearrangeManipulator {
                 for part in &item.parts {
                     if let Some(idx) = resolve_index(tuple.len(), part.index) {
                         let field = &tuple[idx];
-                        let val = field.as_biguint();
+                        let mut val = field.as_biguint();
                         let width = if let Some(w) = part.width {
                             w
                         } else if let Some(&w) = self.known_widths.get(idx) {
@@ -182,6 +197,9 @@ impl TupleManipulator for RearrangeManipulator {
                         } else {
                             (BigUint::one() << width) - 1u32
                         };
+                        if part.invert {
+                            val = (&val & &mask) ^ &mask;
+                        }
                         fused_val = (fused_val << width) | (&val & mask);
                         total_width += width;
                     } else {
@@ -601,20 +619,32 @@ impl ClampManipulator {
         };
 
         let parts: Vec<&str> = spec.split(',').collect();
-        let field = parts[0].trim().parse::<isize>().map_err(|_| {
-            BddError::ManipulatorArgumentError("Field in --clamp must be a number".to_string())
-        })?;
-
-        let (min, max, min_f, max_f) = match parts.len() {
-            2 => {
-                // FIELD,LIMIT
-                let (lim_bi, lim_f) = parse_clamp_bound(parts[1])?;
+        let (field, min, max, min_f, max_f) = match parts.len() {
+            1 => {
+                // LIMIT[:MODE] on field 0
+                let (lim_bi, lim_f) = parse_clamp_bound(parts[0])?;
                 let abs_bi = lim_bi.abs();
                 let abs_f = lim_f.abs();
-                (-abs_bi.clone(), abs_bi, -abs_f, abs_f)
+                (0, -abs_bi.clone(), abs_bi, -abs_f, abs_f)
+            }
+            2 => {
+                // MIN, MAX[:MODE] on field 0
+                let (min_val, min_f) = parse_clamp_bound(parts[0])?;
+                let (max_val, max_f) = parse_clamp_bound(parts[1])?;
+                if min_f > max_f {
+                    return Err(BddError::ManipulatorArgumentError(
+                        "MIN cannot be greater than MAX in --clamp".to_string(),
+                    ));
+                }
+                (0, min_val, max_val, min_f, max_f)
             }
             3 => {
-                // FIELD,MIN,MAX
+                // FIELD, MIN, MAX[:MODE]
+                let field = parts[0].trim().parse::<isize>().map_err(|_| {
+                    BddError::ManipulatorArgumentError(
+                        "Field in --clamp must be a number".to_string(),
+                    )
+                })?;
                 let (min_val, min_f) = parse_clamp_bound(parts[1])?;
                 let (max_val, max_f) = parse_clamp_bound(parts[2])?;
                 if min_f > max_f {
@@ -622,11 +652,11 @@ impl ClampManipulator {
                         "MIN cannot be greater than MAX in --clamp".to_string(),
                     ));
                 }
-                (min_val, max_val, min_f, max_f)
+                (field, min_val, max_val, min_f, max_f)
             }
             _ => {
                 return Err(BddError::ManipulatorArgumentError(
-                    "Argument for --clamp must be FIELD,LIMIT[:MODE] or FIELD,MIN,MAX[:MODE]"
+                    "Argument for --clamp must be LIMIT[:MODE], MIN,MAX[:MODE], or FIELD,MIN,MAX[:MODE]"
                         .to_string(),
                 ));
             }
@@ -900,21 +930,55 @@ impl TupleManipulator for OrManipulator {
 /// Bitwise NOT (inverts all bits of field).
 pub struct NotManipulator {
     field: isize,
+    known_widths: Vec<usize>,
 }
 
 impl NotManipulator {
     pub fn new(arg: &str) -> Result<Self, BddError> {
+        Self::new_with_schema(arg, None)
+    }
+
+    pub fn new_with_schema(arg: &str, field_widths: Option<&[usize]>) -> Result<Self, BddError> {
         let field = parse_unary_field(arg, "--not")?;
-        Ok(Self { field })
+        Ok(Self {
+            field,
+            known_widths: field_widths.unwrap_or(&[]).to_vec(),
+        })
     }
 }
 
 impl TupleManipulator for NotManipulator {
     fn manipulate(&self, mut tuple: Vec<Field>) -> Option<Vec<Field>> {
         if let Some(idx) = resolve_index(tuple.len(), self.field) {
-            let bi = tuple[idx].as_bigint();
-            let val = !bi;
-            set_bigint_field(&mut tuple, idx, val);
+            let width = match &tuple[idx] {
+                Field::Bits(_, bits) => *bits,
+                Field::Bytes(bytes) => bytes.len() * 8,
+                _ => {
+                    if let Some(&w) = self.known_widths.get(idx) {
+                        w
+                    } else {
+                        let b = tuple[idx].as_biguint().bits() as usize;
+                        if b == 0 {
+                            8
+                        } else {
+                            b
+                        }
+                    }
+                }
+            };
+            let mask = if width == 0 {
+                BigUint::zero()
+            } else {
+                (BigUint::one() << width) - 1u32
+            };
+            let u = tuple[idx].as_biguint();
+            let val = (&u & &mask) ^ mask;
+            tuple[idx] = match &tuple[idx] {
+                Field::Bits(_, w) => Field::Bits(val, *w),
+                _ => Field::UInt(val),
+            };
+        } else {
+            crate::diag::warn(format!("Field {} mentioned in --not missing", self.field));
         }
         Some(tuple)
     }
@@ -1343,7 +1407,7 @@ pub fn build_manipulator_from_spec_with_schema(
                 field_widths,
             )?))
         }
-        "clamp" => Ok(Box::new(ClampManipulator::new(&field_or_single(arg))?)),
+        "clamp" => Ok(Box::new(ClampManipulator::new(arg)?)),
         "round" | "cut-maxint" => Ok(Box::new(RoundManipulator::new(&field_or_single(arg))?)),
         "remove-right" => Ok(Box::new(RemoveRightManipulator::new(&field_or_single(
             arg,
@@ -1353,7 +1417,10 @@ pub fn build_manipulator_from_spec_with_schema(
         "xor" => Ok(Box::new(XorManipulator::new(&field_or_single(arg))?)),
         "and" => Ok(Box::new(AndManipulator::new(&field_or_single(arg))?)),
         "or" => Ok(Box::new(OrManipulator::new(&field_or_single(arg))?)),
-        "not" => Ok(Box::new(NotManipulator::new(&unary_field(arg))?)),
+        "not" => Ok(Box::new(NotManipulator::new_with_schema(
+            &unary_field(arg),
+            field_widths,
+        )?)),
         "abs" => Ok(Box::new(AbsManipulator::new(&unary_field(arg))?)),
         "sign" => Ok(Box::new(SignManipulator::new(&unary_field(arg))?)),
         "add" => Ok(Box::new(AddManipulator::new(&field_or_single(arg))?)),

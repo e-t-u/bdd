@@ -49,10 +49,9 @@ jq -r '
 '
 
 echo -e "\n--- Step 2: Demuxing Interleaved 16-bit Stereo into Mono Channels ---"
-echo "Command: bdd \"44B:32 -> 32\" 16S16S --input-little-endian --demux-files=left.raw,right.raw > /dev/null"
+echo "Command: bdd \"44B:32 -> 16S16S\" --input-little-endian --demux-files=left.raw,right.raw > /dev/null"
 "${BDD}" --input-file="${SAMPLE_WAV}" \
-        "44B:32 -> 32" \
-        "16S16S" \
+        "44B:32 -> 16S16S" \
         --input-little-endian \
         --demux-files="${TMP_DIR}/left.raw,${TMP_DIR}/right.raw" > /dev/null
 
@@ -72,8 +71,7 @@ echo -e "\n--- Step 3: Slicing Studio 24-bit PCM Audio to 16-bit Audio ---"
 echo "Original 24-bit Signed Samples:"
 "${BDD}" --input-file="${SAMPLE_24}" 24S --output-tuples
 
-echo "Downsampled to 16-bit via container slicing (\"24[0:16] -> 16\" 16S):"
+echo "Downsampled to 16-bit via container slicing (\"24[0:16] -> 16S\"):"
 "${BDD}" --input-file="${SAMPLE_24}" \
-        "24[0:16] -> 16" \
-        16S \
+        "24[0:16] -> 16S" \
         --output-tuples

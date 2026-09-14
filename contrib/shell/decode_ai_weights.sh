@@ -32,8 +32,8 @@ printf "  JSON Header Length : %d bytes\n" "$HEADER_LEN"
 printf "  Tensor Buffer Start: Byte %d (Seeking via stream pattern %dB:8 -> 8)\n" "$DATA_OFFSET" "$DATA_OFFSET"
 
 echo -e "\n--- Step 2: Decoding OCP FP8 E4M3 Weights (8E) from Safetensors ---"
-echo "Command: bdd \"${DATA_OFFSET}B:8 -> 8\" 8E --input-file=... --count=4 --output-json"
-"${BDD}" "${DATA_OFFSET}B:8 -> 8" 8E \
+echo "Command: bdd \"${DATA_OFFSET}B:8 -> 8E\" --input-file=... --count=4 --output-json"
+"${BDD}" "${DATA_OFFSET}B:8 -> 8E" \
         --input-file="${SAFETENSORS}" \
         --count=4 \
         --output-json | \
@@ -41,8 +41,8 @@ jq -r '"  FP8 Weight: " + (.[0]|tostring)'
 
 echo -e "\n--- Step 3: Decoding Google Brain Bfloat16 Weights (16Y) from Safetensors ---"
 BF16_OFFSET=$(( DATA_OFFSET + 4 ))
-echo "Command: bdd \"${BF16_OFFSET}B:16 -> 16\" 16Y --input-file=... --input-little-endian --count=2 --output-json"
-"${BDD}" "${BF16_OFFSET}B:16 -> 16" 16Y \
+echo "Command: bdd \"${BF16_OFFSET}B:16 -> 16Y\" --input-file=... --input-little-endian --count=2 --output-json"
+"${BDD}" "${BF16_OFFSET}B:16 -> 16Y" \
         --input-file="${SAFETENSORS}" \
         --input-little-endian \
         --count=2 \

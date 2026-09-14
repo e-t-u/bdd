@@ -78,11 +78,14 @@ impl FramedPattern {
             return Ok(Self::default());
         }
 
-        // Support legacy 5-colon positional syntax if exactly 4 colons without brackets:
+        // Support legacy 5-colon positional syntax if exactly 4 colons without brackets or commas:
         // skip : raw : offset : unit : gap
-        if !s.contains('[') {
+        if !s.contains('[') && !s.contains(',') {
             let colon_parts: Vec<&str> = s.split(':').map(|p| p.trim()).collect();
-            if colon_parts.len() == 5 {
+            if colon_parts.len() == 5
+                && crate::cli::parse_size_with_suffix(colon_parts[0], "check", true).is_ok()
+                && crate::cli::parse_size_with_suffix(colon_parts[1], "check", true).is_ok()
+            {
                 let skip = Some(crate::cli::parse_size_with_suffix(
                     colon_parts[0],
                     "stream skip",
@@ -164,12 +167,19 @@ impl FramedPattern {
             }
         }
 
-        let (unit_part, skip) = if let Some(idx) = colon_pos {
-            let skip_str = s_remaining[..idx].trim();
-            let skip_val = crate::cli::parse_size_with_suffix(skip_str, "stream skip", true)?;
-            (s_remaining[idx + 1..].trim(), Some(skip_val))
+        let (unit_part, skip, raw_from_colon) = if let Some(idx) = colon_pos {
+            let prefix_str = s_remaining[..idx].trim();
+            let prefix_val = crate::cli::parse_size_with_suffix(prefix_str, "stream skip", true)?;
+            let rest = s_remaining[idx + 1..].trim();
+            let is_pattern_or_preset = crate::preset::find_preset(rest).is_some()
+                || crate::pattern::parse_input_pattern(rest).is_ok();
+            if is_pattern_or_preset {
+                (rest, None, Some(prefix_val))
+            } else {
+                (rest, Some(prefix_val), None)
+            }
         } else {
-            (s_remaining, None)
+            (s_remaining, None, None)
         };
 
         // 3. Parse unit_part (Form A, Form B, or Bare Unit/Pattern)
@@ -280,8 +290,12 @@ impl FramedPattern {
             Ok(Self {
                 framing: ContainerFraming {
                     skip,
-                    raw_unit: None,
-                    offset: None,
+                    raw_unit: raw_from_colon,
+                    offset: if raw_from_colon.is_some() {
+                        Some(0)
+                    } else {
+                        None
+                    },
                     unit_size: parsed.unit_size,
                     gap,
                 },
@@ -376,6 +390,17 @@ fn parse_unit_or_fields(s: &str) -> Result<ParsedUnitFields, BddError> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(ParsedUnitFields::default());
+    }
+
+    if let Some(preset) = crate::preset::find_preset(s) {
+        if let Ok(fields) = parse_input_pattern(&preset.pattern) {
+            let total_bits = fields.iter().map(|f| f.bits).sum();
+            return Ok(ParsedUnitFields {
+                unit_size: Some(total_bits),
+                raw_pattern: Some(preset.pattern.to_string()),
+                fields,
+            });
+        }
     }
 
     let has_pattern_chars = s.contains(',')
@@ -755,7 +780,7 @@ pub fn parse_input_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddErr
         if item.bits == 0 {
             return Err(BddError::InputBitLengthRequired(c));
         }
-        if "Ff".contains(c) && item.bits != 32 {
+        if "Ff".contains(c) && item.bits != 32 && item.bits != 16 {
             return Err(BddError::InvalidInputBitLength(c, 32));
         }
         if "Dd".contains(c) && item.bits != 64 {
@@ -859,7 +884,7 @@ pub fn parse_output_pattern(pattern_str: &str) -> Result<Vec<PatternItem>, BddEr
         if item.bits == 0 && c != 'x' && c != 'X' {
             return Err(BddError::OutputBitLengthRequired(c));
         }
-        if "Ff".contains(c) && item.bits != 32 {
+        if "Ff".contains(c) && item.bits != 32 && item.bits != 16 {
             return Err(BddError::InvalidOutputBitLength(c, 32));
         }
         if "Dd".contains(c) && item.bits != 64 {
@@ -984,7 +1009,7 @@ impl TupleUnpacker {
                 widths.push(p.bits.saturating_sub(1));
                 widths.push(1);
             } else if "Ff".contains(c) {
-                widths.push(32);
+                widths.push(p.bits);
             } else if "Dd".contains(c) {
                 widths.push(64);
             } else if "HhYy".contains(c) {
@@ -1071,10 +1096,24 @@ impl TupleUnpacker {
                 tuple.push(Field::UInt(BigUint::from(sign)));
                 unit = if bits >= 64 { 0 } else { unit >> bits };
             } else if c == 'F' || c == 'f' {
-                let val = (unit & 0xFFFF_FFFF) as u32;
-                let fl = f32::from_bits(val);
-                tuple.push(Field::Float(fl as f64));
-                unit >>= 32;
+                if bits == 16 {
+                    #[cfg(feature = "small-floats")]
+                    {
+                        let val = (unit & 0xFFFF) as u16;
+                        let fl = crate::float_types::decode_f16(val);
+                        tuple.push(Field::Float(fl));
+                        unit >>= 16;
+                    }
+                    #[cfg(not(feature = "small-floats"))]
+                    {
+                        unit >>= 16;
+                    }
+                } else {
+                    let val = (unit & 0xFFFF_FFFF) as u32;
+                    let fl = f32::from_bits(val);
+                    tuple.push(Field::Float(fl as f64));
+                    unit >>= 32;
+                }
             } else if c == 'D' || c == 'd' {
                 let fl = f64::from_bits(unit);
                 tuple.push(Field::Float(fl));
@@ -1200,12 +1239,28 @@ impl TupleUnpacker {
                 tuple.push(Field::UInt(BigUint::from(sign)));
                 unit >>= bits;
             } else if c == 'F' || c == 'f' {
-                let mask = (BigUint::one() << 32) - 1u32;
-                let val = &unit & &mask;
-                let u = val.to_u32().unwrap_or(0);
-                let fl = f32::from_bits(u);
-                tuple.push(Field::Float(fl as f64));
-                unit >>= 32;
+                if bits == 16 {
+                    #[cfg(feature = "small-floats")]
+                    {
+                        let mask = (BigUint::one() << 16) - 1u32;
+                        let val = &unit & &mask;
+                        let u = val.to_u16().unwrap_or(0);
+                        let fl = crate::float_types::decode_f16(u);
+                        tuple.push(Field::Float(fl));
+                        unit >>= 16;
+                    }
+                    #[cfg(not(feature = "small-floats"))]
+                    {
+                        unit >>= 16;
+                    }
+                } else {
+                    let mask = (BigUint::one() << 32) - 1u32;
+                    let val = &unit & &mask;
+                    let u = val.to_u32().unwrap_or(0);
+                    let fl = f32::from_bits(u);
+                    tuple.push(Field::Float(fl as f64));
+                    unit >>= 32;
+                }
             } else if c == 'D' || c == 'd' {
                 let mask = (BigUint::one() << 64) - 1u32;
                 let val = &unit & &mask;
@@ -1382,8 +1437,19 @@ impl TuplePacker {
                 }
                 'F' | 'f' => {
                     let f = Self::pop_field(tuple)?;
-                    let fl = f.as_f64() as f32;
-                    fl.to_bits() as u64
+                    let fl = f.as_f64();
+                    if bits == 16 {
+                        #[cfg(feature = "small-floats")]
+                        {
+                            crate::float_types::encode_f16(fl) as u64
+                        }
+                        #[cfg(not(feature = "small-floats"))]
+                        {
+                            0
+                        }
+                    } else {
+                        (fl as f32).to_bits() as u64
+                    }
                 }
                 'D' | 'd' => {
                     let f = Self::pop_field(tuple)?;
@@ -1528,8 +1594,21 @@ impl TuplePacker {
                 }
                 'F' | 'f' => {
                     let f = Self::pop_field(&mut tuple)?;
-                    let fl = f.as_f64() as f32;
-                    BigUint::from(fl.to_bits())
+                    let fl = f.as_f64();
+                    if bits == 16 {
+                        #[cfg(feature = "small-floats")]
+                        {
+                            let u = crate::float_types::encode_f16(fl);
+                            BigUint::from(u)
+                        }
+                        #[cfg(not(feature = "small-floats"))]
+                        {
+                            BigUint::zero()
+                        }
+                    } else {
+                        let fl32 = fl as f32;
+                        BigUint::from(fl32.to_bits())
+                    }
                 }
                 'D' | 'd' => {
                     let f = Self::pop_field(&mut tuple)?;
@@ -1696,9 +1775,10 @@ mod tests {
             Err(BddError::IllegalInputPatternChar('Z'))
         ));
         assert!(matches!(
-            parse_input_pattern("16F"),
+            parse_input_pattern("24F"),
             Err(BddError::InvalidInputBitLength('F', 32))
         ));
+        assert!(parse_input_pattern("16F").is_ok());
     }
 
     #[test]

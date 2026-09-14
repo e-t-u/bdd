@@ -24,7 +24,7 @@ decode_frame() {
     local offset="$1"
     local label="$2"
     echo "--- ${label} (Byte Offset: ${offset}) ---"
-    "${BDD}" "${offset}B:32 -> 32" "11U2U2U1U4U2U1U1U2U2U1U1U2U" \
+    "${BDD}" "${offset}B:32 -> 11U2U2U1U4U2U1U1U2U2U1U1U2U" \
             --input-file="${INPUT_FILE}" \
             --count=1 \
             --output-json | \

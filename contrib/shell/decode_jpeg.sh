@@ -22,7 +22,7 @@ echo "================================================================="
 # In sample.jpg, SOF0 payload starts at offset 24 bytes (after SOI, APP0, and SOF0 marker+length)
 SOF_OFFSET=24
 
-"${BDD}" "${SOF_OFFSET}B:120 -> 120" "8U16U16U8U3*(8U4U4U8U)" \
+"${BDD}" "${SOF_OFFSET}B:120 -> 8U16U16U8U3*(8U4U4U8U)" \
         --input-file="${INPUT_FILE}" \
         --count=1 \
         --output-json | \

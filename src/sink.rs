@@ -9,7 +9,8 @@ pub trait UnitSink {
     fn write_bits(&mut self, unit: BigUint, bits: usize) -> std::io::Result<()>;
     fn write_bit_value(&mut self, val: BitValue, bits: usize) -> std::io::Result<()> {
         match val {
-            BitValue::Inline(v) => self.write_u64(v, bits),
+            BitValue::Inline(v) if bits <= 64 => self.write_u64(v, bits),
+            BitValue::Inline(v) => self.write_bits(BigUint::from(v), bits),
             BitValue::Big(b) => self.write_bits(b, bits),
         }
     }
@@ -43,12 +44,16 @@ impl<W: Write> FileOutputStream<W> {
 impl<W: Write> UnitSink for FileOutputStream<W> {
     fn write_bit_value(&mut self, val: BitValue, bits: usize) -> std::io::Result<()> {
         match val {
-            BitValue::Inline(v) => self.write_u64(v, bits),
+            BitValue::Inline(v) if bits <= 64 => self.write_u64(v, bits),
+            BitValue::Inline(v) => self.write_bits(BigUint::from(v), bits),
             BitValue::Big(b) => self.write_bits(b, bits),
         }
     }
 
     fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if bits > 64 {
+            return self.write_bits(BigUint::from(val), bits);
+        }
         if bits == 0 {
             return Ok(());
         }
@@ -178,6 +183,9 @@ impl<W: Write> HexOutputStream<W> {
 
 impl<W: Write> UnitSink for HexOutputStream<W> {
     fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if bits > 64 {
+            return self.write_bits(BigUint::from(val), bits);
+        }
         if self.reverse_unit {
             val = reverse_bits_u64(val, bits);
         }
@@ -301,6 +309,9 @@ impl<W: Write> BitOutputStream<W> {
 
 impl<W: Write> UnitSink for BitOutputStream<W> {
     fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if bits > 64 {
+            return self.write_bits(BigUint::from(val), bits);
+        }
         if self.reverse_unit {
             val = reverse_bits_u64(val, bits);
         }
@@ -418,6 +429,9 @@ impl<W: Write> IntegerOutputStream<W> {
 
 impl<W: Write> UnitSink for IntegerOutputStream<W> {
     fn write_u64(&mut self, mut val: u64, bits: usize) -> std::io::Result<()> {
+        if bits > 64 {
+            return self.write_bits(BigUint::from(val), bits);
+        }
         if self.reverse_unit {
             val = reverse_bits_u64(val, bits);
         }

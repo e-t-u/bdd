@@ -126,7 +126,7 @@ jq -r "${JQ_IP_HELPER}"'
 jq -r '
   "  [UDP Layer] Port: \(.src_port) -> \(.dst_port) | Datagram Len: \(.length)B"
 '
-"${BDD}" "28B:32 -> 32" "dns_id:16U,flags:16U" \
+"${BDD}" "28B:32 -> dns_id:16U,flags:16U" \
         --input-file="${PACKETS_SAMPLE}" \
         --count=1 \
         --output-json \
@@ -174,7 +174,7 @@ jq -r "${JQ_IP_HELPER}"'
 jq -r '
   "  [TCP Layer] Port: \(.src_port) -> \(.dst_port) | Seq: \(.seq_num) | ACK: \(.ack) | PSH: \(.psh)"
 '
-"${BDD}" "112B:144 -> 144" "payload:144C" \
+"${BDD}" "112B:144 -> payload:144C" \
         --input-file="${PACKETS_SAMPLE}" \
         --count=1 \
         --output-json \

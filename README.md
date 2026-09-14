@@ -477,7 +477,7 @@ Embedded watchdogs expect sequential rolling counter ticks where specific bits a
 
 ```bash
 bdd "counter -> 8 -> 4U4U -> {not(0), 1} -> {0|1} -> hex" --count 4
-# Output: f0 e1 d2 c3
+# Output: f0 f1 f2 f3
 ```
 
 ---

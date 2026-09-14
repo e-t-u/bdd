@@ -174,6 +174,9 @@ fn is_pure_pattern(s: &str) -> bool {
     {
         return false;
     }
+    if crate::preset::find_preset(s).is_some() {
+        return true;
+    }
     crate::pattern::parse_input_pattern(s).is_ok()
 }
 
@@ -183,6 +186,14 @@ fn is_pure_slicer(s: &str) -> bool {
         return false;
     }
     parse_size_with_suffix(s, "check", true).is_ok()
+}
+
+fn is_container_or_slicer(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || is_manipulator(s) || is_source(s) || is_sink(s) || is_pure_pattern(s) {
+        return false;
+    }
+    parse_stream_spec(s).is_ok()
 }
 
 /// Check if a string looks like a stream I/O pattern (vs a tuple pattern).
@@ -513,24 +524,31 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         });
     }
 
-    // Check if segment 0 and 1 form an explicit (slicer -> pattern) pair:
-    // e.g. "8 -> 4U4U"
-    if segments.len() >= 2 && is_pure_slicer(segments[0]) && is_pure_pattern(segments[1]) {
+    // Check if segment 0 and 1 form an explicit (slicer/container -> pattern) pair:
+    // e.g. "8 -> 4U4U" or "20B[8:8] -> 8U"
+    if segments.len() >= 2 && is_container_or_slicer(segments[0]) && is_pure_pattern(segments[1]) {
         let u_str = segments.remove(0);
         let p_str = segments.remove(0);
-        let mut in_spec = parse_stream_spec(p_str)?;
-        let u_val = parse_size_with_suffix(u_str, "unit size", true)? as usize;
-        if let Some(ref p) = in_spec.pattern {
-            if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p) {
-                if unpacker.total_bits != u_val {
+        let mut in_spec = parse_stream_spec_with_source(u_str)?;
+        in_spec.pattern = Some(p_str.to_string());
+        if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p_str) {
+            if let Some(u) = in_spec.unit_size {
+                if unpacker.total_bits != u {
                     return Err(BddError::CliError(format!(
                         "Dimension mismatch in stream pattern: Slicer specifies {} bits, but pattern '{}' requires {} bits",
-                        u_val, p, unpacker.total_bits
+                        u, p_str, unpacker.total_bits
                     )));
                 }
+            } else {
+                in_spec.unit_size = Some(unpacker.total_bits);
             }
         }
-        in_spec.unit_size = Some(u_val);
+        if in_spec.source.is_some() && source.is_none() {
+            source = in_spec.source.clone();
+        }
+        if in_spec.overwrite {
+            overwrite = true;
+        }
         input = Some(in_spec);
     } else if !segments.is_empty() && !is_manipulator(segments[0]) {
         if input.is_none() {
@@ -573,27 +591,31 @@ pub fn parse_stream_io_pattern(input_str: &str) -> Result<StreamIoPattern, BddEr
         }
     }
 
-    // Check if the last two segments form an explicit (pattern -> slicer) pair:
-    // e.g. "16U -> 16"
+    // Check if the last two segments form an explicit (pattern -> slicer/container) pair:
+    // e.g. "16U -> 16" or "8U -> 20B[8:8]"
     if segments.len() >= 2
         && is_pure_pattern(segments[segments.len() - 2])
-        && is_pure_slicer(segments.last().unwrap())
+        && is_container_or_slicer(segments.last().unwrap())
     {
         let u_str = segments.pop().unwrap();
         let p_str = segments.pop().unwrap();
-        let mut out_spec = parse_stream_spec(p_str)?;
-        let u_val = parse_size_with_suffix(u_str, "unit size", true)? as usize;
-        if let Some(ref p) = out_spec.pattern {
-            if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p) {
-                if unpacker.total_bits != u_val {
+        let mut out_spec = parse_stream_spec(u_str)?;
+        out_spec.pattern = Some(p_str.to_string());
+        if let Ok(unpacker) = crate::pattern::TupleUnpacker::new(p_str) {
+            if let Some(u) = out_spec.unit_size {
+                if unpacker.total_bits != u {
                     return Err(BddError::CliError(format!(
                         "Dimension mismatch in stream pattern: Pattern '{}' requires {} bits, but slicer specifies {} bits",
-                        p, unpacker.total_bits, u_val
+                        p_str, unpacker.total_bits, u
                     )));
                 }
+            } else {
+                out_spec.unit_size = Some(unpacker.total_bits);
             }
         }
-        out_spec.unit_size = Some(u_val);
+        if out_spec.overwrite {
+            overwrite = true;
+        }
         output = Some(out_spec);
     } else if !segments.is_empty() && !is_manipulator(segments.last().unwrap()) {
         let out_spec = parse_stream_spec(segments.pop().unwrap())?;

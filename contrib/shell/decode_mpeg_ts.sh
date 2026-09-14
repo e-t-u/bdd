@@ -21,10 +21,9 @@ echo "                 13U (PID) 2U (Scrambling) 2U (Adaptation) 4U (Counter)"
 echo "================================================================="
 
 echo -e "\n--- Step 1: Full Packet Header Decoding (First 4 Packets) ---"
-echo "Command: bdd \"188B[0:32] -> 32\" 8U1U1U1U13U2U2U4U --count=4 --output-json"
+echo "Command: bdd \"188B[0:32] -> 8U1U1U1U13U2U2U4U\" --count=4 --output-json"
 "${BDD}" --input-file="${INPUT_FILE}" \
-        "188B[0:32] -> 32" \
-        "8U1U1U1U13U2U2U4U" \
+        "188B[0:32] -> 8U1U1U1U13U2U2U4U" \
         --count=4 \
         --output-json | \
 jq -r '

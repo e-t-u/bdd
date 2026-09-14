@@ -293,7 +293,10 @@ fn run_pipeline_internal(
     }
 
     let field_names = unpacker.as_ref().and_then(|u| u.field_names());
-    let field_widths = unpacker.as_ref().map(|u| u.field_widths());
+    let field_widths = unpacker
+        .as_ref()
+        .map(|u| u.field_widths())
+        .or_else(|| Some(vec![in_unit_size]));
 
     // Build manipulation pipeline: ordered from CLI arguments if available, else from flags
     let mut manipulators: Vec<Box<dyn TupleManipulator>> = if !config.raw_args.is_empty() {
