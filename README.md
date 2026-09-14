@@ -465,10 +465,10 @@ bdd "16S -> clamp(-16000, 16000:saturate) -> div(2) -> 16S" < master.pcm > limit
 ---
 
 ### Scenario 4: Network Packet QoS / DSCP & CoS Priority Rewriter
-Network routers mark Quality of Service (QoS) inside the 8-bit Type of Service (ToS) field of IPv4 headers (RFC 791). The Differentiated Services Code Point (DSCP) occupies the upper 6 bits, while Explicit Congestion Notification (ECN) occupies the lower 2 bits. In this pipeline, we inspect IPv4 headers, isolate the ToS byte (`20B[8:8]`), rewrite the DSCP priority to Expedited Forwarding (`0x28` / EF Class), and use `overwrite` to preserve all surrounding 19 bytes of the packet (IP addresses, packet length, TTL, payload) intact:
+Network routers mark Quality of Service (QoS) inside the 8-bit Type of Service (ToS) field of IPv4 headers (RFC 791). The Differentiated Services Code Point (DSCP) occupies the upper 6 bits, while Explicit Congestion Notification (ECN) occupies the lower 2 bits. In this pipeline, we inspect IPv4 headers, isolate the ToS byte (`20B[8:8]`), rewrite the DSCP priority to Expedited Forwarding (`0x28` / EF Class) directly using `set(0x28)`, and use `overwrite` to preserve all surrounding 19 bytes of the packet (IP addresses, packet length, TTL, payload) intact:
 
 ```bash
-bdd "20B[8:8] -> 8U -> {0} -> or(0x28) -> 8U -> overwrite" < incoming_packets.bin > qos_packets.bin
+bdd "20B[8:8] -> set(0x28) -> overwrite" < incoming_packets.bin > qos_packets.bin
 ```
 
 ---
