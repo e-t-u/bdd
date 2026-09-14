@@ -910,6 +910,86 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
+### Statistical Metric Analysis & Accumulator SDK (`bdd::analysis`)
+
+`bdd` provides an extensible, zero-dependency metric engine in `bdd::analysis` for information-theoretic analysis, statistical reductions, and multi-column stream profiling:
+
+#### 1. Available Metric Accumulators
+
+| Accumulator | Canonical Name(s) | Description | Return Type |
+| :--- | :--- | :--- | :--- |
+| **`CountAccumulator`** | `"count"` | Counts total elements ingested | `Field::UInt` |
+| **`SumAccumulator`** | `"sum"` | Running arithmetic sum (`BigInt` or `f64`) | `Field::Int` / `Field::Float` |
+| **`MinAccumulator`** | `"min"` | Running minimum element | `Field` |
+| **`MaxAccumulator`** | `"max"` | Running maximum element | `Field` |
+| **`MeanAccumulator`** | `"avg"`, `"mean"` | Running arithmetic mean ($\sum x / N$) | `Field::Float` |
+| **`EntropyAccumulator`** | `"entropy"`, `"shannon_entropy"` | Cumulative byte-level Shannon entropy ($0.0..8.0\text{ bits/byte}$) | `Field::Float` |
+| **`BitBalanceAccumulator`** | `"balance"`, `"bit_balance"` | Percentage of set `1`-bits ($0.0\%..100.0\%$) | `Field::Float` |
+| **`VarianceAccumulator`** | `"variance"`, `"stddev"` | Online sample variance/stddev via Welford’s algorithm | `Field::Float` |
+| **`DistinctAccumulator`** | `"distinct"`, `"unique"` | Cardinality count of unique field values | `Field::UInt` |
+
+#### 2. Evaluating Accumulators & Direct Field Analysis
+
+```rust
+use bdd::analysis::{create_accumulator, Accumulator};
+use bdd::Field;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Direct analysis methods on any sliced Field:
+    let payload = Field::Bytes(vec![0xAA; 32]);
+    println!("Shannon entropy: {:.4} bits/byte", payload.shannon_entropy()); // 0.0000
+    println!("Bit balance:     {:.2}% ones", payload.bit_balance());        // 50.00%
+    println!("Hamming weight:  {} set bits", payload.hamming_weight());    // 128
+
+    // Evaluating metric accumulators dynamically or via concrete structs:
+    let mut entropy = create_accumulator("entropy")?;
+    let mut balance = create_accumulator("balance")?;
+    let mut avg = create_accumulator("avg")?;
+
+    let samples = vec![
+        Field::UInt(10u32.into()),
+        Field::UInt(20u32.into()),
+        Field::UInt(30u32.into()),
+    ];
+
+    for s in &samples {
+        entropy.update(s);
+        balance.update(s);
+        avg.update(s);
+    }
+
+    println!("Cumulative Entropy: {}", entropy.value());
+    println!("Bit Balance:        {}", balance.value());
+    println!("Arithmetic Mean:    {}", avg.value()); // 20.0
+
+    Ok(())
+}
+```
+
+#### 3. Multi-Column Stream Profiling (`TupleCollector`)
+
+`TupleCollector` profiles multi-field tuple streams across columns and renders formatted tables or JSON summaries:
+
+```rust
+use bdd::analysis::TupleCollector;
+use bdd::Field;
+
+let schema = vec!["sync".to_string(), "pid".to_string(), "payload".to_string()];
+let mut profiler = TupleCollector::new(&schema);
+
+// Ingest tuples as they flow through your streaming pipeline:
+profiler.update(&[
+    Field::UInt(0x47u32.into()),
+    Field::UInt(256u32.into()),
+    Field::Bytes(vec![0xAA; 184]),
+]);
+
+// Emit an aligned ASCII summary report:
+println!("{}", profiler.format_table());
+```
+
+---
+
 ### Standalone Small Floating-Point Crate ([`bdd-small-floats`](crates/bdd-small-floats))
 
 For projects requiring specialized AI, GPU, and sub-byte floating-point codecs without pulling in the full bitstream engine, the encoders and decoders are available as an independent, zero-dependency subcrate located in [`crates/bdd-small-floats`](crates/bdd-small-floats):

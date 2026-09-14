@@ -9,7 +9,7 @@ members = [
 
 [package]
 name = "bdd"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Command line tool to interpret, manipulate, merge and create bit streams"
 authors = ["Esa Turtiainen"]
@@ -43,7 +43,7 @@ clap_complete = "4.5"
 tempfile = "3.10"
 libc = "0.2"
 memmap2 = { version = "0.9", optional = true }
-bdd-small-floats = { path = "crates/bdd-small-floats", version = "0.5.3", optional = true }
+bdd-small-floats = { path = "crates/bdd-small-floats", version = "0.5.4", optional = true }
 
 [features]
 default = ["small-floats", "mmap", "probe"]

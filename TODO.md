@@ -158,4 +158,45 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Decoupled Model Context Protocol Server (`crates/bdd-mcp`)**: Extracted MCP server from `src/mcp.rs` into a standalone companion crate and binary `crates/bdd-mcp` in `workspace.members`. Core `bdd --mcp` seamlessly delegates to `bdd-mcp` (or provides a helpful launch notice), isolating rapid LLM/agent protocol evolution from the core bitstream library.
 - [x] **Unified Pattern & Stream Framing AST (`FramedPattern` in `src/pattern.rs`)**: Unified the previously disjoint ASTs in `stream_pattern.rs` and `pattern.rs` into a single, cohesive `FramedPattern` AST where container framing (`188B[...]`, `[pre:unit:post]`, `skip:raw[offset:unit]+gap`) wraps field definitions (`8U,4S`, `sync:11u,pid:13u`). Replaced nearly 200 lines of duplicate parser code in `stream_pattern.rs` with `FramedPattern::parse`.
 - [x] **Decoupled Struct Transpilers to `contrib/` (`json_to_c.py` & `json_to_rust.py`)**: Provided standalone, template-driven tools in `contrib/python/` (`json_to_c.py` and `json_to_rust.py`) translating `--explain-pattern <PAT> --output-json` to packed C and Rust structs.
+- [x] **In-Place Container Overwrite (`overwrite`) & Set Manipulator (`set(...)`)**: Implemented non-destructive container patching preserving skips, gaps, and surrounding headers, plus arbitrary bitfield value assignment (`set(0x28)`, `set(0, 0xF)`).
+- [x] **Container & Unit Terminology Unification**: Standardized container/unit definitions across code and documentation, removing legacy positional parameters 2 and 3.
+- [x] **CLI Architecture Consolidation**: Removed `--serve` stub flag, consolidated redundant seeking and memory-mapping flags (`--no-seek`, `--no-mmap`, `--mmap`, `--input-use-seek`) with backward-compatible aliases.
+- [x] **Offline-Safe Preset Discovery**: Removed online `--download-presets` and subprocess invocations (`curl`, `wget`, `python3`) from `preset.rs`. Missing presets are seeded synchronously from embedded defaults; custom paths are loaded via `--presets-file` or `BDD_PRESETS_PATH`.
+- [x] **Cargo Feature Decoupling for Prober (`probe` feature)**: Decoupled `src/probe.rs` behind `#[cfg(feature = "probe")]`. Enabled by default, but allows building ultra-minimal bitstream slicers with zero probe dependencies via `--no-default-features --features mmap`.
+- [x] **Deprecated Struct Code Generation Flags**: Deprecated `--export-c` and `--export-rust` with warnings in favor of `contrib/python/json_to_c.py` and `json_to_rust.py`.
+- [x] **Foundational Mathematical & Information-Theoretic Engine (`src/analysis/`)**: Extracted zero-dependency Shannon entropy, normalized entropy, bit balance, and Hamming weight into `src/analysis/math.rs`. Created `Accumulator` trait and implementations (`Count`, `Sum`, `Min`, `Max`, `Mean`, `Entropy`, `BitBalance`, `Variance`, `Distinct`) and `TupleCollector` profiler (`src/analysis/profile.rs`). Extended `Field` with direct analysis methods (`.shannon_entropy()`, `.bit_balance()`, `.hamming_weight()`).
+
+---
+
+## 6. Active Roadmap & Unimplemented Items
+
+### 6.1 Rolling / Sliding-Window Stream Accumulators in Manipulators (Option 2)
+- **Concept**: Stateful sliding-window accumulators operating inside the stream manipulation pipeline. Emits 1 output tuple per incoming tuple in $O(1)$ time and $O(W)$ bounded memory without buffering the entire stream.
+- **Target Syntax**:
+  - `12u -> moving_avg(window=16) -> hex`: Smoothing sensor ADC readings over a 16-sample window.
+  - `8u -> rolling_entropy(window=64) -> filter(entropy > 7.8) -> ...`: Continuous entropy boundary detector.
+- **Architecture**: `SlidingWindow<A: Accumulator>` ring-buffer wrapper struct in `src/analysis/accumulator.rs` exposed via `TupleManipulator` in `src/manipulator.rs`.
+
+### 6.2 Keyed Stream Grouping & Terminal Summary Sinks (Option 3)
+- **Keyed Grouping (`group_by`)**:
+  - Partitions incoming tuples by a key field and maintains per-group metric accumulators.
+  - Example: `bdd broadcast.ts "[ sync:8u, pid:13u, payload:184*8u ] -> group_by(pid, count(), sum(payload), avg(entropy(payload))) -> csv"`
+- **Terminal Profiler Sink (`-> stats` / `-> profile`)**:
+  - Ingests all tuples through `TupleCollector` and emits an aligned ASCII table or JSON profile at EOF without printing raw tuples.
+  - Example: `bdd traffic.bin "ipv4-header -> stats"`
+
+### 6.3 In-Pipeline Field Analysis Functions
+- **Projection Expressions**:
+  - Support analysis metrics directly in `{...}` projections: `[ sync:8u, pid:13u, payload:184*8u ] -> { pid, entropy(payload) } -> json`.
+- **Predicate Filtering**:
+  - Support analysis metrics in filter predicates: `filter(entropy(payload) > 7.8)` (extracting only encrypted packets).
+
+### 6.4 Heterogeneous Unit Sizes for Multi-File Merge
+- Allow specifying comma-separated unit sizes or per-stream attributes corresponding to each merge file:
+  ```bash
+  bdd --input-file=video.raw --input-unit=188B --merge-files=audio.raw,sync.raw --merge-units=16,1
+  ```
+
+### 6.5 Native Endianness Specifier (`@` / `--native-endian`)
+- Host-architecture native endianness modifier for portable binary struct decoding across differing CPU architectures.
 

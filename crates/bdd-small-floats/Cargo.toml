@@ -1,6 +1,6 @@
 [package]
 name = "bdd-small-floats"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Specialized AI, GPU, and sub-byte floating-point codecs (FP16, BF16, FP8, FP6, FP4)"
 authors = ["Esa Turtiainen"]

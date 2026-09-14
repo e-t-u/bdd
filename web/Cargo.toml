@@ -1,6 +1,6 @@
 [package]
 name = "bdd-web"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Decoupled standalone Web UI server for the bdd CLI"
 authors = ["Esa Turtiainen"]
