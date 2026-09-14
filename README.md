@@ -429,6 +429,7 @@ Chain manipulators directly inside arrow pipelines:
 | **Clamp** | `clamp(min, max:mode)` | Clamps value to $[min, max]$ (`saturate`, `wrap`, `zero`, `drop`). |
 | **Round** | `round(bits, mode)` | Rounds floats or integers (`trunc`, `floor`, `ceil`, `round`). |
 | **Filter** | `filter(field, op, val)` | Drops entire record if predicate is false (`==`, `!=`, `<`, `<=`, `>`, `>=`). |
+| **Set** | `set(val)` or `set(field, val)` | Directly assigns constant `val` to field (default: field 0). |
 
 ---
 
@@ -473,10 +474,10 @@ bdd "20B[8:8] -> 8U -> {0} -> or(0x28) -> 8U -> overwrite" < incoming_packets.bi
 ---
 
 ### Scenario 5: Hardware Watchdog Heartbeat & Rolling Counter
-Embedded watchdogs expect sequential rolling counter ticks where specific bits are periodically inverted to prove the micro-controller's ALU is not stuck. This pipeline generates an infinite hardware counter, slices each byte into high and low 4-bit nibbles (`4U4U`), inverts the high nibble with bitwise NOT, fuses the nibbles back together (`{0|1}`), and emits formatted hexadecimal words to stdout:
+Embedded watchdogs expect sequential rolling counter ticks where specific bits are periodically forced to a constant synchronization heartbeat to prove the micro-controller's ALU is alive and not stuck. This pipeline generates an infinite hardware counter, slices each byte into high and low 4-bit nibbles (`4U4U`), sets the high nibble directly to constant `0xF` using `set(0, 0xF)`, fuses the nibbles back together (`{0|1}`), and emits formatted hexadecimal words to stdout:
 
 ```bash
-bdd "counter -> 8 -> 4U4U -> {not(0), 1} -> {0|1} -> hex" --count 4
+bdd "counter -> 8 -> 4U4U -> set(0, 0xF) -> {0|1} -> hex" --count 4
 # Output: f0 f1 f2 f3
 ```
 
@@ -969,6 +970,7 @@ While human engineers and reverse engineers think intuitively in **declarative p
 | `xor(mask)`, `not` | `--xor=mask`, `--not` | Bitwise masking & logic |
 | `clamp(min, max:mode)` | `--clamp="min,max:mode"` | Value saturation / bounding |
 | `filter(field, op, val)`| `--filter="field,op,val"` | Record predicate filtering |
+| `set(val)`, `set(f, val)`| `--set="f,val"` | Assign constant value to field |
 | `overwrite` | `--overwrite` (or `--as-is`) | In-place container editing |
 | `[ s1, s2 ]`, `interleave`| `--merge-file=s2 --merge-unit=...` | Round-robin multi-stream interleaving |
 | `pad:zeros` | `--merge-pad-zeros` (default stream behavior) | Zero-padding at secondary EOF |
@@ -1040,6 +1042,7 @@ Tuple Manipulators:
       --abs <FIELD>                Replace signed field F with abs(F)
       --sign <FIELD>               Replace signed field F with sign bit (0/1)
       --filter <F,OP,VAL>          Filter tuples where predicate is false (==, !=, <, <=, >, >=)
+      --set <F,PARAM>              Set field F directly to PARAM (integer, hex, binary, or float)
 
 Output Unit & Pattern Options:
   -P, --output-pattern <PATTERN>   Bit pattern to pack output (supports AI floats, multipliers & counter)

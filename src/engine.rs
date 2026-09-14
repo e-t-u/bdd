@@ -298,9 +298,12 @@ fn run_pipeline_internal(
         .map(|u| u.field_widths())
         .or_else(|| Some(vec![in_unit_size]));
 
-    // Build manipulation pipeline: ordered from CLI arguments if available, else from flags
     let mut manipulators: Vec<Box<dyn TupleManipulator>> = if !config.raw_args.is_empty() {
-        build_pipeline_from_args(&config.raw_args)?
+        build_pipeline_from_args_with_schema(
+            &config.raw_args,
+            field_names.as_deref(),
+            field_widths.as_deref(),
+        )?
     } else {
         Vec::new()
     };
@@ -363,6 +366,12 @@ fn run_pipeline_internal(
         }
         if let Some(ref arg) = config.filter {
             manipulators.push(Box::new(FilterManipulator::new(arg)?));
+        }
+        if let Some(ref arg) = config.set {
+            manipulators.push(Box::new(SetManipulator::new_with_schema(
+                arg,
+                field_names.as_deref(),
+            )?));
         }
     }
 

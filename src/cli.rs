@@ -182,6 +182,10 @@ pub struct Cli {
     #[arg(long)]
     pub filter: Option<String>,
 
+    /// Set field value directly to a constant (syntax: [field,]value)
+    #[arg(long)]
+    pub set: Option<String>,
+
     // Pack tuples
     #[arg(short = 'P', long)]
     pub output_pattern: Option<String>,
@@ -445,6 +449,7 @@ pub struct ValidatedConfig {
     pub div: Option<String>,
     pub r#mod: Option<String>,
     pub filter: Option<String>,
+    pub set: Option<String>,
     pub output_pattern: Option<String>,
     pub output_tuples: bool,
     pub output_unit: Option<usize>,
@@ -1412,6 +1417,7 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         div: cli.div,
         r#mod: cli.r#mod,
         filter: cli.filter,
+        set: cli.set,
         output_pattern: cli.output_pattern,
         output_tuples: cli.output_tuples,
         output_unit: resolved_output_unit,

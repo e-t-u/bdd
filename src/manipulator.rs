@@ -984,6 +984,92 @@ impl TupleManipulator for NotManipulator {
     }
 }
 
+/// Directly assigns a constant value (integer, hex, binary, or float) to a field.
+#[derive(Debug, Clone)]
+pub enum SetValue {
+    Integer(BigInt),
+    Float(f64),
+}
+
+pub struct SetManipulator {
+    field: isize,
+    value: SetValue,
+}
+
+impl SetManipulator {
+    pub fn new(arg: &str) -> Result<Self, BddError> {
+        Self::new_with_schema(arg, None)
+    }
+
+    pub fn new_with_schema(arg: &str, field_names: Option<&[String]>) -> Result<Self, BddError> {
+        let parts: Vec<&str> = arg.splitn(2, ',').collect();
+        if parts.len() < 2 {
+            return Err(BddError::ManipulatorArgumentError(
+                "Argument for --set must be (field,value) or set(field, value)".to_string(),
+            ));
+        }
+        let field_str = parts[0].trim();
+        let field = if let Ok(idx) = field_str.parse::<isize>() {
+            idx
+        } else if let Some(names) = field_names {
+            if let Some(pos) = names.iter().position(|n| n.eq_ignore_ascii_case(field_str)) {
+                pos as isize
+            } else {
+                return Err(BddError::ManipulatorArgumentError(format!(
+                    "Field name '{}' mentioned in --set not found in schema",
+                    field_str
+                )));
+            }
+        } else {
+            return Err(BddError::ManipulatorArgumentError(format!(
+                "Field in --set must be a number or known field name (got '{}')",
+                field_str
+            )));
+        };
+
+        let val_str = parts[1].trim();
+        let value = if let Ok(bi) = parse_bigint_param(val_str, "--set") {
+            SetValue::Integer(bi)
+        } else if let Ok(fl) = val_str.parse::<f64>() {
+            SetValue::Float(fl)
+        } else {
+            return Err(BddError::ManipulatorArgumentError(format!(
+                "Value in --set must be a valid number (got '{}')",
+                val_str
+            )));
+        };
+
+        Ok(Self { field, value })
+    }
+}
+
+impl TupleManipulator for SetManipulator {
+    fn manipulate(&self, mut tuple: Vec<Field>) -> Option<Vec<Field>> {
+        if let Some(idx) = resolve_index(tuple.len(), self.field) {
+            match &self.value {
+                SetValue::Float(fl) => {
+                    tuple[idx] = Field::Float(*fl);
+                }
+                SetValue::Integer(bi) => match &tuple[idx] {
+                    Field::Bits(_, bits) => {
+                        let u = bi.to_biguint().unwrap_or_default();
+                        tuple[idx] = Field::Bits(u, *bits);
+                    }
+                    Field::Float(_) => {
+                        tuple[idx] = Field::Float(bi.to_f64().unwrap_or_default());
+                    }
+                    _ => {
+                        set_bigint_field(&mut tuple, idx, bi.clone());
+                    }
+                },
+            }
+        } else {
+            crate::diag::warn(format!("Field {} mentioned in --set missing", self.field));
+        }
+        Some(tuple)
+    }
+}
+
 /// Bitwise left shifts field by `bits`.
 pub struct ShiftLeftManipulator {
     field: isize,
@@ -1287,6 +1373,14 @@ impl Drop for TeeManipulator {
 pub fn build_pipeline_from_args(
     args: &[String],
 ) -> Result<Vec<Box<dyn TupleManipulator>>, BddError> {
+    build_pipeline_from_args_with_schema(args, None, None)
+}
+
+pub fn build_pipeline_from_args_with_schema(
+    args: &[String],
+    field_names: Option<&[String]>,
+    field_widths: Option<&[usize]>,
+) -> Result<Vec<Box<dyn TupleManipulator>>, BddError> {
     let mut pipeline: Vec<Box<dyn TupleManipulator>> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -1297,40 +1391,102 @@ pub fn build_pipeline_from_args(
             (arg.as_str(), None)
         };
 
-        macro_rules! handle_opt {
-            ($manip_ty:ident) => {{
-                let val_str = if let Some(v) = val {
-                    v.to_string()
-                } else if i + 1 < args.len() && !args[i + 1].starts_with("--") {
-                    i += 1;
-                    args[i].clone()
-                } else {
-                    String::new()
-                };
-                pipeline.push(Box::new($manip_ty::new(&val_str)?));
-            }};
-        }
+        let get_val = |step_i: &mut usize| -> String {
+            if let Some(v) = val {
+                v.to_string()
+            } else if *step_i + 1 < args.len() && !args[*step_i + 1].starts_with("--") {
+                *step_i += 1;
+                args[*step_i].clone()
+            } else {
+                String::new()
+            }
+        };
 
         match opt {
-            "--rearrange" => handle_opt!(RearrangeManipulator),
-            "--clamp" => handle_opt!(ClampManipulator),
-            "--round" | "--cut-maxint" => handle_opt!(RoundManipulator),
-            "--remove-right" => handle_opt!(RemoveRightManipulator),
-            "--shift-right" => handle_opt!(ShiftRightManipulator),
-            "--shift-left" => handle_opt!(ShiftLeftManipulator),
-            "--xor" => handle_opt!(XorManipulator),
-            "--and" => handle_opt!(AndManipulator),
-            "--or" => handle_opt!(OrManipulator),
-            "--not" => handle_opt!(NotManipulator),
-            "--abs" => handle_opt!(AbsManipulator),
-            "--sign" => handle_opt!(SignManipulator),
-            "--add" => handle_opt!(AddManipulator),
-            "--sub" => handle_opt!(SubManipulator),
-            "--mul" => handle_opt!(MulManipulator),
-            "--div" => handle_opt!(DivManipulator),
-            "--mod" => handle_opt!(ModManipulator),
-            "--filter" => handle_opt!(FilterManipulator),
-            "--tee" => handle_opt!(TeeManipulator),
+            "--rearrange" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(RearrangeManipulator::new_with_schema(
+                    &v,
+                    field_names,
+                    field_widths,
+                )?));
+            }
+            "--not" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(NotManipulator::new_with_schema(&v, field_widths)?));
+            }
+            "--set" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(SetManipulator::new_with_schema(&v, field_names)?));
+            }
+            "--clamp" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(ClampManipulator::new(&v)?));
+            }
+            "--round" | "--cut-maxint" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(RoundManipulator::new(&v)?));
+            }
+            "--remove-right" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(RemoveRightManipulator::new(&v)?));
+            }
+            "--shift-right" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(ShiftRightManipulator::new(&v)?));
+            }
+            "--shift-left" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(ShiftLeftManipulator::new(&v)?));
+            }
+            "--xor" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(XorManipulator::new(&v)?));
+            }
+            "--and" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(AndManipulator::new(&v)?));
+            }
+            "--or" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(OrManipulator::new(&v)?));
+            }
+            "--abs" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(AbsManipulator::new(&v)?));
+            }
+            "--sign" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(SignManipulator::new(&v)?));
+            }
+            "--add" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(AddManipulator::new(&v)?));
+            }
+            "--sub" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(SubManipulator::new(&v)?));
+            }
+            "--mul" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(MulManipulator::new(&v)?));
+            }
+            "--div" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(DivManipulator::new(&v)?));
+            }
+            "--mod" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(ModManipulator::new(&v)?));
+            }
+            "--filter" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(FilterManipulator::new(&v)?));
+            }
+            "--tee" => {
+                let v = get_val(&mut i);
+                pipeline.push(Box::new(TeeManipulator::new(&v)?));
+            }
             _ => {}
         }
         i += 1;
@@ -1429,6 +1585,10 @@ pub fn build_manipulator_from_spec_with_schema(
         "div" => Ok(Box::new(DivManipulator::new(&field_or_single(arg))?)),
         "mod" => Ok(Box::new(ModManipulator::new(&field_or_single(arg))?)),
         "filter" => Ok(Box::new(FilterManipulator::new(arg)?)),
+        "set" => Ok(Box::new(SetManipulator::new_with_schema(
+            &field_or_single(arg),
+            field_names,
+        )?)),
         "tee" => Ok(Box::new(TeeManipulator::new(arg)?)),
         _ => Err(BddError::CliError(format!(
             "Unknown manipulator '{}'",
@@ -1455,6 +1615,40 @@ mod tests {
             vec![
                 Field::UInt(BigUint::from(20u32)),
                 Field::UInt(BigUint::from(10u32)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_set_manipulator() {
+        // Test set by field index and single-arg defaulting to field 0
+        let manip = SetManipulator::new("1, 0xFF").unwrap();
+        let input = vec![
+            Field::UInt(BigUint::from(10u32)),
+            Field::UInt(BigUint::from(20u32)),
+        ];
+        let output = manip.manipulate(input).unwrap();
+        assert_eq!(
+            output,
+            vec![
+                Field::UInt(BigUint::from(10u32)),
+                Field::UInt(BigUint::from(255u32)),
+            ]
+        );
+
+        // Test set by name
+        let names = vec!["sync".to_string(), "payload".to_string()];
+        let manip_named = SetManipulator::new_with_schema("sync, 0x47", Some(&names)).unwrap();
+        let input = vec![
+            Field::UInt(BigUint::from(0u32)),
+            Field::UInt(BigUint::from(123u32)),
+        ];
+        let output = manip_named.manipulate(input).unwrap();
+        assert_eq!(
+            output,
+            vec![
+                Field::UInt(BigUint::from(0x47u32)),
+                Field::UInt(BigUint::from(123u32)),
             ]
         );
     }
