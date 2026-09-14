@@ -428,13 +428,7 @@ pub fn probe_buffer(buf: &[u8], target_name: &str) -> ProbeReport {
     }
 
     // 2. Compute Shannon Entropy: H = -sum(p * log2(p))
-    let mut entropy = 0.0f64;
-    for &count in &freq {
-        if count > 0 {
-            let p = count as f64 / n as f64;
-            entropy -= p * p.log2();
-        }
-    }
+    let entropy = crate::analysis::shannon_entropy_from_freq(&freq, n);
 
     let entropy_diagnosis = if entropy > 7.85 {
         "High (7.85-8.00): Likely compressed, encrypted, or packed floating-point weights"
@@ -831,17 +825,8 @@ pub fn find_crypto_keys(
         ones_count += b.count_ones() as usize;
     }
 
-    let calc_entropy = |f: &[usize; 256]| -> f64 {
-        let mut ent = 0.0f64;
-        let w_f = w as f64;
-        for &cnt in f {
-            if cnt > 0 {
-                let p = cnt as f64 / w_f;
-                ent -= p * p.log2();
-            }
-        }
-        ent
-    };
+    let calc_entropy =
+        |f: &[usize; 256]| -> f64 { crate::analysis::shannon_entropy_from_freq(f, w) };
 
     let total_bits_in_window = w * 8;
     let mut raw_candidates: Vec<(usize, f64, f64, f64, usize)> = Vec::new();

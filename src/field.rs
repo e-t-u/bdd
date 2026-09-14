@@ -176,6 +176,114 @@ impl Field {
             }
         }
     }
+
+    /// Converts this field to a hashable key for deduplication and distinct count tracking.
+    pub fn to_key(&self) -> FieldKey {
+        match self {
+            Field::UInt(u) => FieldKey::UInt(u.clone()),
+            Field::Int(i) => FieldKey::Int(i.clone()),
+            Field::Float(f) => FieldKey::FloatBits(f.to_bits()),
+            Field::Bytes(b) => FieldKey::Bytes(b.clone()),
+            Field::Bits(u, bits) => FieldKey::Bits(u.clone(), *bits),
+        }
+    }
+
+    /// Returns the raw byte representation of this field.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            Field::Bytes(b) => b.clone(),
+            Field::UInt(u) => {
+                let bytes = u.to_bytes_be();
+                if bytes.is_empty() {
+                    vec![0]
+                } else {
+                    bytes
+                }
+            }
+            Field::Bits(u, bits) => {
+                let bytes = u.to_bytes_be();
+                let target_len = bits.div_ceil(8);
+                if bytes.len() < target_len {
+                    let mut padded = vec![0u8; target_len - bytes.len()];
+                    padded.extend_from_slice(&bytes);
+                    padded
+                } else {
+                    bytes
+                }
+            }
+            Field::Int(i) => i.to_signed_bytes_be(),
+            Field::Float(f) => f.to_be_bytes().to_vec(),
+        }
+    }
+
+    /// Estimated or exact bit length of this field.
+    pub fn bit_length(&self) -> usize {
+        match self {
+            Field::Bits(_, bits) => *bits,
+            Field::Bytes(b) => b.len() * 8,
+            Field::Float(_) => 64,
+            Field::UInt(u) => (u.bits() as usize).max(1),
+            Field::Int(i) => (i.bits() as usize).max(1),
+        }
+    }
+
+    /// Compute the Hamming weight (number of set 1-bits) of this field.
+    pub fn hamming_weight(&self) -> usize {
+        match self {
+            Field::Bytes(bytes) => bytes.iter().map(|b| b.count_ones() as usize).sum(),
+            Field::Bits(u, _) | Field::UInt(u) => u
+                .to_bytes_le()
+                .iter()
+                .map(|b| b.count_ones() as usize)
+                .sum(),
+            Field::Int(i) => i
+                .to_signed_bytes_le()
+                .iter()
+                .map(|b| b.count_ones() as usize)
+                .sum(),
+            Field::Float(f) => f
+                .to_be_bytes()
+                .iter()
+                .map(|b| b.count_ones() as usize)
+                .sum(),
+        }
+    }
+
+    /// Compute the bit balance (percentage of set 1-bits, 0.0% to 100.0%) of this field.
+    pub fn bit_balance(&self) -> f64 {
+        let total = self.bit_length();
+        if total == 0 {
+            0.0
+        } else {
+            (self.hamming_weight() as f64 / total as f64) * 100.0
+        }
+    }
+
+    /// Compute the Shannon entropy of this field's byte representation (0.0 to 8.0 bits/byte).
+    pub fn shannon_entropy(&self) -> f64 {
+        crate::analysis::shannon_entropy(&self.to_bytes())
+    }
+}
+
+/// Hashable identifier key for distinct counting and deduplication of field values.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FieldKey {
+    UInt(BigUint),
+    Int(BigInt),
+    FloatBits(u64),
+    Bytes(Vec<u8>),
+    Bits(BigUint, usize),
+}
+
+impl PartialOrd for Field {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Field::Float(a), b) => a.partial_cmp(&b.as_f64()),
+            (a, Field::Float(b)) => a.as_f64().partial_cmp(b),
+            (Field::Bytes(a), Field::Bytes(b)) => a.partial_cmp(b),
+            (a, b) => a.as_bigint().partial_cmp(&b.as_bigint()),
+        }
+    }
 }
 
 impl From<BitValue> for Field {
@@ -336,5 +444,31 @@ mod tests {
 
         let f_b = Field::Bytes(b"hello".to_vec());
         assert_eq!(f_b.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_field_analysis_and_ordering() {
+        // PartialOrd
+        let f1 = Field::UInt(BigUint::from(10u32));
+        let f2 = Field::UInt(BigUint::from(20u32));
+        assert!(f1 < f2);
+
+        let ff1 = Field::Float(1.5);
+        let ff2 = Field::Float(2.5);
+        assert!(ff1 < ff2);
+        assert!(ff1 < f1);
+
+        // Analysis methods
+        let f_zero = Field::Bytes(vec![0u8; 32]);
+        assert_eq!(f_zero.shannon_entropy(), 0.0);
+        assert_eq!(f_zero.hamming_weight(), 0);
+        assert_eq!(f_zero.bit_balance(), 0.0);
+
+        let f_ones = Field::Bytes(vec![0xFFu8; 32]);
+        assert_eq!(f_ones.hamming_weight(), 256);
+        assert_eq!(f_ones.bit_balance(), 100.0);
+
+        let f_alt = Field::Bytes(vec![0xAAu8; 10]);
+        assert_eq!(f_alt.bit_balance(), 50.0);
     }
 }

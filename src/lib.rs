@@ -3,6 +3,7 @@
 //! A command line tool and library to interpret, manipulate, merge, and create
 //! bit streams of arbitrary bit size with advanced bit field interpretation.
 
+pub mod analysis;
 pub mod bits;
 pub mod cli;
 pub mod commands;
@@ -24,6 +25,7 @@ pub mod sink;
 pub mod stream;
 pub mod stream_pattern;
 
+pub use analysis::{Accumulator, FieldCollector, TupleCollector};
 pub use bits::{
     copy_bits, read_bits_biguint, read_bits_u64, write_bits_biguint, write_bits_u64,
     BitStreamReader, BitStreamWriter, BitValue,
