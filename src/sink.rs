@@ -1,4 +1,7 @@
+use crate::analysis::accumulator::{create_accumulator, Accumulator};
+use crate::analysis::profile::TupleCollector;
 use crate::bits::BitValue;
+use crate::error::BddError;
 use crate::field::{reverse_bits, reverse_bits_u64, reverse_unit_bytes, Field};
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive, Zero};
@@ -519,6 +522,44 @@ impl<W: Write> TupleSink for TupleDirectOutput<W> {
     }
 }
 
+/// Converts a `Field` into a `serde_json::Value`.
+pub fn field_to_json_value(f: &Field) -> serde_json::Value {
+    match f {
+        Field::UInt(u) => {
+            if let Some(n) = u.to_u64() {
+                serde_json::Value::Number(n.into())
+            } else {
+                serde_json::Value::String(u.to_string())
+            }
+        }
+        Field::Int(i) => {
+            if let Some(n) = i.to_i64() {
+                serde_json::Value::Number(n.into())
+            } else {
+                serde_json::Value::String(i.to_string())
+            }
+        }
+        Field::Float(fl) => {
+            if fl.is_nan() || fl.is_infinite() {
+                serde_json::Value::Null
+            } else if let Some(n) = serde_json::Number::from_f64(*fl) {
+                serde_json::Value::Number(n)
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        Field::Bytes(b) => {
+            let s = String::from_utf8_lossy(b).into_owned();
+            serde_json::Value::String(s)
+        }
+        Field::Bits(u, bits) => {
+            let b_str = format!("{:b}", u);
+            let filler = "0".repeat(bits.saturating_sub(b_str.len()));
+            serde_json::Value::String(format!("0b{}{}", filler, b_str))
+        }
+    }
+}
+
 /// Sink formatting tuples as NDJSON records.
 pub struct JsonOutputStream<W> {
     writer: W,
@@ -543,41 +584,7 @@ impl<W: Write> TupleSink for JsonOutputStream<W> {
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| format!("field_{}", i));
-                let val = match f {
-                    Field::UInt(u) => {
-                        if let Some(n) = u.to_u64() {
-                            serde_json::Value::Number(n.into())
-                        } else {
-                            serde_json::Value::String(u.to_string())
-                        }
-                    }
-                    Field::Int(i) => {
-                        if let Some(n) = i.to_i64() {
-                            serde_json::Value::Number(n.into())
-                        } else {
-                            serde_json::Value::String(i.to_string())
-                        }
-                    }
-                    Field::Float(fl) => {
-                        if fl.is_nan() || fl.is_infinite() {
-                            serde_json::Value::Null
-                        } else if let Some(n) = serde_json::Number::from_f64(*fl) {
-                            serde_json::Value::Number(n)
-                        } else {
-                            serde_json::Value::Null
-                        }
-                    }
-                    Field::Bytes(b) => {
-                        let s = String::from_utf8_lossy(b).into_owned();
-                        serde_json::Value::String(s)
-                    }
-                    Field::Bits(u, bits) => {
-                        let b_str = format!("{:b}", u);
-                        let filler = "0".repeat(bits.saturating_sub(b_str.len()));
-                        serde_json::Value::String(format!("0b{}{}", filler, b_str))
-                    }
-                };
-                map.insert(key, val);
+                map.insert(key, field_to_json_value(f));
             }
             writeln!(
                 self.writer,
@@ -718,6 +725,160 @@ impl<W: Write> TupleSink for VisualOutputStream<W> {
     }
 
     fn flush_stream(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+/// Sink aggregating multi-column tuples into per-column metrics.
+pub struct AccumulatorTupleSink<W> {
+    writer: W,
+    accumulators: Vec<Box<dyn Accumulator>>,
+    metric_name: String,
+    field_names: Option<Vec<String>>,
+    as_json: bool,
+    as_csv: bool,
+}
+
+impl<W: Write> AccumulatorTupleSink<W> {
+    pub fn new(
+        writer: W,
+        metric: &str,
+        field_names: Option<Vec<String>>,
+        as_json: bool,
+        as_csv: bool,
+    ) -> Result<Self, BddError> {
+        let mut accumulators = Vec::new();
+        if let Some(ref names) = field_names {
+            for _ in names {
+                accumulators.push(create_accumulator(metric)?);
+            }
+        }
+        Ok(Self {
+            writer,
+            accumulators,
+            metric_name: metric.to_string(),
+            field_names,
+            as_json,
+            as_csv,
+        })
+    }
+}
+
+impl<W: Write> TupleSink for AccumulatorTupleSink<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+        while self.accumulators.len() < tuple.len() {
+            self.accumulators.push(
+                create_accumulator(&self.metric_name)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?,
+            );
+        }
+        for (i, field) in tuple.iter().enumerate() {
+            self.accumulators[i].update(field);
+        }
+        Ok(())
+    }
+
+    fn flush_stream(&mut self) -> std::io::Result<()> {
+        if self.accumulators.is_empty() {
+            if let Ok(acc) = create_accumulator(&self.metric_name) {
+                if self.as_json {
+                    let mut map = serde_json::Map::new();
+                    map.insert(self.metric_name.clone(), field_to_json_value(&acc.value()));
+                    writeln!(
+                        self.writer,
+                        "{}",
+                        serde_json::to_string(&serde_json::Value::Object(map))
+                            .map_err(std::io::Error::other)?
+                    )?;
+                } else {
+                    writeln!(self.writer, "{}", acc.value())?;
+                }
+                return self.writer.flush();
+            }
+        }
+
+        if self.as_json {
+            let mut map = serde_json::Map::new();
+            if self.accumulators.len() == 1 {
+                let name = self
+                    .field_names
+                    .as_ref()
+                    .and_then(|names| names.first().cloned())
+                    .unwrap_or_else(|| self.metric_name.clone());
+                map.insert(name, field_to_json_value(&self.accumulators[0].value()));
+            } else {
+                for (i, acc) in self.accumulators.iter().enumerate() {
+                    let name = self
+                        .field_names
+                        .as_ref()
+                        .and_then(|names| names.get(i).cloned())
+                        .unwrap_or_else(|| format!("field_{}", i));
+                    map.insert(name, field_to_json_value(&acc.value()));
+                }
+            }
+            writeln!(
+                self.writer,
+                "{}",
+                serde_json::to_string(&serde_json::Value::Object(map))
+                    .map_err(std::io::Error::other)?
+            )?;
+        } else if self.as_csv {
+            let vals: Vec<String> = self
+                .accumulators
+                .iter()
+                .map(|acc| acc.value().to_string())
+                .collect();
+            writeln!(self.writer, "{}", vals.join(","))?;
+        } else if self.accumulators.len() == 1 {
+            writeln!(self.writer, "{}", self.accumulators[0].value())?;
+        } else {
+            for (i, acc) in self.accumulators.iter().enumerate() {
+                let name = self
+                    .field_names
+                    .as_ref()
+                    .and_then(|names| names.get(i).cloned())
+                    .unwrap_or_else(|| format!("field_{}", i));
+                writeln!(self.writer, "{}: {}", name, acc.value())?;
+            }
+        }
+        self.writer.flush()
+    }
+}
+
+/// Sink profiling tuples into aligned ASCII summary tables or JSON profiles.
+pub struct StatsTupleSink<W> {
+    writer: W,
+    collector: TupleCollector,
+    as_json: bool,
+}
+
+impl<W: Write> StatsTupleSink<W> {
+    pub fn new(writer: W, field_names: Vec<String>, as_json: bool) -> Self {
+        let collector = if field_names.is_empty() {
+            TupleCollector::empty()
+        } else {
+            TupleCollector::new(&field_names)
+        };
+        Self {
+            writer,
+            collector,
+            as_json,
+        }
+    }
+}
+
+impl<W: Write> TupleSink for StatsTupleSink<W> {
+    fn write_tuple(&mut self, tuple: &[Field]) -> std::io::Result<()> {
+        self.collector.update(tuple);
+        Ok(())
+    }
+
+    fn flush_stream(&mut self) -> std::io::Result<()> {
+        if self.as_json {
+            writeln!(self.writer, "{}", self.collector.format_json())?;
+        } else {
+            write!(self.writer, "{}", self.collector.format_table())?;
+        }
         self.writer.flush()
     }
 }
@@ -898,5 +1059,54 @@ mod tests {
         }
         let csv_str = String::from_utf8(csv_buf).unwrap();
         assert_eq!(csv_str.trim(), "a,b,c\n10,3.5,test");
+    }
+
+    #[test]
+    fn test_accumulator_tuple_sink_scalar() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = AccumulatorTupleSink::new(&mut buf, "sum", None, false, false).unwrap();
+            sink.write_tuple(&[Field::UInt(10u32.into())]).unwrap();
+            sink.write_tuple(&[Field::UInt(25u32.into())]).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let res = String::from_utf8(buf).unwrap();
+        assert_eq!(res.trim(), "35");
+    }
+
+    #[test]
+    fn test_accumulator_tuple_sink_multi_field_json() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = AccumulatorTupleSink::new(
+                &mut buf,
+                "sum",
+                Some(vec!["a".to_string(), "b".to_string()]),
+                true,
+                false,
+            )
+            .unwrap();
+            sink.write_tuple(&[Field::UInt(10u32.into()), Field::UInt(100u32.into())])
+                .unwrap();
+            sink.write_tuple(&[Field::UInt(25u32.into()), Field::UInt(200u32.into())])
+                .unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let res = String::from_utf8(buf).unwrap();
+        assert_eq!(res.trim(), "{\"a\":35,\"b\":300}");
+    }
+
+    #[test]
+    fn test_stats_tuple_sink_table() {
+        let mut buf = Vec::new();
+        {
+            let mut sink = StatsTupleSink::new(&mut buf, vec!["val".to_string()], false);
+            sink.write_tuple(&[Field::UInt(10u32.into())]).unwrap();
+            sink.write_tuple(&[Field::UInt(20u32.into())]).unwrap();
+            sink.flush_stream().unwrap();
+        }
+        let res = String::from_utf8(buf).unwrap();
+        assert!(res.contains("val"));
+        assert!(res.contains("Entropy"));
     }
 }

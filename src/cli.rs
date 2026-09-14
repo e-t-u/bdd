@@ -269,6 +269,34 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output_visual: bool,
 
+    /// Profile stream tuples/units and emit an aligned ASCII summary table (or JSON with --output-json)
+    #[arg(long, default_value_t = false, visible_alias = "stats")]
+    pub output_stats: bool,
+
+    /// Aggregate stream tuples/units using a specified metric (count, sum, min, max, avg, entropy, balance, variance, distinct)
+    #[arg(long, visible_alias = "accumulator")]
+    pub output_accumulator: Option<String>,
+
+    /// Aggregate stream and output sum
+    #[arg(long, default_value_t = false)]
+    pub output_sum: bool,
+
+    /// Aggregate stream and output count
+    #[arg(long, default_value_t = false)]
+    pub output_count: bool,
+
+    /// Aggregate stream and output arithmetic mean (average)
+    #[arg(long, default_value_t = false)]
+    pub output_avg: bool,
+
+    /// Aggregate stream and output minimum
+    #[arg(long, default_value_t = false)]
+    pub output_min: bool,
+
+    /// Aggregate stream and output maximum
+    #[arg(long, default_value_t = false)]
+    pub output_max: bool,
+
     /// Emit JSON tuples as key-value objects instead of arrays
     #[arg(long, default_value_t = false, visible_alias = "output-json-dict")]
     pub json_object: bool,
@@ -464,6 +492,8 @@ pub struct ValidatedConfig {
     pub output_csv: bool,
     pub csv_header: Option<String>,
     pub output_visual: bool,
+    pub output_stats: bool,
+    pub output_accumulator: Option<String>,
     pub demux: Vec<String>,
     pub demux_files: Option<String>,
     pub input_repeat: usize,
@@ -848,7 +878,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             }
         }
         if let Some(ref sink) = parsed.sink {
-            match sink.as_str() {
+            let s_norm = sink.trim().trim_end_matches("()");
+            match s_norm {
                 "stdout" => cli.output_file = "-".to_string(),
                 "hex" => cli.output_hex = true,
                 "bits" => cli.output_bits = true,
@@ -863,6 +894,18 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 "tuples" => cli.output_tuples = true,
                 "visual" => cli.output_visual = true,
                 "integers" => cli.output_integers = true,
+                "sum" => cli.output_accumulator = Some("sum".to_string()),
+                "count" => cli.output_accumulator = Some("count".to_string()),
+                "avg" | "mean" => cli.output_accumulator = Some("avg".to_string()),
+                "min" => cli.output_accumulator = Some("min".to_string()),
+                "max" => cli.output_accumulator = Some("max".to_string()),
+                "entropy" => cli.output_accumulator = Some("entropy".to_string()),
+                "balance" | "bit_balance" => {
+                    cli.output_accumulator = Some("bit_balance".to_string())
+                }
+                "variance" | "stddev" => cli.output_accumulator = Some("variance".to_string()),
+                "distinct" | "unique" => cli.output_accumulator = Some("distinct".to_string()),
+                "stats" | "profile" => cli.output_stats = true,
                 "raw" | "bin" => {}
                 s if s.starts_with("file(") && s.ends_with(')') => {
                     let path = s[5..s.len() - 1]
@@ -919,7 +962,14 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
                 || cli.output_bits
                 || cli.output_json
                 || cli.output_csv
-                || cli.output_visual;
+                || cli.output_visual
+                || cli.output_stats
+                || cli.output_accumulator.is_some()
+                || cli.output_sum
+                || cli.output_count
+                || cli.output_avg
+                || cli.output_min
+                || cli.output_max;
             if !has_output_format {
                 cli.output_json = true;
             }
@@ -980,6 +1030,18 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         parse_number_argument(cli.count.as_deref(), "--count", None, false)?
     };
 
+    if cli.output_sum {
+        cli.output_accumulator = Some("sum".to_string());
+    } else if cli.output_count {
+        cli.output_accumulator = Some("count".to_string());
+    } else if cli.output_avg {
+        cli.output_accumulator = Some("avg".to_string());
+    } else if cli.output_min {
+        cli.output_accumulator = Some("min".to_string());
+    } else if cli.output_max {
+        cli.output_accumulator = Some("max".to_string());
+    }
+
     check_exclusive(
         "Only one of the following: --output-tuples, --output-integers, --output-hex, --output-bits, --output-json, --output-csv, --output-visual",
         &[
@@ -992,6 +1054,34 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             cli.output_visual,
         ],
     )?;
+
+    if cli.output_stats
+        && (cli.output_integers
+            || cli.output_hex
+            || cli.output_bits
+            || cli.output_tuples
+            || cli.output_visual)
+    {
+        return Err(BddError::CliError(
+            "--output-stats cannot be combined with raw unit/stream output formats (--output-hex, --output-bits, --output-integers, --output-tuples, --output-visual)".to_string(),
+        ));
+    }
+    if cli.output_accumulator.is_some()
+        && (cli.output_integers
+            || cli.output_hex
+            || cli.output_bits
+            || cli.output_tuples
+            || cli.output_visual)
+    {
+        return Err(BddError::CliError(
+            "--output-accumulator cannot be combined with raw unit/stream output formats (--output-hex, --output-bits, --output-integers, --output-tuples, --output-visual)".to_string(),
+        ));
+    }
+    if cli.output_stats && cli.output_accumulator.is_some() {
+        return Err(BddError::CliError(
+            "Cannot specify both --output-stats and --output-accumulator".to_string(),
+        ));
+    }
 
     let pattern_input_unit = if let Some(ref p) = cli.input_pattern {
         let items = crate::pattern::parse_input_pattern(p)?;
@@ -1425,6 +1515,8 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
         output_csv: cli.output_csv,
         csv_header: cli.csv_header,
         output_visual: cli.output_visual,
+        output_stats: cli.output_stats,
+        output_accumulator: cli.output_accumulator,
         demux: cli.demux,
         demux_files: cli.demux_files,
         input_repeat,

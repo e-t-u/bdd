@@ -232,6 +232,9 @@ pub fn format_presets_table() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_embedded_default_presets_valid() {
@@ -245,6 +248,8 @@ mod tests {
 
     #[test]
     fn test_find_preset_normalization() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_custom_presets_path();
         let p1 = find_preset("mp3-header").expect("found mp3-header");
         let p2 = find_preset("MP3_HEADER").expect("found MP3_HEADER");
         assert_eq!(p1.name, p2.name);
@@ -253,6 +258,7 @@ mod tests {
 
     #[test]
     fn test_custom_presets_path() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         use tempfile::NamedTempFile;
 
         let sample_json = r#"[

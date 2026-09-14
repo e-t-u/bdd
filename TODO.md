@@ -165,6 +165,7 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
 - [x] **Cargo Feature Decoupling for Prober (`probe` feature)**: Decoupled `src/probe.rs` behind `#[cfg(feature = "probe")]`. Enabled by default, but allows building ultra-minimal bitstream slicers with zero probe dependencies via `--no-default-features --features mmap`.
 - [x] **Deprecated Struct Code Generation Flags**: Deprecated `--export-c` and `--export-rust` with warnings in favor of `contrib/python/json_to_c.py` and `json_to_rust.py`.
 - [x] **Foundational Mathematical & Information-Theoretic Engine (`src/analysis/`)**: Extracted zero-dependency Shannon entropy, normalized entropy, bit balance, and Hamming weight into `src/analysis/math.rs`. Created `Accumulator` trait and implementations (`Count`, `Sum`, `Min`, `Max`, `Mean`, `Entropy`, `BitBalance`, `Variance`, `Distinct`) and `TupleCollector` profiler (`src/analysis/profile.rs`). Extended `Field` with direct analysis methods (`.shannon_entropy()`, `.bit_balance()`, `.hamming_weight()`).
+- [x] **Terminal Stream Accumulator & Profiler Sinks (`-> sum`, `-> count`, `-> avg`, `-> min`, `-> max`, `-> stats`)**: Wired accumulators directly into the CLI pipeline grammar and engine. Supports scalar stream reductions (`8 -> sum`, `8 -> avg`), multi-column tuple reductions (`a:8u, b:8u -> sum`), ASCII table and JSON profile emission (`-> stats`, `--output-json`), and dedicated CLI flags (`--output-sum`, `--output-count`, `--output-avg`, `--output-min`, `--output-max`, `--output-stats`, `--output-accumulator`).
 
 ---
 
@@ -177,13 +178,10 @@ The following items from the original 2010 `docs/TODO` scratchpad have been impl
   - `8u -> rolling_entropy(window=64) -> filter(entropy > 7.8) -> ...`: Continuous entropy boundary detector.
 - **Architecture**: `SlidingWindow<A: Accumulator>` ring-buffer wrapper struct in `src/analysis/accumulator.rs` exposed via `TupleManipulator` in `src/manipulator.rs`.
 
-### 6.2 Keyed Stream Grouping & Terminal Summary Sinks (Option 3)
+### 6.2 Keyed Stream Grouping (Option 3)
 - **Keyed Grouping (`group_by`)**:
   - Partitions incoming tuples by a key field and maintains per-group metric accumulators.
   - Example: `bdd broadcast.ts "[ sync:8u, pid:13u, payload:184*8u ] -> group_by(pid, count(), sum(payload), avg(entropy(payload))) -> csv"`
-- **Terminal Profiler Sink (`-> stats` / `-> profile`)**:
-  - Ingests all tuples through `TupleCollector` and emits an aligned ASCII table or JSON profile at EOF without printing raw tuples.
-  - Example: `bdd traffic.bin "ipv4-header -> stats"`
 
 ### 6.3 In-Pipeline Field Analysis Functions
 - **Projection Expressions**:

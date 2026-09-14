@@ -6,8 +6,9 @@ use crate::field::Field;
 use crate::manipulator::*;
 use crate::pattern::{TuplePacker, TupleUnpacker};
 use crate::sink::{
-    BitOutputStream, CsvOutputStream, FileOutputStream, HexOutputStream, IntegerOutputStream,
-    JsonOutputStream, TupleDirectOutput, TupleSink, UnitSink, VisualOutputStream,
+    AccumulatorTupleSink, BitOutputStream, CsvOutputStream, FileOutputStream, HexOutputStream,
+    IntegerOutputStream, JsonOutputStream, StatsTupleSink, TupleDirectOutput, TupleSink, UnitSink,
+    VisualOutputStream,
 };
 use crate::stream::{
     open_rewindable_file, BddReader, CounterStream, FileInputStream, IntegerInputStream, OneStream,
@@ -406,7 +407,35 @@ fn run_pipeline_internal(
     let mut tuple_sink: Option<Box<dyn TupleSink>> = None;
     let mut unit_sink: Option<Box<dyn UnitSink>> = None;
 
-    if config.output_tuples {
+    if let Some(ref acc_name) = config.output_accumulator {
+        let field_names = if let Some(ref jf) = config.json_fields {
+            Some(jf.clone())
+        } else if let Some(ref u) = unpacker {
+            u.field_names()
+        } else {
+            None
+        };
+        tuple_sink = Some(Box::new(AccumulatorTupleSink::new(
+            out_writer,
+            acc_name,
+            field_names,
+            config.output_json,
+            config.output_csv,
+        )?));
+    } else if config.output_stats {
+        let names = if let Some(ref jf) = config.json_fields {
+            jf.clone()
+        } else if let Some(ref u) = unpacker {
+            u.field_names().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        tuple_sink = Some(Box::new(StatsTupleSink::new(
+            out_writer,
+            names,
+            config.output_json,
+        )));
+    } else if config.output_tuples {
         tuple_sink = Some(Box::new(TupleDirectOutput::new(out_writer)));
     } else if config.output_json {
         let field_names = if let Some(ref jf) = config.json_fields {

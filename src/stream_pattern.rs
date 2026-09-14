@@ -134,7 +134,23 @@ pub fn extract_source_name(s: &str) -> String {
 /// Checks if a token represents a pipeline sink keyword or file.
 pub fn is_sink(s: &str) -> bool {
     let s = s.trim();
-    s == "stdout"
+    let norm = s.trim_end_matches("()");
+    norm == "sum"
+        || norm == "count"
+        || norm == "avg"
+        || norm == "mean"
+        || norm == "min"
+        || norm == "max"
+        || norm == "entropy"
+        || norm == "balance"
+        || norm == "bit_balance"
+        || norm == "variance"
+        || norm == "stddev"
+        || norm == "distinct"
+        || norm == "unique"
+        || norm == "stats"
+        || norm == "profile"
+        || s == "stdout"
         || s == "hex"
         || s == "bits"
         || s == "json"

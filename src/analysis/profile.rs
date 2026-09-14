@@ -116,6 +116,13 @@ impl TupleCollector {
         Self { columns }
     }
 
+    /// Creates an empty tuple collector with dynamic schema discovery on first tuple.
+    pub fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+        }
+    }
+
     /// Creates a tuple collector from an initial tuple when explicit schema names are omitted.
     pub fn from_tuple(tuple: &[Field]) -> Self {
         let columns = (0..tuple.len())
@@ -129,10 +136,14 @@ impl TupleCollector {
     /// Ingest an incoming tuple into the respective column collectors.
     pub fn update(&mut self, tuple: &[Field]) {
         // Expand columns if dynamically discovered tuples have more fields
-        while self.columns.len() < tuple.len() {
-            let idx = self.columns.len();
-            self.columns
-                .push(FieldCollector::new(&format!("field_{}", idx)));
+        if self.columns.is_empty() && tuple.len() == 1 {
+            self.columns.push(FieldCollector::new("unit"));
+        } else {
+            while self.columns.len() < tuple.len() {
+                let idx = self.columns.len();
+                self.columns
+                    .push(FieldCollector::new(&format!("field_{}", idx)));
+            }
         }
 
         for (i, field) in tuple.iter().enumerate() {

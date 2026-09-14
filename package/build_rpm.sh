@@ -19,11 +19,8 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
     exit 1
 fi
 
-# Ensure release binaries exist
-if [ ! -f "${REPO_ROOT}/target/release/bdd" ] || [ ! -f "${REPO_ROOT}/target/release/libbdd.so" ]; then
-    echo "==> Building release binaries with cargo..."
-    cargo build --release --manifest-path "${REPO_ROOT}/Cargo.toml"
-fi
+echo "==> Building release binaries with cargo..."
+cargo build --release --workspace --manifest-path "${REPO_ROOT}/Cargo.toml"
 
 # Setup rpmbuild working directories
 rm -rf "${RPM_TOPDIR}"

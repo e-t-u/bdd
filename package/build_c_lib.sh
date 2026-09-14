@@ -23,11 +23,8 @@ echo "================================================================="
 echo " Building C Library SDK Archive: ${PKG_NAME}.tar.gz"
 echo "================================================================="
 
-# Ensure release binaries and libraries exist
-if [ ! -f "${REPO_ROOT}/target/release/libbdd.so" ] || [ ! -f "${REPO_ROOT}/target/release/libbdd.a" ]; then
-    echo "==> Building release libraries with cargo..."
-    cargo build --release --manifest-path "${REPO_ROOT}/Cargo.toml"
-fi
+echo "==> Building release libraries with cargo..."
+cargo build --release --workspace --manifest-path "${REPO_ROOT}/Cargo.toml"
 
 rm -rf "${STAGING_DIR}"
 mkdir -p "${STAGING_DIR}/include"

@@ -1,6 +1,6 @@
 [package]
 name = "bdd-mcp"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2021"
 description = "Model Context Protocol (MCP) server for the bdd bitstream engine"
 authors = ["Esa Turtiainen"]

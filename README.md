@@ -593,6 +593,37 @@ printf "\x33\x02\x42\x00" | bdd "riscv-r-type -> json"
 
 ---
 
+### Scenario 12: Stream Reductions & Statistical Profiling (`-> sum`, `-> stats`)
+`bdd` provides native pipeline reduction sinks to aggregate bitstreams and structured tuples directly from the command line without external awk, bc, or Python pipelines:
+
+```bash
+# Arithmetic sum across 8-bit stream
+printf "\x01\x02\x03\x04" | bdd "8 -> sum"
+# Output: 10
+
+# Running arithmetic mean (average)
+printf "\x01\x02\x03\x04" | bdd "8 -> avg"
+# Output: 2.5
+
+# Pipelined manipulation with filtering and reduction
+# Ingest 1, 2, 3, 4 -> add 10 (11, 12, 13, 14) -> keep values > 12 -> sum
+printf "\x01\x02\x03\x04" | bdd "8 -> add(10) -> filter(0,>,12) -> sum"
+# Output: 27
+
+# Multi-column schema reduction (emits structured key-value pairs or JSON)
+printf "\x01\x0a\x02\x14" | bdd --reverse-unit "a:8u, b:8u -> sum" --output-json
+# Output: {"a":30,"b":3}
+
+# Full ASCII statistical profile (Entropy, 1-bit balance, distinct cardinality, min, max, avg)
+printf "\x01\x02\x03\x04" | bdd "8 -> stats"
+# Output:
+# Field         Count   Entropy (bits/B)   Bit 1s%   Distinct   Min           Max           Avg
+# -------------------------------------------------------------------------------------------------
+# unit              4             2.0000    62.50%          4   1             4             2.5000
+```
+
+---
+
 ## 6. Linux Netlink Kernel Telemetry & Process Lifecycles
 
 Modern Linux kernels provide real-time process execution, fork, exit, and credential events via the Netlink Process Connector (`AF_NETLINK`, `CN_IDX_PROC`). `bdd` provides a two-tier architecture for kernel telemetry:
@@ -927,6 +958,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | **`BitBalanceAccumulator`** | `"balance"`, `"bit_balance"` | Percentage of set `1`-bits ($0.0\%..100.0\%$) | `Field::Float` |
 | **`VarianceAccumulator`** | `"variance"`, `"stddev"` | Online sample variance/stddev via Welford’s algorithm | `Field::Float` |
 | **`DistinctAccumulator`** | `"distinct"`, `"unique"` | Cardinality count of unique field values | `Field::UInt` |
+
+> [!TIP]
+> All accumulators can be invoked directly as terminal pipeline sinks in the CLI stream pattern grammar (`-> sum`, `-> count`, `-> avg`, `-> min`, `-> max`, `-> entropy`, `-> balance`, `-> variance`, `-> distinct`, or `-> stats`) or via dedicated CLI flags (`--output-sum`, `--output-count`, `--output-avg`, `--output-min`, `--output-max`, `--output-stats`). Append `--output-json` or `--output-csv` to format multi-column reduction outputs.
 
 #### 2. Evaluating Accumulators & Direct Field Analysis
 

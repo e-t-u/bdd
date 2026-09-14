@@ -2390,3 +2390,132 @@ fn test_wildcard_passthrough_cli() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert_eq!(stdout.trim(), "1dc4");
 }
+
+#[test]
+fn test_cli_terminal_accumulator_sinks() {
+    // Test sum, sum(), count, avg, min, max, and stats
+    let cases = [
+        ("8 -> sum", "10"),
+        ("8 -> sum()", "10"),
+        ("8 -> count", "4"),
+        ("8 -> count()", "4"),
+        ("8 -> avg", "2.5"),
+        ("8 -> min", "1"),
+        ("8 -> max", "4"),
+    ];
+
+    for (spec, expected) in cases {
+        let mut child = Command::new(BDD_BIN)
+            .args([spec])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(&[1, 2, 3, 4])
+            .unwrap();
+
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "Failed running spec: {}", spec);
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.trim(), expected, "Mismatch for spec: {}", spec);
+    }
+
+    // Stats table test
+    let mut child = Command::new(BDD_BIN)
+        .args(["8 -> stats"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&[1, 2, 3, 4])
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("unit"));
+    assert!(stdout.contains("Entropy"));
+    assert!(stdout.contains("2.5000"));
+}
+
+#[test]
+fn test_cli_multi_column_accumulator_and_json() {
+    // a: 0x0A, 0x14 -> sum = 30
+    // b: 0x01, 0x02 -> sum = 3
+    let mut child = Command::new(BDD_BIN)
+        .args(["--reverse-unit", "a:8u, b:8u -> sum", "--output-json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&[0x01, 0x0A, 0x02, 0x14])
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "{\"a\":30,\"b\":3}");
+}
+
+#[test]
+fn test_cli_accumulator_manipulator_pipeline() {
+    // Ingest 1, 2, 3, 4 -> add 10 -> filter > 12 -> sum
+    // Modified values: 11, 12, 13, 14
+    // Filtered values: 13, 14
+    // Sum: 27
+    let mut child = Command::new(BDD_BIN)
+        .args(["8 -> add(10) -> filter(0,>,12) -> sum"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&[1, 2, 3, 4])
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "27");
+}
+
+#[test]
+fn test_cli_accumulator_convenience_flags() {
+    let mut child = Command::new(BDD_BIN)
+        .args(["--output-sum"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&[1, 2, 3, 4])
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "10");
+}
