@@ -5,6 +5,7 @@
 
 pub mod bits;
 pub mod cli;
+pub mod commands;
 pub mod counter;
 pub mod diag;
 pub mod engine;

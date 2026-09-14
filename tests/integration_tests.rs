@@ -1611,17 +1611,6 @@ fn test_pattern_with_raw_unit_and_unit_overwrite() {
     assert_eq!(stdout_overwrite.trim(), "00 00");
 }
 
-#[test]
-fn test_web_server_decoupled_notice() {
-    let out = Command::new(BDD_BIN)
-        .arg("--serve")
-        .output()
-        .expect("failed to run bdd --serve");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("decoupled to the 'web/' directory"));
-}
-
 #[cfg(not(feature = "small-floats"))]
 #[test]
 fn test_small_floats_disabled_error() {

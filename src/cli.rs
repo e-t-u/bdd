@@ -58,28 +58,49 @@ pub struct Cli {
     pub input_drop_partial_eof: bool,
 
     /// Disable seeking on all inputs (force streaming sequential read)
-    #[arg(long, default_value_t = false, visible_alias = "do-not-seek")]
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = [
+            "do-not-seek",
+            "no-input-seek",
+            "input-no-seek",
+            "no-merge-seek",
+            "merge-no-seek"
+        ]
+    )]
     pub no_seek: bool,
 
-    /// Disable seeking on primary input (force streaming sequential read)
-    #[arg(long, default_value_t = false, visible_alias = "no-input-seek")]
-    pub input_no_seek: bool,
-
     /// Enable seeking on primary input (default: true if seekable)
-    #[arg(long, default_value_t = false, visible_alias = "input-seek")]
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = ["input-seek", "merge-seek", "merge-use-seek", "use-seek", "seek"]
+    )]
     pub input_use_seek: bool,
 
     /// Force disable memory-mapped I/O on all input files (use standard buffered reads)
-    #[arg(long, default_value_t = false, visible_aliases = ["no-mmap", "do-not-mmap"])]
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = [
+            "no-mmap",
+            "do-not-mmap",
+            "no-input-mmap",
+            "input-no-mmap",
+            "no-merge-mmap",
+            "merge-no-mmap"
+        ]
+    )]
     pub no_mmap: bool,
 
-    /// Disable memory-mapped I/O on primary input
-    #[arg(long, default_value_t = false, visible_alias = "no-input-mmap")]
-    pub input_no_mmap: bool,
-
-    /// Enable memory-mapped I/O on primary input (default: true if regular file and supported)
-    #[arg(long, default_value_t = false, visible_aliases = ["mmap", "input-mmap"])]
-    pub input_use_mmap: bool,
+    /// Enable memory-mapped I/O on input files (default: true if regular file and supported)
+    #[arg(
+        long,
+        default_value_t = false,
+        visible_aliases = ["input-mmap", "merge-mmap", "input-use-mmap", "merge-use-mmap"]
+    )]
+    pub mmap: bool,
 
     #[arg(long, default_value_t = false, visible_aliases = ["little-endian"])]
     pub input_little_endian: bool,
@@ -315,10 +336,6 @@ pub struct Cli {
     #[arg(long, default_value_t = false, visible_aliases = ["ai-guide", "ai"])]
     pub llms: bool,
 
-    /// Start interactive web browser GUI application (decoupled to 'web/' directory)
-    #[arg(long, num_args = 0..=1, default_missing_value = "7788", visible_aliases = ["web", "gui"])]
-    pub serve: Option<u16>,
-
     /// Suppress non-fatal diagnostic warnings and deduplication summaries
     #[arg(short = 'q', long = "quiet", default_value_t = false)]
     pub quiet: bool,
@@ -377,22 +394,6 @@ pub struct Cli {
         visible_aliases = ["merge-drop-trailing-bits", "merge-no-pad-eof"]
     )]
     pub merge_drop_partial_eof: bool,
-
-    /// Disable seeking on merge input (force streaming sequential read)
-    #[arg(long, default_value_t = false, visible_alias = "no-merge-seek")]
-    pub merge_no_seek: bool,
-
-    /// Enable seeking on merge input (default: true if seekable)
-    #[arg(long, default_value_t = false, visible_alias = "merge-seek")]
-    pub merge_use_seek: bool,
-
-    /// Disable memory-mapped I/O on merge input files
-    #[arg(long, default_value_t = false, visible_alias = "no-merge-mmap")]
-    pub merge_no_mmap: bool,
-
-    /// Enable memory-mapped I/O on merge input files (default: true if regular file and supported)
-    #[arg(long, default_value_t = false, visible_alias = "merge-mmap")]
-    pub merge_use_mmap: bool,
 
     #[arg(long, default_value_t = false)]
     pub merge_little_endian: bool,
@@ -1052,8 +1053,6 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
             || cli.merge_offset.is_some()
             || cli.merge_assert_aligned
             || cli.merge_drop_partial_eof
-            || cli.merge_use_seek
-            || cli.merge_no_seek
             || cli.merge_little_endian
             || cli.merge_reverse_bytes
             || cli.merge_reverse_unit;
@@ -1339,30 +1338,25 @@ pub fn validate_and_process(mut cli: Cli) -> Result<ValidatedConfig, BddError> {
     }
 
     // Auto-seek by default on regular files / seekable descriptors, unless explicitly disabled
-    let input_use_seek = !cli.input_no_seek && !cli.no_seek;
-    let merge_use_seek = !cli.merge_no_seek && !cli.no_seek;
+    let use_seek = !cli.no_seek;
+    let input_use_seek = use_seek;
+    let merge_use_seek = use_seek;
 
     // Memory-mapped I/O by default on regular files when supported, unless explicitly disabled
-    let input_mmap_requested = cli.input_use_mmap;
-    let mut input_use_mmap = if cli.no_mmap || cli.input_no_mmap {
+    let use_mmap = if cli.no_mmap {
         false
     } else {
-        input_mmap_requested || cfg!(feature = "mmap")
+        cli.mmap || cfg!(feature = "mmap")
     };
-
-    if cli.input_file == "-" {
-        input_use_mmap = false;
-    }
-
-    let merge_mmap_requested = cli.merge_use_mmap;
-    let merge_use_mmap = if cli.no_mmap || cli.merge_no_mmap {
+    let input_use_mmap = if cli.input_file == "-" {
         false
     } else {
-        merge_mmap_requested || cfg!(feature = "mmap")
+        use_mmap
     };
+    let merge_use_mmap = use_mmap;
 
     #[cfg(not(feature = "mmap"))]
-    if input_mmap_requested || merge_mmap_requested {
+    if cli.mmap {
         crate::diag::warn("Memory-mapped I/O was requested, but bdd was compiled without the 'mmap' feature. Falling back to standard buffered I/O.");
     }
 
@@ -1507,7 +1501,7 @@ mod tests {
         assert!(conf_default.input_use_seek);
         assert!(conf_default.merge_use_seek);
 
-        // Global --no-seek disables both
+        // Global --no-seek disables seeking
         let cli_no_seek = Cli::parse_from(["bdd", "--no-seek", "--input-zeros", "--count=1"]);
         let conf_no_seek = validate_and_process(cli_no_seek).unwrap();
         assert!(!conf_no_seek.input_use_seek);
@@ -1518,31 +1512,20 @@ mod tests {
             Cli::parse_from(["bdd", "--do-not-seek", "--input-zeros", "--count=1"]);
         let conf_do_not_seek = validate_and_process(cli_do_not_seek).unwrap();
         assert!(!conf_do_not_seek.input_use_seek);
+        assert!(!conf_do_not_seek.merge_use_seek);
 
-        // --input-no-seek disables only input
+        // Aliases --input-no-seek and --merge-no-seek
         let cli_input_no_seek =
             Cli::parse_from(["bdd", "--input-no-seek", "--input-zeros", "--count=1"]);
         let conf_input_no_seek = validate_and_process(cli_input_no_seek).unwrap();
         assert!(!conf_input_no_seek.input_use_seek);
-        assert!(conf_input_no_seek.merge_use_seek);
+        assert!(!conf_input_no_seek.merge_use_seek);
 
-        // --merge-no-seek with merge file
-        let cli_merge_no_seek = Cli::parse_from([
-            "bdd",
-            "--input-zeros",
-            "--count=1",
-            "--merge-file",
-            "/dev/null",
-            "--merge-no-seek",
-        ]);
+        let cli_merge_no_seek =
+            Cli::parse_from(["bdd", "--merge-no-seek", "--input-zeros", "--count=1"]);
         let conf_merge_no_seek = validate_and_process(cli_merge_no_seek).unwrap();
-        assert!(conf_merge_no_seek.input_use_seek);
+        assert!(!conf_merge_no_seek.input_use_seek);
         assert!(!conf_merge_no_seek.merge_use_seek);
-
-        // --merge-no-seek without merge-file fails validation
-        let cli_merge_err =
-            Cli::parse_from(["bdd", "--input-zeros", "--count=1", "--merge-no-seek"]);
-        assert!(validate_and_process(cli_merge_err).is_err());
     }
 
     #[test]

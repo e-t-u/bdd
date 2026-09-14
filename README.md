@@ -999,13 +999,10 @@ Input Unit & Container Options:
       --input-offset <BITS>        Bit offset (pregap) of unit inside container [default: 0]
       --input-assert-aligned       Error if EOF is not byte-aligned
       --drop-partial-eof           Discard incomplete trailing bits at EOF instead of zero-padding
-      --no-seek, --do-not-seek     Globally disable seeking on all inputs (force streaming read)
-      --input-no-seek              Disable seeking specifically on primary input
-      --input-use-seek             Explicitly enable seeking on input (default: true)
+      --no-seek, --do-not-seek     Disable seeking on all inputs (force streaming sequential read)
+      --input-use-seek             Explicitly enable seeking on input (default: true if seekable)
       --no-mmap, --do-not-mmap     Disable memory-mapped I/O (force standard buffered reads)
-      --mmap, --input-mmap         Explicitly enable memory-mapped I/O on primary input (default: auto)
-      --merge-no-mmap              Disable memory-mapped I/O specifically on merge inputs
-      --merge-mmap                 Explicitly enable memory-mapped I/O on merge inputs
+      --mmap                       Explicitly enable memory-mapped I/O on input files (default: auto)
 
 Synthetic Stream Sources & Telemetry:
   -c, --input-counter              Generate sequential counter numbers (0, 1, 2...)
@@ -1072,7 +1069,6 @@ Inspection, Code Generation, Web UI & MCP:
       --probe-keys [SIZE]          Scan unit stream for potential maximum-entropy cryptographic keys [default: 256 bits]
       --probe-field <INDEX>        Target specific tuple field index (0-based) for unit probing after pattern unpacking
       --mcp                        Launch native JSON-RPC 2.0 Model Context Protocol (MCP) server
-      --serve [PORT]               Print launch instructions for decoupled Web UI (aliases: --web, --gui) [default: 7788]
 
 Demuxing & Channel Splitting:
       --demux <FIELD:PATH>         Route individual tuple field to a dedicated output file

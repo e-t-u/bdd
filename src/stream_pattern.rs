@@ -6,7 +6,6 @@ use crate::pattern::FramedPattern;
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StreamSpec {
     pub source: Option<String>,
-    pub framed: FramedPattern,
     pub skip: Option<u64>,
     pub raw_unit: Option<u64>,
     pub offset: Option<u64>,
@@ -23,7 +22,7 @@ impl StreamSpec {
         let raw_unit = framed.framing.raw_unit;
         let offset = framed.framing.offset;
         let unit_size = framed.framing.unit_size;
-        let pattern = framed.raw_pattern.clone();
+        let pattern = framed.raw_pattern;
         let gap = framed.framing.gap;
         Self {
             source: None,
@@ -35,23 +34,24 @@ impl StreamSpec {
             gap,
             pad_zeros: false,
             overwrite: false,
-            framed,
         }
     }
 
-    pub fn sync_framed(&mut self) {
-        self.framed.framing.skip = self.skip;
-        self.framed.framing.raw_unit = self.raw_unit;
-        self.framed.framing.offset = self.offset;
-        self.framed.framing.unit_size = self.unit_size;
-        self.framed.framing.gap = self.gap;
-        if self.pattern != self.framed.raw_pattern {
-            self.framed.raw_pattern = self.pattern.clone();
-            if let Some(ref p) = self.pattern {
-                if let Ok(fields) = crate::pattern::parse_input_pattern(p) {
-                    self.framed.fields = fields;
-                }
-            }
+    pub fn to_framed(&self) -> FramedPattern {
+        FramedPattern {
+            framing: crate::pattern::ContainerFraming {
+                skip: self.skip,
+                raw_unit: self.raw_unit,
+                offset: self.offset,
+                unit_size: self.unit_size,
+                gap: self.gap,
+            },
+            fields: self
+                .pattern
+                .as_deref()
+                .and_then(|p| crate::pattern::parse_input_pattern(p).ok())
+                .unwrap_or_default(),
+            raw_pattern: self.pattern.clone(),
         }
     }
 }
@@ -72,24 +72,46 @@ pub struct StreamIoPattern {
 /// Checks if a token represents a pipeline source keyword or file.
 pub fn is_source(s: &str) -> bool {
     let s = s.trim();
-    s == "stdin"
-        || s == "zeros"
-        || s == "ones"
-        || s == "rand"
-        || s == "random"
-        || s == "counter"
-        || s.starts_with("counter(")
-        || s == "tuples"
-        || (s.starts_with("file(") && s.ends_with(')'))
+    if s.is_empty() {
+        return false;
+    }
+    // Built-in source keywords
+    if matches!(
+        s,
+        "stdin" | "zeros" | "ones" | "rand" | "random" | "counter" | "tuples"
+    ) || s.starts_with("counter(")
+    {
+        return true;
+    }
+    // Explicit file() wrapper or quoted string
+    if (s.starts_with("file(") && s.ends_with(')'))
         || (s.starts_with('\'') && s.ends_with('\''))
         || (s.starts_with('"') && s.ends_with('"'))
-        || s.ends_with(".bin")
-        || s.ends_with(".ts")
-        || s.ends_with(".dat")
-        || s.ends_with(".raw")
-        || s.ends_with(".pcm")
-        || s.starts_with("./")
-        || s.starts_with('/')
+    {
+        return true;
+    }
+    // Path-like (starts with ./, ../, /)
+    if s.starts_with("./") || s.starts_with("../") || s.starts_with('/') {
+        return true;
+    }
+    // Existing file on filesystem
+    if std::path::Path::new(s).is_file() {
+        return true;
+    }
+    // File with an alphanumeric extension that does not contain pattern/slicer delimiters
+    if let Some(dot_idx) = s.rfind('.') {
+        let ext = &s[dot_idx + 1..];
+        if !ext.is_empty()
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
+            && !s.contains(':')
+            && !s.contains('[')
+            && !s.contains(',')
+            && !s.contains('*')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Strips outer quotes or `file(...)` wrapper from a source specifier.
