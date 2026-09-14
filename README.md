@@ -182,6 +182,11 @@ Directly reslices and repacks continuous bitstreams between arbitrary bit widths
 - **`8 -> 3`**: Slices 8-bit input units into dense 3-bit output units (e.g. packing byte values into 3-bit octal fields).
 - **`3 -> 8`**: Expands 3-bit units into byte-aligned 8-bit units.
 
+```bash
+bdd "counter -> 8 -> 3 -> hex" --count 8
+# Output: 0 1 2 3 4 5 6 7
+```
+
 #### 1. Form A Containers: `container[pregap:length]` (or `raw[offset:unit]`)
 Extracts the interesting **unit** of `length` bits starting at `pregap` (offset) inside a repeating outer **container**:
 - **`8[2:4]`**: Inside each 8-bit container, extract the 4-bit unit starting at bit offset 2 (skipping 2 bits before, and 2 bits after).
@@ -189,17 +194,37 @@ Extracts the interesting **unit** of `length` bits starting at `pregap` (offset)
 - **`32[0:16]`**: Extract the 16-bit Left channel unit from a 32-bit container.
 - **`32[16:16]`**: Extract the 16-bit Right channel unit from a 32-bit container.
 
+```bash
+bdd "counter -> 8[2:4] -> hex" --count 4
+# Output: 0 1 2 3
+```
+
 #### 2. Form B Containers: `[pregap:length:postgap]`
 Expresses symmetrical container framing by specifying pregap, unit length, and postgap:
 - **`[2:4:2]`**: 2 bits pregap, 4 bits unit length, 2 bits postgap (repeating container of 8 bits: $2 + 4 + 2 = 8$).
 
+```bash
+bdd "counter -> [2:4:2] -> hex" --count 4
+# Output: 0 1 2 3
+```
+
 #### 3. Container Skips & Periodic Gaps
 - **Initial Skip (`skip : container`)**: Number of bits to skip before the first container is read.
-  `123 : 8` skips 123 bits into the stream and begins streaming 8-bit containers.
+  `16 : 8` skips 16 bits (2 bytes) into the stream and begins streaming 8-bit containers.
 - **Periodic Gap (`container + gap`)**: Number of bits to skip after every container.
   `8 + 24` reads an 8-bit container, skips a 24-bit gap, and repeats (extracting 1 byte out of every 4-byte container frame).
 - **Full Unified Syntax**:
   `123 : 188B[11:13] + 8 -> 13` (Initial skip of 123 bits, 188-byte container with a 13-bit unit at pregap 11, periodic inter-container gap of 8 bits, emitted as 13-bit units).
+
+```bash
+# Read an 8-bit container, then skip a 24-bit periodic gap (1 byte out of every 4 bytes):
+bdd "counter -> 8 + 24 -> hex" --count 4
+# Output: 00 01 02 03
+
+# Skip 16 bits (2 bytes) initially, then extract 8-bit units:
+bdd "counter -> 16 : 8 -> hex" --count 4
+# Output: 00 01 02 03
+```
 
 ---
 
@@ -435,7 +460,7 @@ Chain manipulators directly inside arrow pipelines:
 
 ## 5. Fascinating Real-World Scenarios
 
-Here is `bdd` in action across seven high-impact systems engineering and data pipeline workflows:
+Here is `bdd` in action across eleven high-impact systems engineering and data pipeline workflows:
 
 ### Scenario 1: IoT Sensor Calibration & Dynamic Range Compression
 Embedded 12-bit ADCs (analog-to-digital converters) frequently stream raw readings offset by an analog DC bias. In this pipeline, we ingest 12-bit ADC samples, subtract the 512-count DC offset, amplify the sensor signal by $2\times$, clamp values to prevent DAC saturation ($0..255$), and pack the result into clean 8-bit DAC bytes:
@@ -501,6 +526,69 @@ In broadcast transmission lines, video engineers frequently need to remap unalig
 
 ```bash
 bdd "file('input.ts') -> 188B[11:13] -> tee('pids_audit.bin') -> xor(0x1FFF) -> overwrite -> file('patched.ts')"
+```
+
+---
+
+### Scenario 8: Zero-Copy Network Protocol Dissection & UDP Telemetry Filtering
+Raw Ethernet captures and pcap records deliver network traffic as dense packet streams. Using format presets, `bdd` unpacks protocol headers without manual bit-offset code. In this pipeline, we inspect incoming packets using the built-in `ipv4-header` preset, filter for UDP datagrams (`protocol == 17`, field index 9), and output structured JSON telemetry:
+
+```bash
+bdd "file('traffic.bin') -> ipv4-header -> filter(9, ==, 17) -> json"
+# Output: {"checksum":23700,"dscp":0,"dst_ip":16843009,"ecn":0,"flags":2,"frag_offset":0,"id":6699,"ihl":5,"protocol":17,"src_ip":3232235876,"total_length":32,"ttl":64,"version":4}
+```
+
+---
+
+### Scenario 9: Binary Firmware Heuristics & Visual Entropy Auditing
+When reverse-engineering unknown firmware blobs, ROM dumps, or encrypted containers, security analysts need to determine data layouts without running full disassembly. With `--probe` and `--probe-visual`, `bdd` scans the binary to measure Shannon entropy ($0.0..8.0\text{ bits/byte}$), auto-correlate periodic record strides (e.g. 40-byte telemetry frames or 188-byte MPEG packets), and render an ANSI heat-map sparkline:
+
+```bash
+bdd --probe firmware.bin --probe-visual
+```
+**Output**:
+```text
+Target:              firmware.bin
+Sample Size:         130 bytes (1040 bits)
+Shannon Entropy:     5.0170 / 8.0000 bits/byte
+Entropy Sparkline:   [ ▂▂▃ ▂▃▂▃▃▂▃▂ ▂ ▃▃▂▃▂▂▃▂▂▃▂ ] (26 blocks)
+Entropy Level:       Medium (4.00-6.50): Structured data, mixed binary headers and text payloads
+General Diagnosis:   Structured binary stream with periodic record stride of 40 bytes (320 bits).
+
+Byte Class Distribution:
+  • Null Bytes (0x00):         31  (23.85%)
+  • Printable ASCII:           57  (43.85%)
+  • High Bytes (>=0x80):       20  (15.38%)
+
+Detected Periodic Strides (Autocorrelation):
+  •   40 bytes (  320 bits) [Match: 30.00%, Conf: High     ]: Periodic structured record boundary
+
+Identified ASCII String Runs:
+  • Offset 0x0070 (len 14): "GET / HTTP/1.1"
+
+Visual Entropy Map (Shannon bits/byte distribution):
+  0x000000 [    130B] [  ▂ ▂▂  ▂▂▂▂ ▂▂▂ ▂▂▂  ▂   ▂ ▂ ▂▂▂ ▂▂▂▂▂▂▂▂    ] 5.02 H
+```
+
+---
+
+### Scenario 10: Multi-Source Clock Synthesis & Stream Interleaving
+Embedded telemetry frequently requires interleaving a monotonically increasing hardware clock tick with sensor payloads or zero-padded sync bytes. Using `bdd`'s bracket syntax `[ source1, source2, ... ]`, multiple stream generators are multiplexed into a single stream:
+
+```bash
+# Interleave a 16-bit hardware counter with 16-bit zero-padded channels:
+bdd "[ counter, zeros ] -> 16 -> hex" --count 4
+# Output: 0000 0000 0001 0000 0002 0000 0003 0000
+```
+
+---
+
+### Scenario 11: Machine Code Instruction Field Disassembly (RISC-V)
+Microprocessor architectures pack instruction opcodes, registers, and function codes into sub-byte bitfields. In this pipeline, we ingest 32-bit RISC-V binary machine words, unpack them according to the `riscv-r-type` schema (`funct7:7u, rs2:5u, rs1:5u, funct3:3u, rd:5u, opcode:7u`), and output structured JSON instruction representations:
+
+```bash
+printf "\x33\x02\x42\x00" | bdd "riscv-r-type -> json"
+# Output: {"funct3":1,"funct7":76,"opcode":0,"rd":4,"rs1":4,"rs2":1}
 ```
 
 ---
