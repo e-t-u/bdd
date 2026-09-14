@@ -446,10 +446,10 @@ bdd "12 -> sub(512) -> mul(2) -> clamp(0, 255:saturate) -> 8" < adc_raw.bin > da
 ---
 
 ### Scenario 2: Real-Time Broadcast Video MPEG-TS Descrambling
-In digital video broadcasting (DVB / ATSC), MPEG-2 Transport Streams transmit unaligned 188-byte packets. Packet headers contain sync bytes (`0x47`), a 13-bit PID, and scrambling control flags. In this pipeline, we isolate the 184-byte payload (`188B[32:1472]`), apply on-the-fly XOR descrambling against a rotating sync key (`0x5A`), and repack the descrambled payload back into standard 188-byte containers:
+In digital video broadcasting (DVB / ATSC), MPEG-2 Transport Streams transmit unaligned 188-byte packets. Packet headers contain sync bytes (`0x47`), a 13-bit PID, and scrambling control flags. In this pipeline, we isolate the 184-byte payload (`188B[32:1472]`), apply on-the-fly XOR descrambling against a rotating sync key (`0x5A`), and use `overwrite` to preserve the 4-byte transport header (`0x47`, PID, flags) intact while writing back the full 188-byte packets:
 
 ```bash
-bdd "188B[32:1472] -> xor(0x5A) -> 188B[32:1472]" < scrambled.ts > clear.ts
+bdd "188B[32:1472] -> xor(0x5A) -> overwrite" < scrambled.ts > clear.ts
 ```
 
 ---
@@ -464,10 +464,10 @@ bdd "16S -> clamp(-16000, 16000:saturate) -> div(2) -> 16S" < master.pcm > limit
 ---
 
 ### Scenario 4: Network Packet QoS / DSCP & CoS Priority Rewriter
-Network routers mark Quality of Service (QoS) inside the 8-bit Type of Service (ToS) field of IPv4 headers (RFC 791). The Differentiated Services Code Point (DSCP) occupies the upper 6 bits, while Explicit Congestion Notification (ECN) occupies the lower 2 bits. In this pipeline, we inspect IPv4 headers, isolate the ToS byte (`20B[8:8]`), rewrite the DSCP priority to Expedited Forwarding (`0x28` / EF Class), and re-emit the packet:
+Network routers mark Quality of Service (QoS) inside the 8-bit Type of Service (ToS) field of IPv4 headers (RFC 791). The Differentiated Services Code Point (DSCP) occupies the upper 6 bits, while Explicit Congestion Notification (ECN) occupies the lower 2 bits. In this pipeline, we inspect IPv4 headers, isolate the ToS byte (`20B[8:8]`), rewrite the DSCP priority to Expedited Forwarding (`0x28` / EF Class), and use `overwrite` to preserve all surrounding 19 bytes of the packet (IP addresses, packet length, TTL, payload) intact:
 
 ```bash
-bdd "20B[8:8] -> 8U -> {0} -> or(0x28) -> 8U -> 20B[8:8]" < incoming_packets.bin > qos_packets.bin
+bdd "20B[8:8] -> 8U -> {0} -> or(0x28) -> 8U -> overwrite" < incoming_packets.bin > qos_packets.bin
 ```
 
 ---
