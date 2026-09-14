@@ -284,10 +284,6 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub list_presets: bool,
 
-    /// Download and install presets JSON file from URL (default: official repository)
-    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "URL", visible_aliases = ["update-presets", "fetch-presets"])]
-    pub download_presets: Option<String>,
-
     /// Path to presets JSON file (overrides ~/.config/bdd/presets.json or ./presets.json)
     #[arg(long, value_name = "PATH", visible_alias = "presets-path")]
     pub presets_file: Option<std::path::PathBuf>,
@@ -296,11 +292,11 @@ pub struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub explain_pattern: Option<String>,
 
-    /// Export C packed struct definition from pattern or preset
+    /// Export C packed struct definition (DEPRECATED: use 'bdd --explain-pattern --output-json | python3 contrib/python/json_to_c.py')
     #[arg(long, default_value_t = false, visible_aliases = ["c-struct", "to-c"])]
     pub export_c: bool,
 
-    /// Export Rust struct definition from pattern or preset
+    /// Export Rust struct definition (DEPRECATED: use 'bdd --explain-pattern --output-json | python3 contrib/python/json_to_rust.py')
     #[arg(long, default_value_t = false, visible_aliases = ["rust-struct", "to-rust"])]
     pub export_rust: bool,
 

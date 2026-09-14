@@ -4,6 +4,7 @@
 //! MCP launch, probe diagnostics) from the core streaming execution pipeline.
 
 use crate::cli::Cli;
+#[cfg(feature = "probe")]
 use std::io::Read;
 
 /// Dispatches auxiliary CLI commands if requested by flags.
@@ -74,32 +75,8 @@ fn handle_info_commands(cli: &Cli) -> Option<i32> {
     None
 }
 
-/// Handles `--list-presets` and `--download-presets`.
+/// Handles `--list-presets`.
 fn handle_preset_commands(cli: &Cli) -> Option<i32> {
-    if let Some(ref custom_url) = cli.download_presets {
-        let url = if custom_url.trim().is_empty() {
-            crate::preset::DEFAULT_PRESETS_URL
-        } else {
-            custom_url.as_str()
-        };
-        let target_path = cli.presets_file.as_deref();
-        match crate::preset::download_presets(url, target_path) {
-            Ok((count, path)) => {
-                println!(
-                    "Successfully downloaded and installed {} presets from '{}' to {}",
-                    count,
-                    url,
-                    path.display()
-                );
-                return Some(0);
-            }
-            Err(e) => {
-                eprintln!("Error downloading presets: {}", e);
-                return Some(1);
-            }
-        }
-    }
-
     if cli.list_presets {
         println!("{}", crate::preset::format_presets_table());
         return Some(0);
@@ -203,6 +180,9 @@ fn handle_explain_commands(cli: &Cli) -> Option<i32> {
         });
 
         if cli.export_c {
+            crate::diag::warn(
+                "'--export-c' is deprecated and will be removed in a future release. Use 'bdd --explain-pattern <PATTERN> --output-json | python3 contrib/python/json_to_c.py' instead."
+            );
             match crate::explain::generate_c_struct(pattern_to_export, struct_name.as_deref()) {
                 Ok(code) => {
                     print!("{}", code);
@@ -214,6 +194,9 @@ fn handle_explain_commands(cli: &Cli) -> Option<i32> {
                 }
             }
         } else if cli.export_rust {
+            crate::diag::warn(
+                "'--export-rust' is deprecated and will be removed in a future release. Use 'bdd --explain-pattern <PATTERN> --output-json | python3 contrib/python/json_to_rust.py' instead."
+            );
             match crate::explain::generate_rust_struct(pattern_to_export, struct_name.as_deref()) {
                 Ok(code) => {
                     print!("{}", code);
@@ -231,6 +214,7 @@ fn handle_explain_commands(cli: &Cli) -> Option<i32> {
 }
 
 /// Handles `--probe` and `--probe-visual`.
+#[cfg(feature = "probe")]
 fn handle_probe_commands(cli: &Cli) -> Option<i32> {
     if cli.probe.is_some() || cli.probe_visual {
         let probe_opt = cli.probe.as_deref().unwrap_or("");
@@ -307,6 +291,18 @@ fn handle_probe_commands(cli: &Cli) -> Option<i32> {
     None
 }
 
+#[cfg(not(feature = "probe"))]
+fn handle_probe_commands(cli: &Cli) -> Option<i32> {
+    if cli.probe.is_some() || cli.probe_visual {
+        eprintln!(
+            "Error: binary probing was requested, but bdd was compiled without the 'probe' feature. Recompile with '--features probe'."
+        );
+        return Some(1);
+    }
+    None
+}
+
+#[cfg(feature = "probe")]
 fn read_sample_prefix<R: Read>(mut reader: R, limit: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 65536];

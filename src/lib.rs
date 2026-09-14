@@ -18,6 +18,7 @@ pub use bdd_small_floats as float_types;
 pub mod manipulator;
 pub mod pattern;
 pub mod preset;
+#[cfg(feature = "probe")]
 pub mod probe;
 pub mod sink;
 pub mod stream;

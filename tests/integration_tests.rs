@@ -698,7 +698,7 @@ fn test_explain_pattern() {
 }
 
 #[test]
-fn test_download_presets_cli() {
+fn test_custom_presets_file_cli() {
     use tempfile::NamedTempFile;
 
     let sample_json = r#"[
@@ -712,28 +712,10 @@ fn test_download_presets_cli() {
         }
     ]"#;
 
-    let src_file = NamedTempFile::new().unwrap();
-    std::fs::write(src_file.path(), sample_json).unwrap();
-
     let dest_file = NamedTempFile::new().unwrap();
+    std::fs::write(dest_file.path(), sample_json).unwrap();
 
-    // 1. Download presets from local file URI into custom presets-file
-    let out = Command::new(BDD_BIN)
-        .arg(format!(
-            "--download-presets={}",
-            src_file.path().to_str().unwrap()
-        ))
-        .arg(format!(
-            "--presets-file={}",
-            dest_file.path().to_str().unwrap()
-        ))
-        .output()
-        .expect("failed to run bdd --download-presets");
-    assert!(out.status.success());
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("Successfully downloaded and installed 1 presets"));
-
-    // 2. Query preset from the downloaded file
+    // 1. Query preset from custom presets-file
     let out_list = Command::new(BDD_BIN)
         .arg(format!(
             "--presets-file={}",
@@ -747,7 +729,7 @@ fn test_download_presets_cli() {
     assert!(stdout_list.contains("mock-protocol"));
     assert!(stdout_list.contains("magic:8u,length:16u"));
 
-    // 3. Slice using the custom preset from file
+    // 2. Slice using the custom preset from file
     let out_slice = Command::new(BDD_BIN)
         .arg(format!(
             "--presets-file={}",

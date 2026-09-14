@@ -14,7 +14,9 @@ use crate::stream::{
     PaddedUnitStream, RandomStream, RewindableBufRead, StreamConfig, StreamSeekBufReader,
     TupleDirectInput, UnitStream, ZeroStream,
 };
+#[cfg(feature = "probe")]
 use num_bigint::BigUint;
+#[cfg(feature = "probe")]
 use num_traits::Zero;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -212,8 +214,15 @@ fn run_pipeline_internal(
     crate::diag::reset();
     let _diag_guard = DiagnosticGuard;
 
+    #[cfg(feature = "probe")]
     if config.probe_units || config.probe_keys.is_some() {
         return run_unit_probe_internal(&config, custom_writer);
+    }
+    #[cfg(not(feature = "probe"))]
+    if config.probe_units || config.probe_keys.is_some() {
+        return Err(BddError::CliError(
+            "Unit stream probing was requested, but bdd was compiled without the 'probe' feature. Recompile with '--features probe'.".to_string(),
+        ));
     }
 
     let unpacker = if let Some(ref p) = config.input_pattern {
@@ -832,6 +841,7 @@ pub fn create_unit_stream(
     Ok(unit_stream)
 }
 
+#[cfg(feature = "probe")]
 fn run_unit_probe_internal(
     config: &ValidatedConfig,
     mut custom_writer: Option<Box<dyn Write>>,

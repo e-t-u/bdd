@@ -46,10 +46,11 @@ memmap2 = { version = "0.9", optional = true }
 bdd-small-floats = { path = "crates/bdd-small-floats", version = "0.5.3", optional = true }
 
 [features]
-default = ["small-floats", "mmap"]
+default = ["small-floats", "mmap", "probe"]
 mmap = ["dep:memmap2"]
 small-floats = ["dep:bdd-small-floats"]
 small-float = ["small-floats"]
+probe = []
 
 [profile.release]
 opt-level = 3

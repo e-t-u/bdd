@@ -680,26 +680,20 @@ bdd "file('video.raw') : 1920x1080*24 : 24 -> hex" --count 1
 
 `bdd` provides native primitives for autonomous AI coding agents, reverse engineers, and pipeline automation:
 
-### Format Presets (`--preset`, `--list-presets`, `--download-presets`, `--presets-file`)
+### Format Presets (`--preset`, `--list-presets`, `--presets-file`)
 Instead of manually typing complex bit patterns, format presets configure patterns, unit widths, and field names in one step.
 
-Presets are stored in a standalone [`presets.json`](presets.json) file. `bdd` automatically discovers preset files using the following resolution hierarchy:
+Presets are stored in a standalone [`presets.json`](presets.json) file and compiled directly into `bdd` as embedded defaults. `bdd` automatically discovers preset files using the following resolution hierarchy:
 1. Explicit CLI argument: `--presets-file <PATH>`
 2. Environment variable: `BDD_PRESETS_FILE=<PATH>`
 3. Current working directory: `./presets.json`
 4. User configuration directory: `~/.config/bdd/presets.json`
 5. System FHS directories (packaged with `.deb` and `.rpm`): `/usr/share/bdd/presets.json`, `/usr/local/share/bdd/presets.json`, or `/etc/bdd/presets.json`
-6. Automatic online download from GitHub with offline fallback to embedded defaults when no network or file is present.
+6. Embedded offline defaults compiled directly into the binary.
 
 ```bash
 # List all available presets:
 bdd --list-presets
-
-# Download / update presets from the official repository:
-bdd --download-presets
-
-# Download custom presets from a custom URL or organization repository:
-bdd --download-presets https://example.com/custom-telecom-presets.json
 
 # Use an alternate local presets file:
 bdd --presets-file ./my_presets.json --list-presets
@@ -990,7 +984,6 @@ Input Unit & Container Options:
   -u, --input-unit <BITS>          Size of active unit in bits (default: 8, or auto-inferred from pattern)
       --preset <NAME>              Use built-in protocol or float preset (e.g. mp3-header, mpeg-ts, nvfp4)
       --list-presets               List all built-in format presets and exit
-      --download-presets [URL]     Download/update presets JSON from URL (default: official repo)
       --presets-file <PATH>        Path to custom presets JSON file (overrides default presets path)
       --input-skip-bits <BITS>     Initial bit offset (skip) before first container [default: 0]
       --input-skip-units <UNITS>   Skip initial N containers from input stream [default: 0]
@@ -1061,8 +1054,8 @@ Output Unit & Pattern Options:
 
 Inspection, Code Generation, Web UI & MCP:
       --explain-pattern [PATTERN]  Analyze bit layout, byte alignment, and field breakdown
-      --export-c                   Generate packed C struct definition with bitfields
-      --export-rust                Generate Rust #[repr(C, packed)] struct definition
+      --export-c                   Generate packed C struct (DEPRECATED: use contrib/python/json_to_c.py)
+      --export-rust                Generate packed Rust struct (DEPRECATED: use contrib/python/json_to_rust.py)
       --probe [FILE]               Inspect binary entropy, byte classes, periodic strides, and strings
       --probe-units                Probe unit stream characteristics and entropy AFTER input stream processing
       --probe-visual               Render visual entropy sparkline and 2D ANSI heatmap
@@ -1134,12 +1127,13 @@ See [`contrib/README.md`](contrib/README.md) for full documentation and test dat
 |---|:---:|---|
 | `mmap` | **Yes** | Enables zero-copy memory-mapped file I/O (`memmap2`) for regular input and merge files. Bypasses `read()` syscall overhead, provides kernel readahead via `MADV_SEQUENTIAL`, and enables instant $O(1)$ skipping across container gaps. Seamlessly falls back to buffered streaming for pipes, stdin, FIFOs, and 0-byte files. Can be excluded for targets without OS memory mapping (e.g. WASI, embedded) via `--no-default-features`. |
 | `small-floats` | **Yes** | Hardware and AI microscaling float codecs (FP16, BF16, OCP FP8 E4M3/E5M2, OCP FP6 E3M2, NVIDIA Blackwell FP4 E2M1) provided by the standalone `bdd-small-floats` subcrate (`crates/bdd-small-floats`). When disabled, reduces binary size and removes all float conversion tables. |
+| `probe` | **Yes** | Binary prober, Shannon entropy heatmaps, periodic stride detection, and cryptographic key scanners. Can be excluded via `--no-default-features` for a minimal, lightweight bitstream slicer. |
 
-To build a minimal binary with only standard bit/integer slicing and no small floats:
+To build a minimal binary with only standard bit/integer slicing (no probe, no small floats):
 ```bash
 cargo build --release --no-default-features --features mmap
 ```
-Or to build without memory mapping or small floats:
+Or to build without memory mapping, small floats, or probing:
 ```bash
 cargo build --release --no-default-features
 ```

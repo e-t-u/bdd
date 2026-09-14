@@ -4,16 +4,12 @@
 //! for real-world multimedia containers, AI weight quantization formats, and network headers.
 //!
 //! Presets are stored in an external `presets.json` file. If missing, the default presets
-//! are downloaded automatically from the repository or seeded from embedded defaults.
-//! An option `--download-presets [URL]` allows fetching custom or updated preset files.
+//! are seeded from embedded defaults. A custom presets file can be specified via
+//! `--presets-file <PATH>` or `BDD_PRESETS_PATH`.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::RwLock;
-
-/// Default URL to download the official presets file from.
-pub const DEFAULT_PRESETS_URL: &str =
-    "https://raw.githubusercontent.com/e-t-u/bdd/main/presets.json";
 
 /// Embedded fallback presets JSON in case of offline first-run.
 pub const DEFAULT_PRESETS_JSON: &str = include_str!("../presets.json");
@@ -134,106 +130,6 @@ pub fn get_presets_file_path() -> PathBuf {
     find_existing_presets_file().unwrap_or_else(get_user_presets_file_path)
 }
 
-/// Fetch content from a URL, local path, or file URI as a string.
-pub fn download_url_to_string(url: &str) -> Result<String, String> {
-    if let Some(file_path) = url.strip_prefix("file://") {
-        return std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read local file '{}': {}", file_path, e));
-    }
-    if Path::new(url).is_file() {
-        return std::fs::read_to_string(url)
-            .map_err(|e| format!("Failed to read local file '{}': {}", url, e));
-    }
-
-    use std::process::Command;
-
-    // 1. Try curl
-    if let Ok(output) = Command::new("curl")
-        .args(["-fsSL", "--connect-timeout", "5", "--max-time", "15", url])
-        .output()
-    {
-        if output.status.success() {
-            let body = String::from_utf8_lossy(&output.stdout).to_string();
-            if !body.trim().is_empty() {
-                return Ok(body);
-            }
-        }
-    }
-
-    // 2. Try wget
-    if let Ok(output) = Command::new("wget")
-        .args(["-q", "-O", "-", "--timeout=15", url])
-        .output()
-    {
-        if output.status.success() {
-            let body = String::from_utf8_lossy(&output.stdout).to_string();
-            if !body.trim().is_empty() {
-                return Ok(body);
-            }
-        }
-    }
-
-    // 3. Try python3 urllib
-    let py_code = "import urllib.request, sys\n\
-try:\n\
-    with urllib.request.urlopen(sys.argv[1], timeout=15) as resp:\n\
-        sys.stdout.buffer.write(resp.read())\n\
-except Exception as e:\n\
-    sys.stderr.write(str(e))\n\
-    sys.exit(1)\n";
-    if let Ok(output) = Command::new("python3").args(["-c", py_code, url]).output() {
-        if output.status.success() {
-            let body = String::from_utf8_lossy(&output.stdout).to_string();
-            if !body.trim().is_empty() {
-                return Ok(body);
-            }
-        }
-    }
-
-    Err(format!(
-        "Failed to download from '{}': curl, wget, and python3 all failed or were unavailable",
-        url
-    ))
-}
-
-/// Download presets from a URL and save to target_path (or default presets file path).
-pub fn download_presets(url: &str, target_path: Option<&Path>) -> Result<(usize, PathBuf), String> {
-    let content = download_url_to_string(url)?;
-    let parsed: Vec<Preset> = serde_json::from_str(&content).map_err(|e| {
-        format!(
-            "Downloaded content from '{}' is not valid presets JSON: {}",
-            url, e
-        )
-    })?;
-
-    if parsed.is_empty() {
-        return Err(format!(
-            "Downloaded presets file from '{}' contains no presets",
-            url
-        ));
-    }
-
-    let dest = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(get_user_presets_file_path);
-
-    if let Some(parent) = dest.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    std::fs::write(&dest, &content).map_err(|e| {
-        format!(
-            "Failed to write downloaded presets to '{}': {}",
-            dest.display(),
-            e
-        )
-    })?;
-
-    set_custom_presets_path(dest.clone());
-
-    Ok((parsed.len(), dest))
-}
-
 fn filter_feature_presets(presets: Vec<Preset>) -> Vec<Preset> {
     #[cfg(not(feature = "small-floats"))]
     {
@@ -268,18 +164,7 @@ fn load_presets() -> Vec<Preset> {
 
     let user_path = get_user_presets_file_path();
 
-    // 2. File does not exist anywhere: download default file automatically
-    if let Ok(downloaded) = download_url_to_string(DEFAULT_PRESETS_URL) {
-        if let Ok(parsed) = serde_json::from_str::<Vec<Preset>>(&downloaded) {
-            if let Some(parent) = user_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&user_path, &downloaded);
-            return filter_feature_presets(parsed);
-        }
-    }
-
-    // 3. If download unavailable (offline/testing), seed default file and return defaults
+    // 2. File does not exist: seed user presets file from embedded defaults and return
     if let Some(parent) = user_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -367,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_download_presets_from_local_file() {
+    fn test_custom_presets_path() {
         use tempfile::NamedTempFile;
 
         let sample_json = r#"[
@@ -384,12 +269,7 @@ mod tests {
         let src_file = NamedTempFile::new().unwrap();
         std::fs::write(src_file.path(), sample_json).unwrap();
 
-        let dest_file = NamedTempFile::new().unwrap();
-        let (count, dest_path) =
-            download_presets(src_file.path().to_str().unwrap(), Some(dest_file.path())).unwrap();
-
-        assert_eq!(count, 1);
-        assert_eq!(dest_path, dest_file.path());
+        set_custom_presets_path(src_file.path().to_path_buf());
 
         let p = find_preset("custom-proto").expect("find custom-proto");
         assert_eq!(p.unit_bits, 32);
