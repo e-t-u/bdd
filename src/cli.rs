@@ -81,13 +81,13 @@ pub struct Cli {
     #[arg(long, default_value_t = false, visible_aliases = ["mmap", "input-mmap"])]
     pub input_use_mmap: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, visible_aliases = ["little-endian"])]
     pub input_little_endian: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, visible_aliases = ["reverse-input-bytes", "reverse-bytes"])]
     pub input_reverse_bytes: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, visible_aliases = ["reverse-input-units", "reverse-input-unit", "reverse-unit", "reverse-units"])]
     pub input_reverse_unit: bool,
 
     // Special input bit streams
@@ -212,10 +212,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub output_little_endian: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, visible_aliases = ["reverse-output-bytes"])]
     pub output_reverse_bytes: bool,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, visible_aliases = ["reverse-output-units", "reverse-output-unit"])]
     pub output_reverse_unit: bool,
 
     // Special output formats
@@ -1537,6 +1537,29 @@ mod tests {
         let cli_merge_err =
             Cli::parse_from(["bdd", "--input-zeros", "--count=1", "--merge-no-seek"]);
         assert!(validate_and_process(cli_merge_err).is_err());
+    }
+
+    #[test]
+    fn test_little_endian_and_reversal_aliases() {
+        let cli = Cli::parse_from(["bdd", "--little-endian", "--input-zeros", "--count=1"]);
+        assert!(cli.input_little_endian);
+        let conf = validate_and_process(cli).unwrap();
+        assert!(conf.input_reverse_bytes);
+        assert!(conf.input_reverse_unit);
+
+        let cli_rev = Cli::parse_from([
+            "bdd",
+            "--reverse-input-bytes",
+            "--reverse-input-units",
+            "--reverse-output-bytes",
+            "--reverse-output-units",
+            "--input-zeros",
+            "--count=1",
+        ]);
+        assert!(cli_rev.input_reverse_bytes);
+        assert!(cli_rev.input_reverse_unit);
+        assert!(cli_rev.output_reverse_bytes);
+        assert!(cli_rev.output_reverse_unit);
     }
 
     #[test]

@@ -433,7 +433,7 @@ function buildCliArgs() {
   
   // Checkboxes
   if (el.dropPartialEof.checked) args.push("--drop-partial-eof");
-  if (el.littleEndian.checked) args.push("--little-endian");
+  if (el.littleEndian.checked) args.push("--input-little-endian");
   if (el.reverseBytes.checked) args.push("--input-reverse-bytes");
   if (el.reverseUnit.checked) args.push("--input-reverse-unit");
   if (el.noSeek.checked) args.push("--no-seek");
